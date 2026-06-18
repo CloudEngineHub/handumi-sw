@@ -10,15 +10,29 @@ dependencies = [
     "cmake>=3.29",
     "pybind11>=2.13",
     "setuptools>=71",
-    "python-dotenv==1.2.2"
+    "python-dotenv==1.2.2",
+    # Axol IK solver (src/dexumi/robots/axol/solver.py)
+    "numpy>=2.0",
+    "jax>=0.4.0",
+    "jaxlib",
+    "jaxlie>=1.0.0",
+    "jaxls @ git+https://github.com/brentyi/jaxls.git",
+    "yourdfpy",
+    "pyroki @ git+https://github.com/chungmin99/pyroki.git",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/dexumi"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"assets/meshes/axol" = "dexumi/assets/meshes/axol"
 
 [tool.hatch.build.targets.sdist]
 include = ["src/dexumi"]

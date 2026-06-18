@@ -1,0 +1,121 @@
+"""Shared constants and utilities for the Almond Axol robot."""
+
+from __future__ import annotations
+
+from enum import Enum
+from pathlib import Path
+
+
+class Joint(Enum):
+    """All motor joints on one arm, in control order.
+
+    The seven arm joints (``SHOULDER_1`` through ``WRIST_3``) are collected in
+    ``ARM_JOINTS``. ``GRIPPER`` is the eighth entry and is handled separately
+    from the arm joints throughout the control stack.
+    """
+
+    SHOULDER_1 = "shoulder_1"
+    SHOULDER_2 = "shoulder_2"
+    SHOULDER_3 = "shoulder_3"
+    ELBOW = "elbow"
+    WRIST_1 = "wrist_1"
+    WRIST_2 = "wrist_2"
+    WRIST_3 = "wrist_3"
+    GRIPPER = "gripper"
+
+
+CAN_LEFT = "can_alm_axol_l"
+CAN_RIGHT = "can_alm_axol_r"
+
+ARM_JOINTS: list[Joint] = [j for j in Joint if j != Joint.GRIPPER]
+
+_PKG_DIR = Path(__file__).resolve().parent.parent
+"""``src/dexumi`` — used to locate bundled or repo-level assets."""
+
+_REPO_ROOT = _PKG_DIR.parent.parent
+"""Repository root (parent of ``src/``)."""
+
+
+def project_root() -> Path:
+    """Return the repository root directory."""
+    return _REPO_ROOT
+
+
+def _resolve_urdf_path() -> Path:
+    """Locate ``axol.urdf`` in the installed package or the source tree."""
+    candidates = (
+        _PKG_DIR / "assets" / "meshes" / "axol" / "urdf" / "axol.urdf",
+        _REPO_ROOT / "assets" / "meshes" / "axol" / "urdf" / "axol.urdf",
+    )
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[-1]
+
+
+URDF_PATH: Path = _resolve_urdf_path()
+
+
+# Single source of truth for URDF joint and body names. All helpers
+# (gravity comp, IK solver, simulation) compose ``f"{side}_{suffix}"`` from
+# these tables via the ``urdf_*_name`` helpers below.
+
+# ``Joint.GRIPPER`` is intentionally absent: the gripper is a fixed URDF
+# joint with no actuator counterpart.
+_ARM_JOINT_URDF_SUFFIX: dict[Joint, str] = {
+    Joint.SHOULDER_1: "s1_0",
+    Joint.SHOULDER_2: "s2_0",
+    Joint.SHOULDER_3: "s3_0",
+    Joint.ELBOW: "e1_0",
+    Joint.WRIST_1: "e2_0",
+    Joint.WRIST_2: "w1_0",
+    Joint.WRIST_3: "w2_0",
+}
+
+# Body driven by each joint. ``Joint.GRIPPER`` maps to the (fixed-jointed)
+# gripper link itself; MuJoCo merges this body into ``*_w2`` at load time.
+_BODY_URDF_SUFFIX: dict[Joint, str] = {
+    Joint.SHOULDER_1: "s2",
+    Joint.SHOULDER_2: "s3",
+    Joint.SHOULDER_3: "e1",
+    Joint.ELBOW: "e2",
+    Joint.WRIST_1: "w0",
+    Joint.WRIST_2: "w1",
+    Joint.WRIST_3: "w2",
+    Joint.GRIPPER: "gripper",
+}
+
+
+def urdf_joint_name(joint: Joint, *, is_left: bool) -> str:
+    """URDF revolute-joint name driving ``joint`` on the given arm.
+
+    Example::
+
+        urdf_joint_name(Joint.SHOULDER_1, is_left=True) == "left_s1_0"
+
+    Raises ``KeyError`` for ``Joint.GRIPPER`` (no actuator joint in the URDF).
+    """
+    side = "left" if is_left else "right"
+    return f"{side}_{_ARM_JOINT_URDF_SUFFIX[joint]}"
+
+
+def urdf_body_name(joint: Joint, *, is_left: bool) -> str:
+    """URDF body driven by ``joint`` on the given arm.
+
+    Example::
+
+        urdf_body_name(Joint.SHOULDER_1, is_left=True) == "left_s2"
+        urdf_body_name(Joint.GRIPPER,    is_left=True) == "left_gripper"
+    """
+    side = "left" if is_left else "right"
+    return f"{side}_{_BODY_URDF_SUFFIX[joint]}"
+
+
+def urdf_arm_joint_names(*, is_left: bool) -> list[str]:
+    """URDF revolute-joint names for the 7 arm joints, in :data:`ARM_JOINTS` order."""
+    return [urdf_joint_name(j, is_left=is_left) for j in ARM_JOINTS]
+
+
+def urdf_arm_body_names(*, is_left: bool) -> list[str]:
+    """URDF bodies driven by the 7 arm joints, in :data:`ARM_JOINTS` order."""
+    return [urdf_body_name(j, is_left=is_left) for j in ARM_JOINTS]
