@@ -5,13 +5,12 @@
 # Usage (all arguments are optional; defaults shown below):
 #
 #   bash bin/record.sh \
-#       --cam-ids 0 2 4 \
-#       --motor-port /dev/ttyUSB0 \
-#       --motor-id leader \
+#       --cam-ids 2 4 6 \
+#       --motor-port /dev/ttyACM0 \
 #       --repo-id local/dexumi_dataset \
 #       --output-dir datasets/my_dataset \
 #       --task "Pick and place cube" \
-#       --num-episodes 10 \
+#       --num-episodes 1 \
 #       --episode-time-s 60 \
 #       --fps 30 \
 #       --vcodec h264
@@ -42,8 +41,8 @@ fi
 export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 
 # ── Default arguments (override via CLI) ──────────────────────────────────────
-CAM_IDS="${CAM_IDS:-0 2 4}"          # space-separated camera indices
-MOTOR_PORT="${MOTOR_PORT:-/dev/ttyUSB0}"
+CAM_IDS="${CAM_IDS:-2 4 6}"          # space-separated camera indices
+MOTOR_PORT="${MOTOR_PORT:-/dev/ttyACM0}"
 MOTOR_ID="${MOTOR_ID:-leader}"
 REPO_ID="${REPO_ID:-local/dexumi_dataset}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/datasets/dexumi_dataset}"

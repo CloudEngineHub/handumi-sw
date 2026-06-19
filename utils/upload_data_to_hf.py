@@ -6,8 +6,8 @@ from huggingface_hub import HfApi, create_repo, upload_folder
 from dotenv import load_dotenv
 
 
-DATASET_PATH = "/home/leonardo/NONHUMAN/dexumi/datasets/dexumi_demo"
-REPO_ID = "NONHUMAN-RESEARCH/dexumi-dataset"
+DATASET_PATH = "/home/leonardo/NONHUMAN/dexumi/datasets/my_dataset"
+REPO_ID = "NONHUMAN-RESEARCH/dexumi-dataset-v2"
 PRIVATE = False
 COMMIT_MESSAGE = "Upload dataset"
 BRANCH = "main"
