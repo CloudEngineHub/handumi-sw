@@ -44,7 +44,8 @@ def project_root() -> Path:
 def _resolve_urdf_path() -> Path:
     """Locate ``axol.urdf`` in the installed package or the source tree."""
     candidates = (
-        _PKG_DIR / "assets" / "meshes" / "axol" / "urdf" / "axol.urdf",
+        _PKG_DIR / "assets" / "axol" / "urdf" / "axol.urdf",
+        _REPO_ROOT / "assets" / "axol" / "urdf" / "axol.urdf",
         _REPO_ROOT / "assets" / "meshes" / "axol" / "urdf" / "axol.urdf",
     )
     for path in candidates:

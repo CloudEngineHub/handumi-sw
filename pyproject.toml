@@ -13,8 +13,7 @@ dependencies = [
     "python-dotenv==1.2.2",
     # Axol IK solver (src/dexumi/robots/axol/solver.py)
     "numpy>=2.0",
-    "jax>=0.4.0",
-    "jaxlib",
+    "jax[cuda13]>=0.4.0",
     "jaxlie>=1.0.0",
     "jaxls @ git+https://github.com/brentyi/jaxls.git",
     "yourdfpy",
@@ -36,7 +35,7 @@ allow-direct-references = true
 packages = ["src/dexumi"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"assets/meshes/axol" = "dexumi/assets/meshes/axol"
+"assets/axol" = "dexumi/assets/axol"
 
 [tool.hatch.build.targets.sdist]
 include = ["src/dexumi"]
