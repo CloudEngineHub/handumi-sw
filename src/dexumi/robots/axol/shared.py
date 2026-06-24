@@ -1,6 +1,4 @@
-"""Shared constants and utilities for the Almond Axol robot."""
-
-from __future__ import annotations
+"""Shared constants and utilities for the Axol embodiment."""
 
 from enum import Enum
 from pathlib import Path
@@ -29,29 +27,19 @@ CAN_RIGHT = "can_alm_axol_r"
 
 ARM_JOINTS: list[Joint] = [j for j in Joint if j != Joint.GRIPPER]
 
-_PKG_DIR = Path(__file__).resolve().parent.parent
-"""``src/dexumi`` — used to locate bundled or repo-level assets."""
-
-_REPO_ROOT = _PKG_DIR.parent.parent
-"""Repository root (parent of ``src/``)."""
-
-
-def project_root() -> Path:
-    """Return the repository root directory."""
-    return _REPO_ROOT
-
 
 def _resolve_urdf_path() -> Path:
-    """Locate ``axol.urdf`` in the installed package or the source tree."""
+    here = Path(__file__).resolve()
     candidates = (
-        _PKG_DIR / "assets" / "axol" / "urdf" / "axol.urdf",
-        _REPO_ROOT / "assets" / "axol" / "urdf" / "axol.urdf",
-        _REPO_ROOT / "assets" / "meshes" / "axol" / "urdf" / "axol.urdf",
+        here.parents[2] / "assets" / "axol" / "urdf" / "axol.urdf",
+        here.parents[4] / "assets" / "axol" / "urdf" / "axol.urdf",
     )
     for path in candidates:
         if path.is_file():
             return path
-    return candidates[-1]
+    raise FileNotFoundError(
+        "Could not find axol.urdf; expected it under dexumi/assets/axol or repo assets/axol"
+    )
 
 
 URDF_PATH: Path = _resolve_urdf_path()

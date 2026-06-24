@@ -23,7 +23,7 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from dexumi.robots.axol.config import KinematicsConfig
 from dexumi.robots.axol.solver import KinematicsSolver
-from dexumi.robots.utils import Joint, urdf_body_name
+from dexumi.robots.axol.shared import Joint, urdf_body_name
 from dexumi.retargeting.axol_from_pico import (
     PicoToAxolArmRetargeter,
     axol_link_positions,
