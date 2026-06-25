@@ -37,8 +37,11 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 import numpy as np
+
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Argument parser
