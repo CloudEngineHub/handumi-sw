@@ -1,7 +1,20 @@
-"""Shared constants and utilities for the Axol embodiment."""
+"""Axol URDF adapter — the single source of truth for Axol link/joint names.
+
+Everything that needs to map between Axol's logical joints (the ``Joint`` enum)
+and the names that appear verbatim in ``axol.urdf`` lives here. No other module
+should hard-code Axol URDF strings; they should call the helpers below instead.
+
+Downstream consumers:
+- ``axol/solver.py``   — builds ``AXOL_KINEMATICS_SPEC`` from these names.
+- ``robots/registry.py`` — wires ``command_to_arm_q`` into :class:`~dexumi.robots.sim.ViserSim`.
+"""
+
+from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+
+import numpy as np
 
 
 class Joint(Enum):
@@ -26,6 +39,11 @@ CAN_LEFT = "can_alm_axol_l"
 CAN_RIGHT = "can_alm_axol_r"
 
 ARM_JOINTS: list[Joint] = [j for j in Joint if j != Joint.GRIPPER]
+
+ARM_JOINT_COUNT = len(ARM_JOINTS)
+# Shape (8,): 7 arm joints in radians, then gripper in [0, 1] (not actuated in URDF).
+COMMAND_SIZE = 8
+GRIPPER_INDEX = 7
 
 
 def _resolve_urdf_path() -> Path:
@@ -108,3 +126,13 @@ def urdf_arm_joint_names(*, is_left: bool) -> list[str]:
 def urdf_arm_body_names(*, is_left: bool) -> list[str]:
     """URDF bodies driven by the 7 arm joints, in :data:`ARM_JOINTS` order."""
     return [urdf_body_name(j, is_left=is_left) for j in ARM_JOINTS]
+
+
+def command_to_arm_q(command: np.ndarray) -> np.ndarray:
+    """Map one Axol arm command to the URDF actuated-joint sub-vector.
+
+    Indices ``0..6`` are the seven revolute arm joints. Index ``7`` is the
+    normalized gripper value and is not forwarded (Axol has no prismatic
+    gripper joint in the URDF).
+    """
+    return command[:ARM_JOINT_COUNT].astype(float)
