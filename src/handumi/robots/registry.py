@@ -2,7 +2,7 @@
 
 Typical usage::
 
-    from dexumi.robots.registry import load_embodiment
+    from handumi.robots.registry import load_embodiment
 
     runtime = load_embodiment("axol")
     solver = runtime.solver_cls()
@@ -18,8 +18,8 @@ from typing import Any
 
 import numpy as np
 
-from dexumi.robots.kinematics import KinematicsConfig
-from dexumi.robots.sim import ViserSim
+from handumi.robots.kinematics import KinematicsConfig
+from handumi.robots.sim import ViserSim
 
 DEFAULT_COMPARE_AXIS_MAPS: dict[str, tuple[str, ...]] = {
     "piper": (
@@ -76,7 +76,7 @@ class EmbodimentRuntime:
         joint_names: list[str] | None = None,
         default_q: np.ndarray | None = None,
     ) -> ViserSim:
-        """Build a :class:`~dexumi.robots.sim.ViserSim` for this embodiment."""
+        """Build a :class:`~handumi.robots.sim.ViserSim` for this embodiment."""
         return ViserSim(
             urdf_path=self.urdf_path,
             left_joint_names=self.urdf_arm_joint_names(is_left=True),
@@ -92,18 +92,18 @@ class EmbodimentRuntime:
 def load_embodiment(name: str) -> EmbodimentRuntime:
     """Return the runtime bundle for ``name`` (``"piper"`` or ``"axol"``)."""
     if name == "piper":
-        from dexumi.robots.piper.retargeting import (
+        from handumi.robots.piper.retargeting import (
             PicoToPiperArmRetargeter,
             move_retargeter_to_front_workspace,
             settle_first_frame,
         )
-        from dexumi.robots.piper.shared import (
+        from handumi.robots.piper.shared import (
             COMMAND_SIZE,
             URDF_PATH,
             command_to_arm_q,
             urdf_arm_joint_names,
         )
-        from dexumi.robots.piper.solver import KinematicsSolver
+        from handumi.robots.piper.solver import KinematicsSolver
 
         return EmbodimentRuntime(
             name="piper",
@@ -126,18 +126,18 @@ def load_embodiment(name: str) -> EmbodimentRuntime:
         )
 
     if name == "axol":
-        from dexumi.robots.axol.retargeting import (
+        from handumi.robots.axol.retargeting import (
             PicoToAxolArmRetargeter,
             move_retargeter_to_front_workspace,
             settle_first_frame,
         )
-        from dexumi.robots.axol.shared import (
+        from handumi.robots.axol.shared import (
             COMMAND_SIZE,
             URDF_PATH,
             command_to_arm_q,
             urdf_arm_joint_names,
         )
-        from dexumi.robots.axol.solver import KinematicsSolver
+        from handumi.robots.axol.solver import KinematicsSolver
 
         return EmbodimentRuntime(
             name="axol",

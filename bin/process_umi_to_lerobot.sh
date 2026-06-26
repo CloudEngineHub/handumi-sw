@@ -7,11 +7,11 @@
 # Usage (all arguments are optional; defaults shown below):
 #
 #   bash bin/process_umi_to_lerobot.sh \
-#       --repo-id NONHUMAN-RESEARCH/dexumi-dataset-v2 \
-#       --dataset-root outputs/datasets/dexumi-dataset-v2 \
+#       --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
+#       --dataset-root outputs/datasets/handumi-dataset-v2 \
 #       --embodiment piper \
-#       --output-name dexumi-dataset-v2-piper \
-#       --output-root outputs/datasets/dexumi-dataset-v2-piper
+#       --output-name handumi-dataset-v2-piper \
+#       --output-root outputs/datasets/handumi-dataset-v2-piper
 #
 # Extra flags:
 #   --push-to-hub          Upload to HuggingFace Hub after processing
@@ -34,17 +34,17 @@ else
     echo "[process_umi_to_lerobot.sh] WARNING: no .venv found at ${VENV}. Using system Python."
 fi
 
-# ── Make the dexumi package importable ────────────────────────────────────────
+# ── Make the handumi package importable ────────────────────────────────────────
 export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 
 # ── Default arguments (override via CLI or env vars) ──────────────────────────
-REPO_ID="${REPO_ID:-NONHUMAN-RESEARCH/dexumi-dataset-v2}"
-DATASET_ROOT="${DATASET_ROOT:-${REPO_ROOT}/outputs/datasets/dexumi-dataset-v2}"
+REPO_ID="${REPO_ID:-NONHUMAN-RESEARCH/handumi-dataset-v2}"
+DATASET_ROOT="${DATASET_ROOT:-${REPO_ROOT}/outputs/datasets/handumi-dataset-v2}"
 REVISION="${REVISION:-main}"
 EMBODIMENT="${EMBODIMENT:-piper}"
-OUTPUT_NAME="${OUTPUT_NAME:-dexumi-dataset-v2-piper}"
+OUTPUT_NAME="${OUTPUT_NAME:-handumi-dataset-v2-piper}"
 OUTPUT_PREFIX="${OUTPUT_PREFIX:-NONHUMAN-RESEARCH/}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/outputs/datasets/dexumi-dataset-v2-piper}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/outputs/datasets/handumi-dataset-v2-piper}"
 EPISODES="${EPISODES:-}"
 TASK="${TASK:-}"
 
@@ -73,7 +73,7 @@ done
 # ── Print configuration ───────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║     dexumi  –  UMI → LeRobot embodiment conversion       ║"
+echo "║     handumi  –  UMI → LeRobot embodiment conversion       ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 printf "║  Source repo   : %-40s║\n" "${REPO_ID}"
 printf "║  Dataset root  : %-40s║\n" "${DATASET_ROOT}"

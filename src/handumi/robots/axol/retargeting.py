@@ -1,12 +1,12 @@
-"""Piper retargeting spec — PICO wrist-to-EE mapping for the Piper arm.
+"""Axol retargeting spec — PICO wrist-to-EE mapping for the Axol arm.
 
 Defines the robot-specific constants that parameterize the generic
-:class:`~dexumi.retargeting.pico_to_robot.PicoToRobotArmRetargeter`:
+:class:`~handumi.retargeting.pico_to_robot.PicoToRobotArmRetargeter`:
 
-- ``REST_LEFT_ARM`` / ``REST_RIGHT_ARM`` — joint angles used as the posture
-  prior when no motion is commanded (zeros for Piper = natural hanging pose).
-- ``PIPER_RETARGETING_SPEC`` — wires the above into the shared retargeter.
-- ``PicoToPiperArmRetargeter`` — convenience subclass that binds the spec so
+- ``REST_LEFT_ARM`` / ``REST_RIGHT_ARM`` — joint angles that put Axol in a
+  comfortable resting pose (slight elbow bend, neutral wrist).
+- ``AXOL_RETARGETING_SPEC`` — wires the above into the shared retargeter.
+- ``PicoToAxolArmRetargeter`` — convenience subclass that binds the spec so
   callers don't need to pass it explicitly.
 
 Re-exports ``move_retargeter_to_front_workspace`` and ``settle_first_frame``
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from dexumi.retargeting.pico_to_robot import (
+from handumi.retargeting.pico_to_robot import (
     PicoToRobotArmRetargeter,
     RetargetingSpec,
     move_retargeter_to_front_workspace,
@@ -25,8 +25,14 @@ from dexumi.retargeting.pico_to_robot import (
     settle_first_frame,
 )
 
-REST_LEFT_ARM = np.zeros(6, dtype=np.float32)
-REST_RIGHT_ARM = np.zeros(6, dtype=np.float32)
+REST_LEFT_ARM = np.array(
+    [-0.025 * 2 * np.pi, 0.0, 0.0, 0.05 * 2 * np.pi, 0.0, 0.0, -0.025 * 2 * np.pi],
+    dtype=np.float32,
+)
+REST_RIGHT_ARM = np.array(
+    [0.025 * 2 * np.pi, 0.0, 0.0, -0.05 * 2 * np.pi, 0.0, 0.0, 0.025 * 2 * np.pi],
+    dtype=np.float32,
+)
 
 
 def _left_front_wrist(forward: float, lateral: float, height: float) -> np.ndarray:
@@ -37,8 +43,8 @@ def _right_front_wrist(forward: float, lateral: float, height: float) -> np.ndar
     return np.array([-lateral, forward, height], dtype=np.float32)
 
 
-PIPER_RETARGETING_SPEC = RetargetingSpec(
-    name="piper",
+AXOL_RETARGETING_SPEC = RetargetingSpec(
+    name="axol",
     rest_left_arm=REST_LEFT_ARM,
     rest_right_arm=REST_RIGHT_ARM,
     command_size=8,
@@ -48,8 +54,8 @@ PIPER_RETARGETING_SPEC = RetargetingSpec(
 )
 
 
-class PicoToPiperArmRetargeter(PicoToRobotArmRetargeter):
-    """PICO wrist retargeter for Piper end-effectors."""
+class PicoToAxolArmRetargeter(PicoToRobotArmRetargeter):
+    """PICO wrist retargeter for Axol end-effectors."""
 
     def __init__(
         self,
@@ -64,7 +70,7 @@ class PicoToPiperArmRetargeter(PicoToRobotArmRetargeter):
     ) -> None:
         super().__init__(
             solver=solver,
-            spec=PIPER_RETARGETING_SPEC,
+            spec=AXOL_RETARGETING_SPEC,
             first_body_pose=first_body_pose,
             scale=scale,
             axis_map=axis_map,
@@ -74,16 +80,16 @@ class PicoToPiperArmRetargeter(PicoToRobotArmRetargeter):
         )
 
 
-def piper_link_positions(solver, q: np.ndarray, link_indices: list[int]) -> np.ndarray:
+def axol_link_positions(solver, q: np.ndarray, link_indices: list[int]) -> np.ndarray:
     return robot_link_positions(solver, q, link_indices)
 
 
 __all__ = [
-    "PIPER_RETARGETING_SPEC",
-    "PicoToPiperArmRetargeter",
+    "AXOL_RETARGETING_SPEC",
+    "PicoToAxolArmRetargeter",
     "REST_LEFT_ARM",
     "REST_RIGHT_ARM",
+    "axol_link_positions",
     "move_retargeter_to_front_workspace",
-    "piper_link_positions",
     "settle_first_frame",
 ]

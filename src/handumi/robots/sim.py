@@ -3,10 +3,10 @@
 All the threading, viser setup, and joint-reordering logic lives here once.
 Each embodiment supplies an ``arm_q_fn`` that maps one per-arm command vector
 to the URDF actuated-joint sub-vector for that arm (see
-``dexumi.robots.<embodiment>.shared.command_to_arm_q``).
+``handumi.robots.<embodiment>.shared.command_to_arm_q``).
 
-Use :func:`~dexumi.robots.registry.load_embodiment` to construct a configured
-instance via :meth:`~dexumi.robots.registry.EmbodimentRuntime.make_sim`.
+Use :func:`~handumi.robots.registry.load_embodiment` to construct a configured
+instance via :meth:`~handumi.robots.registry.EmbodimentRuntime.make_sim`.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class ViserSim:
 
     .. code-block:: python
 
-        from dexumi.robots.registry import load_embodiment
+        from handumi.robots.registry import load_embodiment
 
         sim = load_embodiment("axol").make_sim(port=8002)
         await sim.enable()

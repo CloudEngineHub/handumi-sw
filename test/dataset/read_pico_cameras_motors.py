@@ -52,7 +52,7 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s – %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("dexumi.record")
+log = logging.getLogger("handumi.record")
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 SERVICE_SCRIPT = "/opt/apps/roboticsservice/runService.sh"
@@ -685,7 +685,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--repo-id",
         type=str,
-        default="local/dexumi_dataset",
+        default="local/handumi_dataset",
         help="Dataset repo-id in '{namespace}/{name}' format.",
     )
     p.add_argument(

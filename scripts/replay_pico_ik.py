@@ -20,8 +20,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from dexumi.retargeting.pico_to_robot import robot_link_positions
-from dexumi.retargeting.pico_upper_body import (
+from handumi.retargeting.pico_to_robot import robot_link_positions
+from handumi.retargeting.pico_upper_body import (
     LEFT_ELBOW,
     LEFT_SHOULDER,
     LEFT_WRIST,
@@ -33,10 +33,10 @@ from dexumi.retargeting.pico_upper_body import (
     UPPER_BODY_JOINTS,
     parse_axis_map,
 )
-from dexumi.dataset import dataset_root_from_repo_id, load_pico_body_poses
-from dexumi.robots.registry import EmbodimentRuntime, load_embodiment
+from handumi.dataset import dataset_root_from_repo_id, load_pico_body_poses
+from handumi.robots.registry import EmbodimentRuntime, load_embodiment
 
-DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/dexumi-dataset-v2"
+DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/handumi-dataset-v2"
 
 ROBOT_TARGET_LINES = np.asarray(
     [[0, 1], [1, 2], [3, 4], [4, 5]],

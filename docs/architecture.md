@@ -1,11 +1,11 @@
 # Robot Embodiment Architecture
 
-Dexumi supports multiple bimanual robot embodiments (currently **Piper** and **Axol**) through a layered design: **generic algorithms live once**, and each robot contributes **small configuration modules** that plug into those algorithms.
+handumi supports multiple bimanual robot embodiments (currently **Piper** and **Axol**) through a layered design: **generic algorithms live once**, and each robot contributes **small configuration modules** that plug into those algorithms.
 
 The entry point for applications and test scripts is the embodiment registry:
 
 ```python
-from dexumi.robots.registry import load_embodiment
+from handumi.robots.registry import load_embodiment
 
 runtime = load_embodiment("piper")
 solver = runtime.solver_cls(config=runtime.config_cls())
@@ -19,9 +19,9 @@ sim = runtime.make_sim()
 
 | Layer | Location | Responsibility |
 |-------|----------|----------------|
-| **Embodiment config** | `src/dexumi/robots/<name>/` | URDF naming, IK spec, retargeting spec, command layout |
-| **Shared robot logic** | `src/dexumi/robots/` | IK solver, Viser simulation, embodiment registry |
-| **Human input logic** | `src/dexumi/retargeting/` | PICO body parsing, wrist-to-EE retargeting algorithm |
+| **Embodiment config** | `src/handumi/robots/<name>/` | URDF naming, IK spec, retargeting spec, command layout |
+| **Shared robot logic** | `src/handumi/robots/` | IK solver, Viser simulation, embodiment registry |
+| **Human input logic** | `src/handumi/retargeting/` | PICO body parsing, wrist-to-EE retargeting algorithm |
 
 A URDF file alone is **not** sufficient to drive the full stack. The URDF provides geometry and joint names, but the codebase also needs:
 
@@ -36,7 +36,7 @@ A URDF file alone is **not** sufficient to drive the full stack. The URDF provid
 ## Directory layout
 
 ```
-src/dexumi/
+src/handumi/
 ├── retargeting/
 │   ├── pico_upper_body.py      # PICO joint indices, axis-map parsing
 │   └── pico_to_robot.py        # Generic PICO → robot EE retargeting

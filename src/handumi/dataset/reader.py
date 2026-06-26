@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dexumi.dataset.ref import DatasetRef
-from dexumi.dataset.schema import info_path, load_info
+from handumi.dataset.ref import DatasetRef
+from handumi.dataset.schema import info_path, load_info
 
 
 @dataclass(frozen=True)

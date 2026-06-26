@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from dexumi.dataset.reader import open_dataset
-from dexumi.dataset.ref import DatasetRef
+from handumi.dataset.reader import open_dataset
+from handumi.dataset.ref import DatasetRef
 
 
 def load_pico_body_poses(

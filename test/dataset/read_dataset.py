@@ -5,7 +5,7 @@ Lee un LeRobotDataset local y ejercita __getitem__, iteración y propiedades.
 Uso
 ───
     uv run python test/read_dataset.py
-    uv run python test/read_dataset.py --root datasets/dexumi_demo --repo-id local/dexumi_demo
+    uv run python test/read_dataset.py --root datasets/handumi_demo --repo-id local/handumi_demo
     uv run python test/read_dataset.py --idx 0 --idx 10 --idx -1   # frames específicos
     uv run python test/read_dataset.py --episodes 0                 # sólo episodio 0
 """
@@ -23,12 +23,12 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s – %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("dexumi.read_dataset")
+log = logging.getLogger("handumi.read_dataset")
 
 # ── Rutas por defecto ──────────────────────────────────────────────────────────
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DATASET_ROOT = _REPO_ROOT / "datasets" / "dexumi_demo"
-DEFAULT_REPO_ID = "local/dexumi_demo"
+DEFAULT_DATASET_ROOT = _REPO_ROOT / "datasets" / "handumi_demo"
+DEFAULT_REPO_ID = "local/handumi_demo"
 
 
 # ── Helpers de impresión ───────────────────────────────────────────────────────

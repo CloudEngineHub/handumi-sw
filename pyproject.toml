@@ -1,7 +1,7 @@
 [project]
-name = "dexumi"
+name = "handumi"
 version = "0.1.0"
-description = "Dexumi robotics project"
+description = "handumi robotics project"
 requires-python = ">=3.12"
 dependencies = [
     "lerobot[feetech,dataset]==0.5.1",
@@ -11,7 +11,7 @@ dependencies = [
     "pybind11>=2.13",
     "setuptools>=71",
     "python-dotenv==1.2.2",
-    # Axol IK solver (src/dexumi/robots/axol/solver.py)
+    # Axol IK solver (src/handumi/robots/axol/solver.py)
     "numpy>=2.0",
     "jax[cuda13]>=0.4.0",
     "jaxlie>=1.0.0",
@@ -33,13 +33,13 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/dexumi"]
+packages = ["src/handumi"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"assets/axol" = "dexumi/assets/axol"
+"assets/axol" = "handumi/assets/axol"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/dexumi"]
+include = ["src/handumi"]
 
 [tool.uv]
 no-build-isolation-package = ["xrobotoolkit-sdk"]

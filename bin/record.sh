@@ -7,7 +7,7 @@
 #   bash bin/record.sh \
 #       --cam-ids 2 4 6 \
 #       --motor-port /dev/ttyACM0 \
-#       --repo-id local/dexumi_dataset \
+#       --repo-id local/handumi_dataset \
 #       --output-dir datasets/my_dataset \
 #       --task "Pick and place cube" \
 #       --num-episodes 1 \
@@ -37,15 +37,15 @@ else
     echo "[record.sh] WARNING: no .venv found at ${VENV}. Using system Python."
 fi
 
-# ── Make the dexumi package importable ────────────────────────────────────────
+# ── Make the handumi package importable ────────────────────────────────────────
 export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 
 # ── Default arguments (override via CLI) ──────────────────────────────────────
 CAM_IDS="${CAM_IDS:-2 4 6}"          # space-separated camera indices
 MOTOR_PORT="${MOTOR_PORT:-/dev/ttyACM0}"
 MOTOR_ID="${MOTOR_ID:-leader}"
-REPO_ID="${REPO_ID:-local/dexumi_dataset}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/datasets/dexumi_dataset}"
+REPO_ID="${REPO_ID:-local/handumi_dataset}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/datasets/handumi_dataset}"
 TASK="${TASK:-Teleoperation recording}"
 NUM_EPISODES="${NUM_EPISODES:-10}"
 EPISODE_TIME_S="${EPISODE_TIME_S:-60}"
@@ -93,7 +93,7 @@ done
 # ── Print configuration ────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║          dexumi  –  multi-modal recording                ║"
+echo "║          handumi  –  multi-modal recording                ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 printf "║  Cameras       : %-40s║\n" "${CAM_IDS}"
 printf "║  Motor port    : %-40s║\n" "${MOTOR_PORT}"

@@ -15,7 +15,7 @@ import pandas as pd
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from dexumi.retargeting.pico_upper_body import infer_elbow, parse_axis_map
+from handumi.retargeting.pico_upper_body import infer_elbow, parse_axis_map
 
 
 UPPER_NAMES = [

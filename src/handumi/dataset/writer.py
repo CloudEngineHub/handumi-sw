@@ -22,7 +22,7 @@ Usage
 -----
 ::
 
-    from dexumi.dataset import EpisodeResult, write_dataset
+    from handumi.dataset import EpisodeResult, write_dataset
 
     episodes = [
         EpisodeResult(
@@ -55,7 +55,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from dexumi.dataset.schema import CHUNKS_SIZE, chunk_and_file
+from handumi.dataset.schema import CHUNKS_SIZE, chunk_and_file
 
 
 # ---------------------------------------------------------------------------
@@ -590,7 +590,7 @@ def write_dataset(
     if missing_videos:
         print(
             f"  WARNING: {missing_videos} video file(s) missing in source. "
-            "Reload the source dataset with dexumi.dataset.open_dataset "
+            "Reload the source dataset with handumi.dataset.open_dataset "
             "(videos are always downloaded).",
             flush=True,
         )
