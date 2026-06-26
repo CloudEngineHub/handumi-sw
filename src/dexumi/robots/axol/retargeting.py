@@ -1,7 +1,7 @@
 """Axol retargeting spec — PICO wrist-to-EE mapping for the Axol arm.
 
 Defines the robot-specific constants that parameterize the generic
-:class:`~dexumi.retargeting.pico_to_robot.PicoToRobotArmRetargeter`:
+:class:`~handumi.retargeting.pico_to_robot.PicoToRobotArmRetargeter`:
 
 - ``REST_LEFT_ARM`` / ``REST_RIGHT_ARM`` — joint angles that put Axol in a
   comfortable resting pose (slight elbow bend, neutral wrist).
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from dexumi.retargeting.pico_to_robot import (
+from handumi.retargeting.pico_to_robot import (
     PicoToRobotArmRetargeter,
     RetargetingSpec,
     move_retargeter_to_front_workspace,

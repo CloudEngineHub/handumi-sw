@@ -1,3 +1,3 @@
-"""Dexumi robotics project."""
+"""handumi robotics project."""
 
 __version__ = "0.1.0"

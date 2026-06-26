@@ -6,7 +6,7 @@ should hard-code Axol URDF strings; they should call the helpers below instead.
 
 Downstream consumers:
 - ``axol/solver.py``   — builds ``AXOL_KINEMATICS_SPEC`` from these names.
-- ``robots/registry.py`` — wires ``command_to_arm_q`` into :class:`~dexumi.robots.sim.ViserSim`.
+- ``robots/registry.py`` — wires ``command_to_arm_q`` into :class:`~handumi.robots.sim.ViserSim`.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def _resolve_urdf_path() -> Path:
         if path.is_file():
             return path
     raise FileNotFoundError(
-        "Could not find axol.urdf; expected it under dexumi/assets/axol or repo assets/axol"
+        "Could not find axol.urdf; expected it under handumi/assets/axol or repo assets/axol"
     )
 
 

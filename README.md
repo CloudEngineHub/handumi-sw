@@ -1,4 +1,4 @@
-# Dexumi
+# handumi
 
 Robotics project built on [LeRobot](https://github.com/huggingface/lerobot) with PICO retargeting, IK, and dataset tooling.
 
@@ -18,7 +18,7 @@ Robotics project built on [LeRobot](https://github.com/huggingface/lerobot) with
 ├── external_dependencies/   # XRoboToolkit bindings
 ├── outputs/datasets/        # Local LeRobot datasets
 ├── scripts/                 # Python tooling
-├── src/dexumi/              # Core package
+├── src/handumi/              # Core package
 ├── test/                    # Visualizers and dataset tests
 └── utils/                   # Upload helpers
 ```
@@ -71,13 +71,13 @@ Convert a PICO/UMI LeRobot dataset to embodiment-specific joint angles via IK.
 ```bash
 bash bin/process_umi_to_lerobot.sh \
     --embodiment piper \
-    --output-name dexumi-dataset-v2-piper \
-    --output-root outputs/datasets/dexumi-dataset-v2-piper
+    --output-name handumi-dataset-v2-piper \
+    --output-root outputs/datasets/handumi-dataset-v2-piper
 ```
 
 | Argument | Description |
 |----------|-------------|
-| `--repo-id` | Source HuggingFace repo (default: `NONHUMAN-RESEARCH/dexumi-dataset-v2`) |
+| `--repo-id` | Source HuggingFace repo (default: `NONHUMAN-RESEARCH/handumi-dataset-v2`) |
 | `--dataset-root` | Local source dataset path |
 | `--embodiment` | Target robot: `piper` or `axol` |
 | `--output-name` / `--output-root` | Output dataset name and path |

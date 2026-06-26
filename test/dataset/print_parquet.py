@@ -2,7 +2,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-DEFAULT_PATH = "/home/leonardo/NONHUMAN/dexumi/datasets/dexumi_demo/meta/episodes/chunk-000/file-000.parquet"
+DEFAULT_PATH = "/home/leonardo/NONHUMAN/handumi/datasets/handumi_demo/meta/episodes/chunk-000/file-000.parquet"
 
 
 def describe_value(val):

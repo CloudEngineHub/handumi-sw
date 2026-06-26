@@ -1,6 +1,6 @@
 # Adding a New Embodiment
 
-This guide describes what you need to add a new bimanual robot (e.g. `"franka"`) to Dexumi so it works with PICO retargeting, IK, and Viser visualization.
+This guide describes what you need to add a new bimanual robot (e.g. `"franka"`) to handumi so it works with PICO retargeting, IK, and Viser visualization.
 
 See [architecture.md](architecture.md) for how the pieces fit together.
 
@@ -11,7 +11,7 @@ See [architecture.md](architecture.md) for how the pieces fit together.
 Adding an embodiment means supplying **configuration**, not reimplementing algorithms. You will create:
 
 ```
-src/dexumi/robots/<name>/
+src/handumi/robots/<name>/
 ├── shared.py       # URDF naming, command layout, command_to_arm_q
 ├── solver.py       # RobotKinematicsSpec + collision builder
 └── retargeting.py  # RetargetingSpec + PicoTo<Name>ArmRetargeter
@@ -19,7 +19,7 @@ src/dexumi/robots/<name>/
 assets/<name>/      # URDF + meshes
 ```
 
-Then register the embodiment in `src/dexumi/robots/registry.py`.
+Then register the embodiment in `src/handumi/robots/registry.py`.
 
 ---
 
@@ -63,7 +63,7 @@ print([j.name for j in urdf.robot.joints if j.joint_type != "fixed"])
 
 ## Step 2 — `shared.py`
 
-Create `src/dexumi/robots/myrobot/shared.py`. This is the **single source of truth** for URDF strings.
+Create `src/handumi/robots/myrobot/shared.py`. This is the **single source of truth** for URDF strings.
 
 ### Required contents
 
@@ -97,7 +97,7 @@ Create `src/dexumi/robots/myrobot/shared.py`. This is the **single source of tru
 
 ## Step 3 — `solver.py`
 
-Create `src/dexumi/robots/myrobot/solver.py`.
+Create `src/handumi/robots/myrobot/solver.py`.
 
 ### Required contents
 
@@ -123,8 +123,8 @@ Create `src/dexumi/robots/myrobot/solver.py`.
 ### Sanity check
 
 ```python
-from dexumi.robots.myrobot.solver import KinematicsSolver
-from dexumi.robots.kinematics import KinematicsConfig
+from handumi.robots.myrobot.solver import KinematicsSolver
+from handumi.robots.kinematics import KinematicsConfig
 
 solver = KinematicsSolver(config=KinematicsConfig())
 q = solver.ik(
@@ -139,7 +139,7 @@ print(q.shape, solver.num_joints)
 
 ## Step 4 — `retargeting.py`
 
-Create `src/dexumi/robots/myrobot/retargeting.py`.
+Create `src/handumi/robots/myrobot/retargeting.py`.
 
 ### Required contents
 
@@ -170,7 +170,7 @@ Create `src/dexumi/robots/myrobot/retargeting.py`.
 5. **Re-export** (optional but conventional):
 
    ```python
-   from dexumi.retargeting.pico_to_robot import (
+   from handumi.retargeting.pico_to_robot import (
        move_retargeter_to_front_workspace,
        settle_first_frame,
        robot_link_positions,
@@ -181,7 +181,7 @@ Create `src/dexumi/robots/myrobot/retargeting.py`.
 
 ## Step 5 — Register in `registry.py`
 
-Edit `src/dexumi/robots/registry.py`:
+Edit `src/handumi/robots/registry.py`:
 
 1. Add `"myrobot"` to `EMBODIMENT_NAMES`.
 2. Add axis-map candidates to `DEFAULT_COMPARE_AXIS_MAPS` (start with 8 sign permutations of `"x,z,y"` or copy from a similar robot and tune with `test/compare_axis.py`).
@@ -189,18 +189,18 @@ Edit `src/dexumi/robots/registry.py`:
 
 ```python
 if name == "myrobot":
-    from dexumi.robots.myrobot.retargeting import (
+    from handumi.robots.myrobot.retargeting import (
         PicoToMyrobotArmRetargeter,
         move_retargeter_to_front_workspace,
         settle_first_frame,
     )
-    from dexumi.robots.myrobot.shared import (
+    from handumi.robots.myrobot.shared import (
         COMMAND_SIZE,
         URDF_PATH,
         command_to_arm_q,
         urdf_arm_joint_names,
     )
-    from dexumi.robots.myrobot.solver import KinematicsSolver
+    from handumi.robots.myrobot.solver import KinematicsSolver
 
     return EmbodimentRuntime(
         name="myrobot",
@@ -228,12 +228,12 @@ if name == "myrobot":
 For backward-compatible imports:
 
 ```python
-# src/dexumi/robots/myrobot/__init__.py
-from dexumi.robots.kinematics import KinematicsConfig
+# src/handumi/robots/myrobot/__init__.py
+from handumi.robots.kinematics import KinematicsConfig
 from .solver import KinematicsSolver
 
 def Sim(**kwargs):
-    from dexumi.robots.registry import load_embodiment
+    from handumi.robots.registry import load_embodiment
     return load_embodiment("myrobot").make_sim(**kwargs)
 
 __all__ = ["KinematicsConfig", "KinematicsSolver", "Sim"]
@@ -246,7 +246,7 @@ __all__ = ["KinematicsConfig", "KinematicsSolver", "Sim"]
 ### Import and sim factory
 
 ```python
-from dexumi.robots.registry import load_embodiment
+from handumi.robots.registry import load_embodiment
 import numpy as np
 
 runtime = load_embodiment("myrobot")
@@ -301,9 +301,9 @@ Do **not** duplicate these modules per robot:
 
 Use Piper as the reference implementation when in doubt:
 
-- `src/dexumi/robots/piper/shared.py`
-- `src/dexumi/robots/piper/solver.py`
-- `src/dexumi/robots/piper/retargeting.py`
-- `src/dexumi/robots/registry.py` (piper branch)
+- `src/handumi/robots/piper/shared.py`
+- `src/handumi/robots/piper/solver.py`
+- `src/handumi/robots/piper/retargeting.py`
+- `src/handumi/robots/registry.py` (piper branch)
 
 Copy the Piper package, rename symbols, adjust joint counts and URDF mappings, then iterate with Viser and axis-map comparison until motion looks correct.

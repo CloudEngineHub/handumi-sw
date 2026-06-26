@@ -16,19 +16,19 @@ Quick start
 
     # Axol embodiment (default settings)
     python scripts/process_umi_to_lerobot.py \\
-        --repo-id NONHUMAN-RESEARCH/dexumi-dataset-v2 \\
-        --dataset-root outputs/datasets/dexumi-dataset-v2 \\
+        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \\
+        --dataset-root outputs/datasets/handumi-dataset-v2 \\
         --embodiment axol \\
-        --output-name dexumi-dataset-v2-axol \\
-        --output-root outputs/datasets/dexumi-dataset-v2-axol
+        --output-name handumi-dataset-v2-axol \\
+        --output-root outputs/datasets/handumi-dataset-v2-axol
 
     # Piper embodiment, push to hub afterwards
     python scripts/process_umi_to_lerobot.py \\
-        --repo-id NONHUMAN-RESEARCH/dexumi-dataset-v2 \\
-        --dataset-root outputs/datasets/dexumi-dataset-v2 \\
+        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \\
+        --dataset-root outputs/datasets/handumi-dataset-v2 \\
         --embodiment piper \\
-        --output-name dexumi-dataset-v2-piper \\
-        --output-root outputs/datasets/dexumi-dataset-v2-piper \\
+        --output-name handumi-dataset-v2-piper \\
+        --output-root outputs/datasets/handumi-dataset-v2-piper \\
         --push-to-hub
 """
 
@@ -63,12 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
     src = parser.add_argument_group("Source dataset")
     src.add_argument(
         "--repo-id",
-        default="NONHUMAN-RESEARCH/dexumi-dataset-v2",
+        default="NONHUMAN-RESEARCH/handumi-dataset-v2",
         help="HuggingFace repo-id of the source dataset.",
     )
     src.add_argument(
         "--dataset-root",
-        default="outputs/datasets/dexumi-dataset-v2",
+        default="outputs/datasets/handumi-dataset-v2",
         help="Local root directory of the source dataset.",
     )
     src.add_argument(
@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-name",
         default=None,
         help=(
-            "Dataset name on HuggingFace Hub (e.g. dexumi-dataset-v2-axol).  "
+            "Dataset name on HuggingFace Hub (e.g. handumi-dataset-v2-axol).  "
             "Defaults to <source-dataset-name>-<embodiment>."
         ),
     )
@@ -284,8 +284,8 @@ def process_episode(
     -------
     EpisodeResult
     """
-    from dexumi.dataset import EpisodeResult
-    from dexumi.robots.loader import build_embodiment
+    from handumi.dataset import EpisodeResult
+    from handumi.robots.loader import build_embodiment
 
     if len(poses) < 2:
         raise ValueError(
@@ -377,7 +377,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Ensure source metadata is available, then read episode count
     # ------------------------------------------------------------------
-    from dexumi.dataset import ensure_metadata
+    from handumi.dataset import ensure_metadata
 
     source_info = ensure_metadata(
         repo_id=args.repo_id,
@@ -419,7 +419,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Process each episode
     # ------------------------------------------------------------------
-    from dexumi.dataset import load_pico_body_poses
+    from handumi.dataset import load_pico_body_poses
 
     results = []
     for out_idx, src_idx in enumerate(episode_indices):
@@ -462,7 +462,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Determine joint names and robot_type from the embodiment spec
     # ------------------------------------------------------------------
-    from dexumi.robots.loader import build_embodiment
+    from handumi.robots.loader import build_embodiment
 
     # Build a minimal dummy bundle just to read the spec (no compute)
     dummy_pose = np.zeros((24, 7), dtype=np.float32)
@@ -472,7 +472,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Write output dataset
     # ------------------------------------------------------------------
-    from dexumi.dataset import write_dataset
+    from handumi.dataset import write_dataset
 
     write_dataset(
         output_root=output_root,

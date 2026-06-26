@@ -7,7 +7,7 @@ from typing import Callable
 
 import numpy as np
 
-from dexumi.retargeting.pico_upper_body import (
+from handumi.retargeting.pico_upper_body import (
     LEFT_SHOULDER,
     LEFT_WRIST,
     RIGHT_SHOULDER,
