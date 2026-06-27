@@ -4,10 +4,10 @@ Lee un LeRobotDataset local y ejercita __getitem__, iteración y propiedades.
 
 Uso
 ───
-    uv run python test/read_dataset.py
-    uv run python test/read_dataset.py --root datasets/handumi_demo --repo-id local/handumi_demo
-    uv run python test/read_dataset.py --idx 0 --idx 10 --idx -1   # frames específicos
-    uv run python test/read_dataset.py --episodes 0                 # sólo episodio 0
+    uv run python test/dataset/read_dataset.py
+    uv run python test/dataset/read_dataset.py --root datasets/handumi_demo --repo-id local/handumi_demo
+    uv run python test/dataset/read_dataset.py --idx 0 --idx 10 --idx -1   # frames específicos
+    uv run python test/dataset/read_dataset.py --episodes 0                 # sólo episodio 0
 """
 
 from __future__ import annotations

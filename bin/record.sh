@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# bin/record.sh  –  launcher for test/read_pico_cameras_motors.py
+# bin/record.sh  –  launcher for test/dataset/read_pico_cameras_motors.py
 #
 # Usage (all arguments are optional; defaults shown below):
 #
@@ -20,6 +20,9 @@
 #   --no-video             Save images as PNG instead of video
 #   --skip-pico            Record without PICO headset (cameras + motors only)
 #   --skip-adb-check       Don't wait for ADB device (useful if adb is absent)
+#   --laptop-camera        Add laptop camera with stopwatch + reach overlay
+#   --no-laptop-preview    Do not open the live saved-video preview window
+#   --manual-control       A=start/stop, B=repeat, Y=finish (PICO buttons)
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -82,7 +85,9 @@ while [[ $# -gt 0 ]]; do
         --cam-height)    CAM_HEIGHT="$2";    shift 2 ;;
         --cam-fps)       CAM_FPS="$2";       shift 2 ;;
         --vcodec)        VCODEC="$2";        shift 2 ;;
-        --push-to-hub|--no-video|--skip-pico|--skip-adb-check)
+        --push-to-hub|--no-video|--skip-pico|--skip-adb-check|--laptop-camera|\
+        --manual-control|--no-laptop-overlay|--no-laptop-preview|--save-unreachable|--pico-mandos|\
+        --pico-object|--pico-whole-body|--pico-adb|--pico-wifi)
             EXTRA_FLAGS+=("$1"); shift ;;
         *)
             # Forward unknown arguments directly to the Python script
@@ -111,7 +116,7 @@ echo ""
 
 # ── Run the recorder ──────────────────────────────────────────────────────────
 # shellcheck disable=SC2086
-exec python "${REPO_ROOT}/test/read_pico_cameras_motors.py" \
+exec python "${REPO_ROOT}/test/dataset/read_pico_cameras_motors.py" \
     --cam-ids ${CAM_IDS} \
     --cam-width  "${CAM_WIDTH}" \
     --cam-height "${CAM_HEIGHT}" \

@@ -21,7 +21,7 @@ directly to train an imitation-learning policy.
 
 Usage
 ─────
-  python test/read_pico_cameras_motors.py \
+  python test/dataset/read_pico_cameras_motors.py \
       --cam-ids 0 2 4 \
       --motor-port /dev/ttyUSB0 \
       --repo-id local/my_dataset \
@@ -37,6 +37,7 @@ Usage
 import argparse
 import hashlib
 import logging
+import shutil
 import signal
 import socket
 import subprocess
@@ -44,6 +45,7 @@ import sys
 import time
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -73,6 +75,10 @@ MOTOR_NAMES = [
 ]
 
 MAX_MOTION_TRACKERS = 2
+REACH_BUDGETS_M = {
+    "piper": 0.45,
+    "openarm": 0.55,
+}
 START_BUTTON_CHOICES = [
     "enter",
     "A",
@@ -293,6 +299,58 @@ def wait_for_start_button(
     return False
 
 
+def wait_for_button_release(
+    xrt,
+    *,
+    button: str,
+    threshold: float,
+    stop_event,
+) -> None:
+    while (
+        _read_start_button_value(xrt, button) >= threshold
+        and not stop_event.is_set()
+    ):
+        time.sleep(0.02)
+
+
+def wait_for_manual_start(
+    xrt,
+    *,
+    start_button: str,
+    finish_button: str,
+    threshold: float,
+    stop_event,
+) -> str:
+    log.info(f"  Press PICO '{start_button}' to start, '{finish_button}' to finish …")
+    prev_start = _read_start_button_value(xrt, start_button) >= threshold
+    prev_finish = _read_start_button_value(xrt, finish_button) >= threshold
+    while not stop_event.is_set():
+        start_pressed = _read_start_button_value(xrt, start_button) >= threshold
+        finish_pressed = _read_start_button_value(xrt, finish_button) >= threshold
+        start_rise = start_pressed and not prev_start
+        finish_rise = finish_pressed and not prev_finish
+        prev_start, prev_finish = start_pressed, finish_pressed
+
+        if finish_rise:
+            wait_for_button_release(
+                xrt,
+                button=finish_button,
+                threshold=threshold,
+                stop_event=stop_event,
+            )
+            return "finish"
+        if start_rise:
+            wait_for_button_release(
+                xrt,
+                button=start_button,
+                threshold=threshold,
+                stop_event=stop_event,
+            )
+            return "start"
+        time.sleep(0.02)
+    return "finish"
+
+
 def _serial_hash(serial: object) -> np.int64:
     digest = hashlib.blake2b(str(serial).encode("utf-8"), digest_size=8).digest()
     return np.int64(int.from_bytes(digest, "little", signed=False) & ((1 << 63) - 1))
@@ -445,6 +503,242 @@ def read_pico_frame(xrt, *, mode: str) -> dict:
     return frame
 
 
+# ── Reach + laptop overlay helpers ─────────────────────────────────────────────
+
+
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def _text(
+    img: np.ndarray,
+    text: str,
+    pos: tuple[int, int],
+    scale: float = 0.5,
+    color: tuple[int, int, int] = (235, 235, 235),
+    thick: int = 1,
+) -> None:
+    x, y = pos
+    cv2.putText(img, text, (x + 1, y + 1), FONT, scale, (0, 0, 0), thick + 2)
+    cv2.putText(img, text, (x, y), FONT, scale, color, thick)
+
+
+def _panel(img: np.ndarray, p1: tuple[int, int], p2: tuple[int, int], alpha: float = 0.55) -> None:
+    overlay = img.copy()
+    cv2.rectangle(overlay, p1, p2, (0, 0, 0), -1)
+    cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0, img)
+
+
+def _clock(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    rem = seconds - minutes * 60
+    return f"{minutes:02d}:{rem:04.1f}"
+
+
+def _reach_color(ratio: float) -> tuple[tuple[int, int, int], str]:
+    if ratio < 0.85:
+        return (80, 220, 120), "OK"
+    if ratio <= 1.0:
+        return (240, 210, 60), "NEAR"
+    return (235, 80, 80), "OUT"
+
+
+def empty_reach_features(*, feasible: bool = False) -> dict:
+    value = np.array([1 if feasible else 0], dtype=np.int64)
+    features = {
+        "observation.reach.any_episode_feasible": value.copy(),
+    }
+    for robot in REACH_BUDGETS_M:
+        features[f"observation.reach.{robot}_left_ratio"] = np.zeros((1,), dtype=np.float32)
+        features[f"observation.reach.{robot}_right_ratio"] = np.zeros((1,), dtype=np.float32)
+        features[f"observation.reach.{robot}_max_ratio"] = np.zeros((1,), dtype=np.float32)
+        features[f"observation.reach.{robot}_frame_feasible"] = value.copy()
+        features[f"observation.reach.{robot}_episode_feasible"] = value.copy()
+    return features
+
+
+def compute_reach_features(
+    pico_frame: dict,
+    anchor_l: np.ndarray,
+    anchor_r: np.ndarray,
+) -> tuple[dict, dict]:
+    left = np.asarray(pico_frame["observation.pico.left_controller_pose"], dtype=np.float32)[:3]
+    right = np.asarray(pico_frame["observation.pico.right_controller_pose"], dtype=np.float32)[:3]
+    disp_l = float(np.linalg.norm(left - anchor_l))
+    disp_r = float(np.linalg.norm(right - anchor_r))
+
+    features: dict = {}
+    metrics: dict = {}
+    for robot, budget in REACH_BUDGETS_M.items():
+        left_ratio = disp_l / budget
+        right_ratio = disp_r / budget
+        max_ratio = max(left_ratio, right_ratio)
+        feasible = max_ratio <= 1.0
+        metrics[robot] = {
+            "left_ratio": left_ratio,
+            "right_ratio": right_ratio,
+            "max_ratio": max_ratio,
+            "feasible": feasible,
+        }
+        features[f"observation.reach.{robot}_left_ratio"] = np.array([left_ratio], dtype=np.float32)
+        features[f"observation.reach.{robot}_right_ratio"] = np.array([right_ratio], dtype=np.float32)
+        features[f"observation.reach.{robot}_max_ratio"] = np.array([max_ratio], dtype=np.float32)
+        features[f"observation.reach.{robot}_frame_feasible"] = np.array(
+            [1 if feasible else 0], dtype=np.int64
+        )
+        # Updated with the final episode value just before save_episode().
+        features[f"observation.reach.{robot}_episode_feasible"] = np.zeros((1,), dtype=np.int64)
+
+    features["observation.reach.any_episode_feasible"] = np.zeros((1,), dtype=np.int64)
+    return features, metrics
+
+
+def draw_laptop_overlay(
+    frame: np.ndarray,
+    *,
+    elapsed_s: float,
+    n_frames: int,
+    tracker_count: int,
+    reach_metrics: dict,
+    manual_control: bool,
+) -> np.ndarray:
+    h, w = frame.shape[:2]
+    out = frame.copy()
+    _panel(out, (0, 0), (w, 48), 0.52)
+    _text(out, "REC", (12, 30), 0.62, (235, 80, 80), 2)
+    _text(out, _clock(elapsed_s), (w // 2 - 42, 31), 0.72, (70, 220, 245), 2)
+    _text(out, f"{n_frames} fr", (w - 150, 20), 0.42, (220, 220, 220), 1)
+    tr_color = (80, 220, 120) if tracker_count > 0 else (235, 130, 80)
+    _text(out, f"TR:{tracker_count}", (w - 150, 41), 0.38, tr_color, 1)
+
+    x0 = max(8, w - 260)
+    y0 = 58
+    _panel(out, (x0 - 8, y0 - 18), (w - 8, y0 + 82), 0.44)
+    _text(out, "REACH  Piper + OpenArm", (x0, y0 - 3), 0.40, (220, 220, 220), 1)
+
+    for row, robot in enumerate(("piper", "openarm")):
+        vals = reach_metrics.get(robot, {})
+        y = y0 + 18 + row * 38
+        label = "PIPER" if robot == "piper" else "OPEN"
+        _text(out, label, (x0, y + 11), 0.36, (230, 230, 230), 1)
+        for side, ratio, xoff in (
+            ("L", float(vals.get("left_ratio", 0.0)), 48),
+            ("R", float(vals.get("right_ratio", 0.0)), 146),
+        ):
+            color, tag = _reach_color(ratio)
+            bx = x0 + xoff
+            bw = 62
+            cv2.rectangle(out, (bx, y), (bx + bw, y + 10), (48, 48, 48), -1)
+            fill = int(bw * min(ratio, 1.25) / 1.25)
+            cv2.rectangle(out, (bx, y), (bx + fill, y + 10), color, -1)
+            mark = bx + int(bw / 1.25)
+            cv2.line(out, (mark, y - 2), (mark, y + 12), (235, 235, 235), 1)
+            _text(out, f"{side} {ratio * 100:3.0f}% {tag}", (bx, y + 25), 0.30, color, 1)
+
+    if manual_control:
+        _panel(out, (0, h - 28), (w, h), 0.42)
+        _text(out, "A stop/save   B repeat   Y finish", (12, h - 9), 0.42, (230, 230, 230), 1)
+    return out
+
+
+def update_episode_reach_flags(dataset, *, save_unreachable: bool) -> tuple[bool, dict[str, bool]]:
+    buf = dataset.writer.episode_buffer
+    size = int(buf["size"])
+    episode_feasible: dict[str, bool] = {}
+    for robot in REACH_BUDGETS_M:
+        frame_key = f"observation.reach.{robot}_frame_feasible"
+        ep_key = f"observation.reach.{robot}_episode_feasible"
+        frame_values = [int(np.asarray(v).reshape(-1)[0]) for v in buf[frame_key]]
+        feasible = bool(size > 0 and all(frame_values))
+        episode_feasible[robot] = feasible
+        buf[ep_key] = [np.array([1 if feasible else 0], dtype=np.int64) for _ in range(size)]
+
+    any_feasible = any(episode_feasible.values())
+    buf["observation.reach.any_episode_feasible"] = [
+        np.array([1 if any_feasible else 0], dtype=np.int64) for _ in range(size)
+    ]
+    return any_feasible or save_unreachable, episode_feasible
+
+
+class LaptopPreview:
+    """Low-latency ffplay window fed with the exact laptop frame saved to the dataset."""
+
+    def __init__(self, *, width: int, height: int, fps: int, title: str) -> None:
+        self.width = width
+        self.height = height
+        self.proc: subprocess.Popen | None = None
+        ffplay = shutil.which("ffplay")
+        if ffplay is None:
+            log.warning("ffplay not found; laptop preview window disabled.")
+            return
+
+        cmd = [
+            ffplay,
+            "-loglevel",
+            "error",
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-framedrop",
+            "-sync",
+            "ext",
+            "-window_title",
+            title,
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            "rgb24",
+            "-video_size",
+            f"{width}x{height}",
+            "-framerate",
+            str(fps),
+            "-",
+        ]
+        try:
+            self.proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                bufsize=0,
+            )
+            log.info("Laptop preview window opened.")
+        except OSError as exc:
+            log.warning(f"Could not open laptop preview window: {exc}")
+
+    def show(self, frame: np.ndarray) -> None:
+        if self.proc is None or self.proc.poll() is not None or self.proc.stdin is None:
+            return
+        if frame.shape[:2] != (self.height, self.width):
+            frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
+        if frame.dtype != np.uint8:
+            frame = np.clip(frame, 0, 255).astype(np.uint8)
+        try:
+            self.proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+        except (BrokenPipeError, OSError):
+            log.warning("Laptop preview window closed.")
+            self.close()
+
+    def close(self) -> None:
+        if self.proc is None:
+            return
+        proc = self.proc
+        self.proc = None
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
 # ── Dataset feature schema ─────────────────────────────────────────────────────
 
 
@@ -552,6 +846,25 @@ def build_features(
         "names": None,
     }
 
+    for robot in REACH_BUDGETS_M:
+        for name in ("left_ratio", "right_ratio", "max_ratio"):
+            features[f"observation.reach.{robot}_{name}"] = {
+                "dtype": "float32",
+                "shape": (1,),
+                "names": None,
+            }
+        for name in ("frame_feasible", "episode_feasible"):
+            features[f"observation.reach.{robot}_{name}"] = {
+                "dtype": "int64",
+                "shape": (1,),
+                "names": None,
+            }
+    features["observation.reach.any_episode_feasible"] = {
+        "dtype": "int64",
+        "shape": (1,),
+        "names": None,
+    }
+
     return features
 
 
@@ -574,7 +887,16 @@ def record_episode(
     include_pico: bool,
     cam_width: int,
     cam_height: int,
-) -> int:
+    manual_control: bool,
+    start_button: str,
+    start_threshold: float,
+    repeat_button: str,
+    finish_button: str,
+    laptop_cam_name: str | None,
+    laptop_overlay: bool,
+    laptop_preview: LaptopPreview | None,
+    save_unreachable: bool,
+) -> tuple[int, str, dict[str, bool]]:
     """
     Record one episode.  Returns the number of frames saved.
     stop_event is a threading.Event (or any object with .is_set()) that
@@ -583,20 +905,58 @@ def record_episode(
     control_interval = 1.0 / fps
     n_frames = 0
     start_t = time.perf_counter()
+    anchor_l = None
+    anchor_r = None
+    status = "recorded"
+    episode_feasible = {robot: False for robot in REACH_BUDGETS_M}
+    prev_start = (
+        _read_start_button_value(xrt, start_button) >= start_threshold
+        if manual_control and xrt is not None
+        else False
+    )
+    prev_repeat = (
+        _read_start_button_value(xrt, repeat_button) >= start_threshold
+        if manual_control and xrt is not None
+        else False
+    )
+    prev_finish = (
+        _read_start_button_value(xrt, finish_button) >= start_threshold
+        if manual_control and xrt is not None
+        else False
+    )
 
     while True:
         loop_start = time.perf_counter()
 
         elapsed = loop_start - start_t
-        if elapsed >= episode_time_s or stop_event.is_set():
+        if (not manual_control and elapsed >= episode_time_s) or stop_event.is_set():
             break
+
+        if manual_control and xrt is not None:
+            start_pressed = _read_start_button_value(xrt, start_button) >= start_threshold
+            repeat_pressed = _read_start_button_value(xrt, repeat_button) >= start_threshold
+            finish_pressed = _read_start_button_value(xrt, finish_button) >= start_threshold
+            start_rise = start_pressed and not prev_start
+            repeat_rise = repeat_pressed and not prev_repeat
+            finish_rise = finish_pressed and not prev_finish
+            prev_start, prev_repeat, prev_finish = start_pressed, repeat_pressed, finish_pressed
+            if repeat_rise:
+                status = "repeat"
+                dataset.clear_episode_buffer()
+                break
+            if finish_rise:
+                status = "finish"
+                break
+            if start_rise:
+                status = "recorded"
+                break
 
         # ── Camera frames ──────────────────────────────────────────────────
         cam_frames: dict = {}
         for cam, name in zip(cameras, cam_names):
             frame = (
                 np.zeros((cam_height, cam_width, 3), dtype=np.uint8)
-                if only_pico
+                if cam is None
                 else cam.async_read()
             )
             cam_frames[f"observation.images.{name}"] = frame  # HxWx3 uint8
@@ -614,12 +974,45 @@ def record_episode(
         # ── PICO data ──────────────────────────────────────────────────────
         if not include_pico:
             pico_frame = {}
+            reach_frame = empty_reach_features(feasible=False)
+            reach_metrics = {}
         else:
             pico_frame = (
                 read_pico_frame(xrt, mode=pico_mode)
                 if xrt is not None
                 else empty_pico_frame()
             )
+            if anchor_l is None or anchor_r is None:
+                anchor_l = np.asarray(
+                    pico_frame["observation.pico.left_controller_pose"], dtype=np.float32
+                )[:3].copy()
+                anchor_r = np.asarray(
+                    pico_frame["observation.pico.right_controller_pose"], dtype=np.float32
+                )[:3].copy()
+            reach_frame, reach_metrics = compute_reach_features(pico_frame, anchor_l, anchor_r)
+
+        if laptop_cam_name:
+            laptop_key = f"observation.images.{laptop_cam_name}"
+            if laptop_key in cam_frames:
+                if laptop_overlay:
+                    tracker_count = int(
+                        np.asarray(
+                            pico_frame.get(
+                                "observation.pico.motion_tracker_count",
+                                np.zeros((1,), dtype=np.int64),
+                            )
+                        ).reshape(-1)[0]
+                    )
+                    cam_frames[laptop_key] = draw_laptop_overlay(
+                        cam_frames[laptop_key],
+                        elapsed_s=elapsed,
+                        n_frames=n_frames + 1,
+                        tracker_count=tracker_count,
+                        reach_metrics=reach_metrics,
+                        manual_control=manual_control,
+                    )
+                if laptop_preview is not None:
+                    laptop_preview.show(cam_frames[laptop_key])
 
         # ── Assemble and save frame ────────────────────────────────────────
         data_frame = {
@@ -627,6 +1020,7 @@ def record_episode(
             "observation.state": state_vec,
             "action": state_vec.copy(),
             **pico_frame,
+            **reach_frame,
             "task": task,
         }
         dataset.add_frame(data_frame)
@@ -643,7 +1037,16 @@ def record_episode(
         else:
             time.sleep(sleep)
 
-    return n_frames
+    if n_frames > 0 and status != "repeat":
+        should_save, episode_feasible = update_episode_reach_flags(
+            dataset,
+            save_unreachable=save_unreachable,
+        )
+        if not should_save:
+            status = "unreachable"
+            dataset.clear_episode_buffer()
+
+    return n_frames, status, episode_feasible
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -724,6 +1127,26 @@ def parse_args() -> argparse.Namespace:
         help="Analog threshold for trigger/grip start buttons.",
     )
     p.add_argument(
+        "--manual-control",
+        action="store_true",
+        help=(
+            "Use PICO buttons for open-ended episodes: start button stops/saves, "
+            "repeat button discards, finish button stops all recording."
+        ),
+    )
+    p.add_argument(
+        "--repeat-button",
+        choices=START_BUTTON_CHOICES,
+        default="B",
+        help="Manual-control button used to discard the current episode.",
+    )
+    p.add_argument(
+        "--finish-button",
+        choices=START_BUTTON_CHOICES,
+        default="Y",
+        help="Manual-control button used to finish all recording.",
+    )
+    p.add_argument(
         "--no-video",
         action="store_true",
         help="Store camera frames as PNG images instead of video.",
@@ -749,7 +1172,46 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Record only PICO/XR data. Camera images, observation.state, and action "
-            "stay in the schema but are filled with zeros."
+            "stay in the schema but are filled with zeros, except laptop camera "
+            "when --laptop-camera is enabled."
+        ),
+    )
+    p.add_argument(
+        "--laptop-camera",
+        action="store_true",
+        help="Append/record a laptop camera stream with stopwatch + reach overlay.",
+    )
+    p.add_argument(
+        "--laptop-cam-id",
+        type=int,
+        default=0,
+        help="OpenCV index for the laptop camera when --laptop-camera is enabled.",
+    )
+    p.add_argument(
+        "--laptop-cam-name",
+        type=str,
+        default="laptop",
+        help=(
+            "Feature suffix for the laptop stream. If it matches an existing cam "
+            "name, that camera receives the overlay instead of appending a new one."
+        ),
+    )
+    p.add_argument(
+        "--no-laptop-overlay",
+        action="store_true",
+        help="Record the laptop camera without drawing stopwatch/reach overlay.",
+    )
+    p.add_argument(
+        "--no-laptop-preview",
+        action="store_true",
+        help="Do not open the live preview window for the saved laptop video stream.",
+    )
+    p.add_argument(
+        "--save-unreachable",
+        action="store_true",
+        help=(
+            "Save episodes even when both Piper and OpenArm exceed the reach budget. "
+            "By default those episodes are discarded."
         ),
     )
     pico_mode = p.add_mutually_exclusive_group()
@@ -804,6 +1266,11 @@ def main() -> None:
     args = parse_args()
     if args.skip_pico and args.only_pico:
         raise SystemExit("--only-pico requires PICO; do not combine it with --skip-pico.")
+    if args.manual_control and args.skip_pico:
+        raise SystemExit("--manual-control requires PICO buttons; do not combine it with --skip-pico.")
+    if args.manual_control and args.start_button == "enter":
+        args.start_button = "A"
+        log.info("--manual-control set: using PICO A as start/stop button.")
 
     if args.pico_object:
         pico_mode = "object"
@@ -863,16 +1330,34 @@ def main() -> None:
 
     # ── 2. Camera initialisation ───────────────────────────────────────────────
     log.info("─── Camera setup ───────────────────────────────────────")
-    cam_names = [f"cam_{i}" for i in range(len(args.cam_ids))]
+    camera_specs = [
+        {"id": cam_id, "name": f"cam_{i}", "is_laptop": False}
+        for i, cam_id in enumerate(args.cam_ids)
+    ]
+    laptop_cam_name = args.laptop_cam_name if args.laptop_camera else None
+    if args.laptop_camera:
+        for spec in camera_specs:
+            if spec["name"] == args.laptop_cam_name:
+                spec["is_laptop"] = True
+                spec["id"] = args.laptop_cam_id
+                break
+        else:
+            camera_specs.append(
+                {"id": args.laptop_cam_id, "name": args.laptop_cam_name, "is_laptop": True}
+            )
+    cam_names = [spec["name"] for spec in camera_specs]
     cameras: list = []
-    if args.only_pico:
-        cameras = [None for _ in cam_names]
-        log.info(f"Only-PICO mode: {len(cam_names)} camera stream(s) will be zero-filled.")
-    else:
-        from lerobot.cameras.opencv import OpenCVCamera
-        from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+    from lerobot.cameras.opencv import OpenCVCamera
+    from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
-        for cam_id, name in zip(args.cam_ids, cam_names):
+    for spec in camera_specs:
+        cam_id = spec["id"]
+        name = spec["name"]
+        should_zero = args.only_pico and not spec["is_laptop"]
+        if should_zero:
+            cameras.append(None)
+            log.info(f"Camera '{name}' will be zero-filled.")
+        else:
             cfg = OpenCVCameraConfig(
                 index_or_path=cam_id,
                 fps=args.cam_fps,
@@ -882,7 +1367,8 @@ def main() -> None:
             cam = OpenCVCamera(cfg)
             cam.connect()
             cameras.append(cam)
-            log.info(f"Camera '{name}' (index {cam_id}) connected.")
+            label = " laptop overlay" if spec["is_laptop"] else ""
+            log.info(f"Camera '{name}' (index {cam_id}) connected.{label}")
 
     # ── 3. SO100 leader initialisation ────────────────────────────────────────
     log.info("─── SO100 leader setup ─────────────────────────────────")
@@ -933,6 +1419,15 @@ def main() -> None:
     log.info(f"Dataset created at: {dataset.root}")
     log.info(f"Features: {list(features.keys())}")
 
+    laptop_preview = None
+    if args.laptop_camera and not args.no_laptop_preview:
+        laptop_preview = LaptopPreview(
+            width=args.cam_width,
+            height=args.cam_height,
+            fps=args.fps,
+            title="handumi saved laptop video",
+        )
+
     # ── 5. Keyboard / signal stop event ───────────────────────────────────────
     import threading
 
@@ -947,15 +1442,38 @@ def main() -> None:
 
     # ── 6. Recording loop ──────────────────────────────────────────────────────
     log.info("─── Recording ──────────────────────────────────────────")
-    log.info(f"Will record {args.num_episodes} episode(s) × {args.episode_time_s}s @ {args.fps} Hz.")
-    log.info("Press Ctrl+C to stop early (current episode will still be saved).")
+    if args.manual_control:
+        limit = "unlimited" if args.num_episodes <= 0 else str(args.num_episodes)
+        log.info(
+            f"Manual recording: {limit} episode(s) @ {args.fps} Hz. "
+            f"{args.start_button}=stop/save, {args.repeat_button}=repeat, "
+            f"{args.finish_button}=finish."
+        )
+    else:
+        log.info(
+            f"Will record {args.num_episodes} episode(s) × {args.episode_time_s}s @ {args.fps} Hz."
+        )
+        log.info("Press Ctrl+C to stop early (current episode will still be saved).")
 
     recorded = 0
     try:
-        while recorded < args.num_episodes and not stop_event.is_set():
+        while (args.num_episodes <= 0 or recorded < args.num_episodes) and not stop_event.is_set():
             ep_num = dataset.num_episodes + 1
-            log.info(f"\n── Episode {ep_num}/{args.num_episodes} ─────────────────────────────────")
-            if args.start_button == "enter":
+            ep_total = "∞" if args.num_episodes <= 0 else str(args.num_episodes)
+            log.info(f"\n── Episode {ep_num}/{ep_total} ─────────────────────────────────")
+            if args.manual_control:
+                if xrt is None:
+                    raise RuntimeError("--manual-control requires PICO/XRoboToolkit.")
+                action = wait_for_manual_start(
+                    xrt,
+                    start_button=args.start_button,
+                    finish_button=args.finish_button,
+                    threshold=args.start_threshold,
+                    stop_event=stop_event,
+                )
+                if action == "finish":
+                    break
+            elif args.start_button == "enter":
                 input(f"  Press ENTER to start recording episode {ep_num} …")
             else:
                 if xrt is None:
@@ -970,9 +1488,12 @@ def main() -> None:
                 ):
                     break
 
-            log.info(f"  Recording for {args.episode_time_s}s …  (Ctrl+C to end early)")
+            if args.manual_control:
+                log.info("  Recording …")
+            else:
+                log.info(f"  Recording for {args.episode_time_s}s …  (Ctrl+C to end early)")
             stop_event.clear()  # allow Ctrl+C to end only this episode
-            n_frames = record_episode(
+            n_frames, status, episode_feasible = record_episode(
                 dataset=dataset,
                 cameras=cameras,
                 cam_names=cam_names,
@@ -987,20 +1508,43 @@ def main() -> None:
                 include_pico=not args.skip_pico,
                 cam_width=args.cam_width,
                 cam_height=args.cam_height,
+                manual_control=args.manual_control,
+                start_button=args.start_button,
+                start_threshold=args.start_threshold,
+                repeat_button=args.repeat_button,
+                finish_button=args.finish_button,
+                laptop_cam_name=laptop_cam_name,
+                laptop_overlay=args.laptop_camera and not args.no_laptop_overlay,
+                laptop_preview=laptop_preview,
+                save_unreachable=args.save_unreachable,
             )
 
-            if n_frames == 0:
-                log.warning("  No frames recorded – discarding episode.")
+            if n_frames == 0 or status in {"repeat", "unreachable"}:
+                if status == "repeat":
+                    log.warning("  Episode discarded by repeat button.")
+                elif status == "unreachable":
+                    log.warning("  Episode discarded: out of reach for both Piper and OpenArm.")
+                else:
+                    log.warning("  No frames recorded – discarding episode.")
                 dataset.clear_episode_buffer()
+                if status == "finish":
+                    break
                 continue
 
             log.info(f"  Saving {n_frames} frames …")
             dataset.save_episode()
             recorded += 1
-            log.info(f"  Episode {ep_num} saved. ({recorded}/{args.num_episodes} done)")
+            log.info(
+                f"  Episode {ep_num} saved. ({recorded}/{ep_total} done) "
+                f"Piper={int(episode_feasible['piper'])} "
+                f"OpenArm={int(episode_feasible['openarm'])}"
+            )
+
+            if status == "finish":
+                break
 
             # After Ctrl+C ends the episode, ask whether to continue
-            if stop_event.is_set() and recorded < args.num_episodes:
+            if stop_event.is_set() and (args.num_episodes <= 0 or recorded < args.num_episodes):
                 ans = input("\nContinue recording more episodes? [y/N] ").strip().lower()
                 if ans == "y":
                     stop_event.clear()
@@ -1009,6 +1553,9 @@ def main() -> None:
 
     finally:
         log.info("─── Finalising ─────────────────────────────────────────")
+        if laptop_preview is not None:
+            laptop_preview.close()
+
         dataset.finalize()
 
         for cam in cameras:

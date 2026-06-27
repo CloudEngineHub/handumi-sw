@@ -1,5 +1,7 @@
 # Robot Embodiment Architecture
 
+Ultima modificacion: 2026-06-26 16:59:21 -05 -0500
+
 handumi supports multiple bimanual robot embodiments (currently **Piper** and **Axol**) through a layered design: **generic algorithms live once**, and each robot contributes **small configuration modules** that plug into those algorithms.
 
 The entry point for applications and test scripts is the embodiment registry:
@@ -90,7 +92,7 @@ flowchart LR
     REG -->|"make_sim"| VIS
 ```
 
-Typical frame loop (see `test/replay_pico_ik.py`):
+Typical frame loop (see `scripts/replay_pico_ik.py`):
 
 1. `load_embodiment(name)` resolves all classes, paths, and defaults.
 2. `runtime.solver_cls(config=...)` builds the IK solver from the embodiment’s `RobotKinematicsSpec`.
@@ -254,7 +256,7 @@ Central wiring point. `load_embodiment(name)` returns an `EmbodimentRuntime` dat
 | `move_to_front_workspace`, `settle_first_frame` | Re-exported from `pico_to_robot.py` |
 | `default_port`, `default_axis_map`, `default_workspace` | Script defaults |
 | `wrist_forward`, `wrist_height`, `wrist_lateral` | Front workspace offsets |
-| `default_compare_axis_maps` | Axis-map candidates for `test/compare_axis.py` |
+| `default_compare_axis_maps` | Axis-map candidates for `scripts/compare_axis.py` |
 
 `EmbodimentRuntime.make_sim()` constructs a configured `ViserSim`.
 
@@ -296,5 +298,5 @@ Both embodiments use an `(8,)` float32 vector per arm, but semantics differ:
 ## Related docs and scripts
 
 - [Adding a new embodiment](add-new-embodiment.md)
-- `test/replay_pico_ik.py` — replay PICO dataset through IK + optional Viser
-- `test/compare_axis.py` — compare axis-map candidates in a Viser grid
+- `scripts/replay_pico_ik.py` — replay PICO dataset through IK + optional Viser
+- `scripts/compare_axis.py` — compare axis-map candidates in a Viser grid

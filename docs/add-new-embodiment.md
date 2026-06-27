@@ -1,5 +1,7 @@
 # Adding a New Embodiment
 
+Ultima modificacion: 2026-06-26 16:59:21 -05 -0500
+
 This guide describes what you need to add a new bimanual robot (e.g. `"franka"`) to handumi so it works with PICO retargeting, IK, and Viser visualization.
 
 See [architecture.md](architecture.md) for how the pieces fit together.
@@ -184,7 +186,7 @@ Create `src/handumi/robots/myrobot/retargeting.py`.
 Edit `src/handumi/robots/registry.py`:
 
 1. Add `"myrobot"` to `EMBODIMENT_NAMES`.
-2. Add axis-map candidates to `DEFAULT_COMPARE_AXIS_MAPS` (start with 8 sign permutations of `"x,z,y"` or copy from a similar robot and tune with `test/compare_axis.py`).
+2. Add axis-map candidates to `DEFAULT_COMPARE_AXIS_MAPS` (start with 8 sign permutations of `"x,z,y"` or copy from a similar robot and tune with `scripts/compare_axis.py`).
 3. Add a branch in `load_embodiment()`:
 
 ```python
@@ -259,8 +261,8 @@ print("arm q length:", len(q_arm))
 ### PICO replay (requires a dataset)
 
 ```bash
-uv run python test/replay_pico_ik.py --embodiment myrobot --episode 0 --visualize
-uv run python test/compare_axis.py --embodiment myrobot --episode 0
+uv run python scripts/replay_pico_ik.py --embodiment myrobot --episode 0 --visualize
+uv run python scripts/compare_axis.py --embodiment myrobot --episode 0
 ```
 
 Update `--embodiment` choices in test argument parsers if they use a hard-coded `choices=(...)` tuple.
@@ -280,7 +282,7 @@ After the embodiment loads, you will likely need to tune:
 | `KinematicsConfig` weights | passed at runtime | IK tracking vs smoothness |
 | `_build_robot_collision` | `solver.py` | Self-collision behavior |
 
-Use `test/compare_axis.py` to find a good axis map before running full replay.
+Use `scripts/compare_axis.py` to find a good axis map before running full replay.
 
 ---
 

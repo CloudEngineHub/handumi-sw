@@ -2,8 +2,8 @@
 """Compare multiple PICO axis mappings for a selected robot embodiment.
 
 Examples:
-    python test/compare_axis.py --embodiment piper --episode 0
-    python test/compare_axis.py --embodiment axol --episode 0 --workspace front
+    python scripts/compare_axis.py --embodiment piper --episode 0
+    python scripts/compare_axis.py --embodiment axol --episode 0 --workspace front
 """
 
 from __future__ import annotations

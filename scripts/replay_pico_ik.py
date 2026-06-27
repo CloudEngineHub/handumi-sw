@@ -2,9 +2,9 @@
 """Replay one PICO dataset episode on a selected robot embodiment.
 
 Examples:
-    python test/replay_pico_ik.py --embodiment piper --episode 0
-    python test/replay_pico_ik.py --embodiment axol --episode 0 --workspace front
-    python test/replay_pico_ik.py --embodiment piper --episode 0 --visualize
+    python scripts/replay_pico_ik.py --embodiment piper --episode 0
+    python scripts/replay_pico_ik.py --embodiment axol --episode 0 --workspace front
+    python scripts/replay_pico_ik.py --embodiment piper --episode 0 --visualize
 """
 
 from __future__ import annotations
