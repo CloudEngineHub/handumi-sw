@@ -1,4 +1,4 @@
-# handumi
+# HandUMI Software
 
 Software stack for recording HandUMI bimanual raw demonstrations as
 LeRobot-compatible datasets.
@@ -15,17 +15,30 @@ left/right wrist cameras
 Robot-specific datasets for Piper, Axol, and other embodiments are derived
 later through offline retargeting / IK.
 
+## Requirements
+
+- Linux workstation with USB access.
+- `uv` installed.
+- Two USB wrist cameras.
+- Two Feetech servos used as gripper encoders.
+- Optional: PICO / Meta Quest tracking for later capture stages.
+
 ## Installation
 
+From a fresh clone:
+
 ```bash
-cd /home/autobrik/NONHUMAN/handumi-sw
+git clone <repo-url> handumi-sw
+cd handumi-sw
 uv sync
 source .venv/bin/activate
 uv pip install -e .
 ```
 
-This installs `lerobot[feetech]`, Rerun visualization, OpenCV camera support,
-and the `handumi-*` CLI commands.
+If you are already inside the repository, start at `uv sync`.
+
+This installs LeRobot Feetech support, Rerun visualization, OpenCV camera
+support, and the `handumi-*` CLI commands.
 
 ## Checkpoint 1: Cameras + Feetech Width
 
@@ -42,7 +55,7 @@ LeRobotDataset output
 PICO / Meta Quest tracking is optional and disabled by default for this
 checkpoint.
 
-### 1. Find Feetech Ports And Servo IDs
+### 1. Feetech Ports And IDs
 
 Connect the Feetech USB adapters and scan all serial ports:
 
@@ -118,7 +131,7 @@ max_width_mm
 Per frame, HandUMI records raw ticks, normalized width, width in mm, and state
 width in meters.
 
-### 3. Find Cameras
+### 3. Cameras
 
 Connect both USB wrist cameras and run:
 
@@ -133,7 +146,7 @@ first --cam-ids value  -> observation.images.left_wrist
 second --cam-ids value -> observation.images.right_wrist
 ```
 
-### 4. Record Dataset
+### 4. Live Monitor
 
 Before recording, run the live Rerun monitor:
 
@@ -156,7 +169,7 @@ left/right gripper opening in mm
 Use it to verify that camera assignment, servo IDs, ports, and calibration are
 correct before recording.
 
-Then record:
+### 5. Record Dataset
 
 ```bash
 handumi-record \
@@ -200,7 +213,7 @@ observation.feetech.right_normalized
 `observation.state[14]` and `observation.state[15]` are the calibrated left/right
 gripper widths in meters.
 
-### 5. Inspect With LeRobot
+### 6. Inspect With LeRobot
 
 ```bash
 lerobot-dataset-viz \
@@ -211,7 +224,7 @@ lerobot-dataset-viz \
 
 ## Record With Tracking
 
-When the hardware checkpoint above is working, enable PICO streams with:
+After the hardware checkpoint works, enable PICO streams with:
 
 ```bash
 handumi-record \
@@ -225,7 +238,7 @@ handumi-record \
 
 ## Retarget / Replay
 
-Convert a HandUMI/PICO source dataset to a robot-specific dataset:
+Convert a HandUMI source dataset to a robot-specific dataset:
 
 ```bash
 bash bin/process_handumi_to_lerobot.sh \
