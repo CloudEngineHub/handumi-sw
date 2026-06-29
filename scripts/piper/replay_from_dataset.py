@@ -10,12 +10,16 @@ physical robot units:
 The Piper SDK expects ``JointCtrl`` in 0.001 degrees and ``GripperCtrl`` in
 0.001 mm, so this script performs that conversion immediately before sending
 commands over CAN.
+
+python scripts/piper/replay_from_dataset.py \
+  --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2-piper \
+  --episode 5 \
+  --yes
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
@@ -24,13 +28,17 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from handumi.dataset import (  # noqa: E402
+    dataset_root_from_repo_id,
+    load_info,
+    open_dataset,
+)
 from handumi.robots.piper.shared import (  # noqa: E402
     GRIPPER_STROKE_M,
     JOINT_LIMITS_RAD,
@@ -47,6 +55,8 @@ except ImportError:  # pragma: no cover - depends on optional robot SDK
 
 TrajectorySource = Literal["state-action", "state", "action"]
 
+DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/handumi-dataset-v2-piper"
+
 
 @dataclass(frozen=True)
 class DatasetInfo:
@@ -54,6 +64,7 @@ class DatasetInfo:
     chunks_size: int
     robot_type: str
     joint_names: list[str]
+    total_episodes: int
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,11 +73,26 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--dataset-root",
-        default=str(REPO_ROOT / "outputs/datasets/handumi-dataset-v2-piper"),
-        help="Root of the Piper dataset produced by process_umi_to_lerobot.py.",
+        "--repo-id",
+        default=DEFAULT_REPO_ID,
+        help="Hugging Face repo id of the Piper LeRobot dataset.",
     )
-    parser.add_argument("--episode", type=int, default=0)
+    parser.add_argument(
+        "--dataset-root",
+        default=None,
+        help="Local dataset root. Defaults to outputs/datasets/<repo-id suffix>.",
+    )
+    parser.add_argument(
+        "--revision",
+        default="main",
+        help="Dataset revision on the Hugging Face Hub.",
+    )
+    parser.add_argument(
+        "--episode",
+        type=int,
+        default=0,
+        help="Episode index to replay from the dataset.",
+    )
     parser.add_argument(
         "--trajectory-source",
         choices=("state-action", "state", "action"),
@@ -164,17 +190,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _chunk_and_file(index: int, chunks_size: int) -> tuple[int, int]:
-    return index // chunks_size, index % chunks_size
-
-
 def load_dataset_info(root: Path) -> DatasetInfo:
     info_path = root / "meta" / "info.json"
     if not info_path.is_file():
         raise FileNotFoundError(f"Missing dataset metadata: {info_path}")
 
-    with info_path.open() as fh:
-        raw = json.load(fh)
+    raw = load_info(root)
 
     feature = raw.get("features", {}).get("observation.state")
     if not feature:
@@ -186,6 +207,7 @@ def load_dataset_info(root: Path) -> DatasetInfo:
         chunks_size=int(raw.get("chunks_size", 1000)),
         robot_type=str(raw.get("robot_type", "")),
         joint_names=names,
+        total_episodes=int(raw.get("total_episodes", 0)),
     )
 
 
@@ -204,36 +226,48 @@ def validate_dataset_info(info: DatasetInfo) -> None:
 
 def load_episode_vectors(
     root: Path,
+    *,
+    repo_id: str,
     episode: int,
-    info: DatasetInfo,
     source: TrajectorySource,
-) -> np.ndarray:
-    chunk_idx, file_idx = _chunk_and_file(episode, info.chunks_size)
-    parquet_path = (
-        root / "data" / f"chunk-{chunk_idx:03d}" / f"file-{file_idx:03d}.parquet"
+    revision: str,
+) -> tuple[np.ndarray, int]:
+    dataset = open_dataset(
+        repo_id=repo_id,
+        root=root,
+        episode=episode,
+        revision=revision,
     )
-    if not parquet_path.is_file():
-        raise FileNotFoundError(f"Missing episode parquet: {parquet_path}")
 
-    df = pd.read_parquet(parquet_path)
-    if "observation.state" not in df or "action" not in df:
-        raise ValueError(f"{parquet_path} must contain observation.state and action.")
+    states: list[np.ndarray] = []
+    actions: list[np.ndarray] = []
+    for idx in range(len(dataset)):
+        item = dataset.get_raw_item(idx)
+        if "observation.state" not in item or "action" not in item:
+            raise ValueError(
+                "Dataset episode must contain observation.state and action columns."
+            )
+        states.append(np.asarray(item["observation.state"], dtype=np.float32))
+        actions.append(np.asarray(item["action"], dtype=np.float32))
 
-    states = np.stack(df["observation.state"].to_numpy()).astype(np.float32)
-    actions = np.stack(df["action"].to_numpy()).astype(np.float32)
+    if not states:
+        raise ValueError(f"No frames found for episode {episode}.")
+
+    states_arr = np.stack(states, axis=0)
+    actions_arr = np.stack(actions, axis=0)
 
     if source == "state-action":
-        trajectory = np.vstack([states[:1], actions])
+        trajectory = np.vstack([states_arr[:1], actions_arr])
     elif source == "state":
-        trajectory = states
+        trajectory = states_arr
     elif source == "action":
-        trajectory = actions
+        trajectory = actions_arr
     else:
         raise ValueError(f"Unsupported trajectory source: {source!r}")
 
     if trajectory.ndim != 2 or trajectory.shape[1] != 14:
         raise ValueError(f"Expected trajectory shape (T, 14), got {trajectory.shape}.")
-    return trajectory
+    return trajectory, int(dataset.fps)
 
 
 def crop_trajectory(trajectory: np.ndarray, start_index: int, frames: int | None) -> np.ndarray:
@@ -518,23 +552,33 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    dataset_root = Path(args.dataset_root).expanduser().resolve()
+    dataset_root = (
+        Path(args.dataset_root).expanduser().resolve()
+        if args.dataset_root is not None
+        else dataset_root_from_repo_id(args.repo_id).resolve()
+    )
     info = load_dataset_info(dataset_root)
     validate_dataset_info(info)
+    if args.episode < 0 or args.episode >= info.total_episodes:
+        parser.error(
+            f"--episode {args.episode} is outside dataset range "
+            f"[0, {info.total_episodes})."
+        )
 
-    base_fps = float(args.fps if args.fps is not None else info.fps)
+    trajectory, dataset_fps = load_episode_vectors(
+        dataset_root,
+        repo_id=args.repo_id,
+        episode=args.episode,
+        source=args.trajectory_source,
+        revision=args.revision,
+    )
+
+    base_fps = float(args.fps if args.fps is not None else dataset_fps)
     if base_fps <= 0:
         parser.error("FPS must be positive.")
     if args.rate_scale <= 0:
         parser.error("--rate-scale must be positive.")
     replay_fps = base_fps * float(args.rate_scale)
-
-    trajectory = load_episode_vectors(
-        dataset_root,
-        args.episode,
-        info,
-        args.trajectory_source,
-    )
     trajectory = crop_trajectory(trajectory, args.start_index, args.frames)
     trajectory = validate_and_prepare_trajectory(
         trajectory,
@@ -543,7 +587,7 @@ def main() -> None:
         allow_large_steps=args.allow_large_steps,
     )
 
-    print(f"Dataset       : {dataset_root}")
+    print(f"Dataset       : {dataset_root} ({args.repo_id})")
     print(f"Episode       : {args.episode}")
     print(f"Trajectory    : {trajectory.shape[0]} frames x {trajectory.shape[1]} values")
     print(f"Units         : joints=radians, gripper=meters")

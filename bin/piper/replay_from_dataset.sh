@@ -51,6 +51,7 @@ export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 export LEFT_ROBOT_ARM_PORT="${LEFT_ROBOT_ARM_PORT:-can0}"
 export RIGHT_ROBOT_ARM_PORT="${RIGHT_ROBOT_ARM_PORT:-can1}"
 
+REPO_ID="${REPO_ID:-NONHUMAN-RESEARCH/handumi-dataset-v2-piper}"
 DATASET_ROOT="${DATASET_ROOT:-${REPO_ROOT}/outputs/datasets/handumi-dataset-v2-piper}"
 EPISODE="${EPISODE:-0}"
 ARMS="${ARMS:-both}"
@@ -60,6 +61,7 @@ echo ""
 echo "----------------------------------------------------------"
 echo " handumi - Piper dataset trajectory replay"
 echo "----------------------------------------------------------"
+printf " Repo id      : %s\n" "${REPO_ID}"
 printf " Dataset root : %s\n" "${DATASET_ROOT}"
 printf " Episode      : %s\n" "${EPISODE}"
 printf " Arms         : %s\n" "${ARMS}"
@@ -70,6 +72,7 @@ echo "----------------------------------------------------------"
 echo ""
 
 exec python "${REPO_ROOT}/scripts/piper/replay_from_dataset.py" \
+    --repo-id "${REPO_ID}" \
     --dataset-root "${DATASET_ROOT}" \
     --episode "${EPISODE}" \
     --arms "${ARMS}" \
