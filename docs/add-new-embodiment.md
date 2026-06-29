@@ -1,8 +1,10 @@
 # Adding a New Embodiment
 
-Ultima modificacion: 2026-06-26 16:59:21 -05 -0500
+Ultima modificacion: 2026-06-29
 
-This guide describes what you need to add a new bimanual robot (e.g. `"franka"`) to handumi so it works with PICO retargeting, IK, and Viser visualization.
+This guide describes what you need to add a new bimanual robot (e.g. `"franka"`)
+to handumi so it works with offline retargeting, IK, and Viser visualization.
+Robot embodiments are downstream of HandUMI raw recording.
 
 See [architecture.md](architecture.md) for how the pieces fit together.
 
@@ -33,6 +35,7 @@ Then register the embodiment in `src/handumi/robots/registry.py`.
 - [ ] `retargeting.py` with rest poses and `RetargetingSpec`
 - [ ] Entry in `registry.py` (`EMBODIMENT_NAMES`, `load_embodiment`, axis-map defaults)
 - [ ] Smoke test: import, IK solve, optional Viser replay
+- [ ] Confirm raw recording code does not import the new robot package
 
 ---
 
@@ -117,7 +120,7 @@ Create `src/handumi/robots/myrobot/solver.py`.
    | `left_shoulder_link`, `right_shoulder_link` | Base of each arm chain |
    | `left_arm_joint_names`, `right_arm_joint_names` | Joints solved by IK (tuple of URDF joint names) |
    | `left_control_joint_names`, `right_control_joint_names` | Optional; all joints in output `q` if different from IK joints (see Piper fingers) |
-   | `left_elbow_link`, `right_elbow_link` | Optional; for diagnostics/visualization |
+   | `left_elbow_link`, `right_elbow_link` | Optional; for visualization |
    | `collision_builder` | Your `_build_robot_collision` function |
 
 3. **`KinematicsSolver = make_kinematics_solver(MYROBOT_KINEMATICS_SPEC)`**
@@ -283,6 +286,8 @@ After the embodiment loads, you will likely need to tune:
 | `_build_robot_collision` | `solver.py` | Self-collision behavior |
 
 Use `scripts/compare_axis.py` to find a good axis map before running full replay.
+Do not add robot-specific logic to `capture/`, `cameras/`, `tracking/`, or
+`feetech/`.
 
 ---
 

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# bin/record.sh  –  launcher for test/dataset/read_pico_cameras_motors.py
+# bin/record.sh  –  launcher for scripts/record_handumi.py
 #
 # Usage (all arguments are optional; defaults shown below):
 #
 #   bash bin/record.sh \
-#       --cam-ids 2 4 6 \
-#       --motor-port /dev/ttyACM0 \
+#       --cam-ids 0 2 \
 #       --repo-id local/handumi_dataset \
 #       --output-dir datasets/my_dataset \
 #       --task "Pick and place cube" \
@@ -18,7 +17,8 @@
 # Extra flags:
 #   --push-to-hub          Upload to HuggingFace Hub after recording
 #   --no-video             Save images as PNG instead of video
-#   --skip-pico            Record without PICO headset (cameras + motors only)
+#   --use-pico             Enable PICO tracking streams
+#   --skip-feetech         Record without Feetech gripper encoders
 #   --skip-adb-check       Don't wait for ADB device (useful if adb is absent)
 #   --laptop-camera        Add laptop camera with stopwatch + reach overlay
 #   --no-laptop-preview    Do not open the live saved-video preview window
@@ -44,9 +44,9 @@ fi
 export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 
 # ── Default arguments (override via CLI) ──────────────────────────────────────
-CAM_IDS="${CAM_IDS:-2 4 6}"          # space-separated camera indices
-MOTOR_PORT="${MOTOR_PORT:-/dev/ttyACM0}"
-MOTOR_ID="${MOTOR_ID:-leader}"
+CAM_IDS="${CAM_IDS:-0 2}"            # left_wrist right_wrist camera indices
+FEETECH_CONFIG="${FEETECH_CONFIG:-${REPO_ROOT}/configs/feetech.yaml}"
+FEETECH_PORT="${FEETECH_PORT:-}"
 REPO_ID="${REPO_ID:-local/handumi_dataset}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/datasets/handumi_dataset}"
 TASK="${TASK:-Teleoperation recording}"
@@ -73,8 +73,8 @@ while [[ $# -gt 0 ]]; do
             done
             CAM_IDS="${CAM_IDS# }"  # trim leading space
             ;;
-        --motor-port)    MOTOR_PORT="$2";    shift 2 ;;
-        --motor-id)      MOTOR_ID="$2";      shift 2 ;;
+        --feetech-config) FEETECH_CONFIG="$2"; shift 2 ;;
+        --feetech-port)   FEETECH_PORT="$2";   shift 2 ;;
         --repo-id)       REPO_ID="$2";       shift 2 ;;
         --output-dir)    OUTPUT_DIR="$2";    shift 2 ;;
         --task)          TASK="$2";          shift 2 ;;
@@ -85,7 +85,7 @@ while [[ $# -gt 0 ]]; do
         --cam-height)    CAM_HEIGHT="$2";    shift 2 ;;
         --cam-fps)       CAM_FPS="$2";       shift 2 ;;
         --vcodec)        VCODEC="$2";        shift 2 ;;
-        --push-to-hub|--no-video|--skip-pico|--skip-adb-check|--laptop-camera|\
+        --push-to-hub|--no-video|--skip-pico|--use-pico|--skip-feetech|--skip-adb-check|--laptop-camera|\
         --manual-control|--no-laptop-overlay|--no-laptop-preview|--save-unreachable|--pico-mandos|\
         --pico-object|--pico-whole-body|--pico-adb|--pico-wifi)
             EXTRA_FLAGS+=("$1"); shift ;;
@@ -101,8 +101,8 @@ echo "╔═══════════════════════�
 echo "║          handumi  –  multi-modal recording                ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 printf "║  Cameras       : %-40s║\n" "${CAM_IDS}"
-printf "║  Motor port    : %-40s║\n" "${MOTOR_PORT}"
-printf "║  Motor id      : %-40s║\n" "${MOTOR_ID}"
+printf "║  Feetech config: %-40s║\n" "${FEETECH_CONFIG}"
+printf "║  Feetech port  : %-40s║\n" "${FEETECH_PORT:-from config}"
 printf "║  Repo id       : %-40s║\n" "${REPO_ID}"
 printf "║  Output dir    : %-40s║\n" "${OUTPUT_DIR}"
 printf "║  Task          : %-40s║\n" "${TASK}"
@@ -115,14 +115,18 @@ echo "╚═══════════════════════�
 echo ""
 
 # ── Run the recorder ──────────────────────────────────────────────────────────
+FEETECH_ARGS=(--feetech-config "${FEETECH_CONFIG}")
+if [[ -n "${FEETECH_PORT}" ]]; then
+    FEETECH_ARGS+=(--feetech-port "${FEETECH_PORT}")
+fi
+
 # shellcheck disable=SC2086
-exec python "${REPO_ROOT}/test/dataset/read_pico_cameras_motors.py" \
+exec python "${REPO_ROOT}/scripts/record_handumi.py" \
     --cam-ids ${CAM_IDS} \
     --cam-width  "${CAM_WIDTH}" \
     --cam-height "${CAM_HEIGHT}" \
     --cam-fps    "${CAM_FPS}" \
-    --motor-port "${MOTOR_PORT}" \
-    --motor-id   "${MOTOR_ID}" \
+    "${FEETECH_ARGS[@]}" \
     --repo-id    "${REPO_ID}" \
     --output-dir "${OUTPUT_DIR}" \
     --task       "${TASK}" \

@@ -9,9 +9,20 @@ Typical usage::
     sim = runtime.make_sim()
 """
 
-from handumi.robots.kinematics import KinematicsConfig
+from typing import Any
 
-from .solver import KinematicsSolver
+
+def __getattr__(name: str) -> Any:
+    """Lazily expose IK classes so shared helpers do not require JAX imports."""
+    if name == "KinematicsConfig":
+        from handumi.robots.kinematics import KinematicsConfig
+
+        return KinematicsConfig
+    if name == "KinematicsSolver":
+        from .solver import KinematicsSolver
+
+        return KinematicsSolver
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def Sim(**kwargs):

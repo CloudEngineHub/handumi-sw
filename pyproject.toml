@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "handumi robotics project"
 requires-python = ">=3.12"
 dependencies = [
-    "lerobot[feetech,dataset]==0.5.1",
+    "lerobot[feetech]==0.5.1",
+    "rerun-sdk>=0.24.0,<0.27.0",
     # Build tools for xrobotoolkit-sdk (CMake-based). Listed here so uv sync
     # tracks them in the lockfile and they are available when building the SDK.
     "cmake>=3.29",
@@ -21,7 +22,7 @@ dependencies = [
     "matplotlib>=3.11.0",
     "pyvista>=0.43.0",
     "scipy>=1.17.1",
-    # MuJoCo URDF viewer (test/test_ik_axol.py)
+    # MuJoCo URDF viewer / local robot validation.
     "mujoco>=3.9.0",
 ]
 
@@ -29,6 +30,14 @@ dependencies = [
 piper = [
     "piper_sdk @ git+https://github.com/agilexrobotics/piper_sdk.git",
 ]
+
+[project.scripts]
+handumi-find-servos = "handumi.cli.find_servos:main"
+handumi-find-cameras = "handumi.cli.find_cameras:main"
+handumi-setup-servos = "handumi.cli.setup_servos:main"
+handumi-calibrate-grippers = "handumi.cli.calibrate_grippers:main"
+handumi-record = "handumi.capture.record_handumi:main"
+handumi-teleoperate = "handumi.capture.teleoperate_handumi:main"
 
 [build-system]
 requires = ["hatchling"]

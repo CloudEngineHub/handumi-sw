@@ -147,8 +147,8 @@ def _scalar_stats(values: np.ndarray) -> dict[str, Any]:
     }
 
 
-def _video_placeholder_stats(shape: list[int]) -> dict[str, Any]:
-    """Placeholder statistics for a video feature (pixel values in [0,1])."""
+def _video_default_stats(shape: list[int]) -> dict[str, Any]:
+    """Default statistics for a video feature with pixel values in [0, 1]."""
     c = shape[2] if len(shape) == 3 else 1
     return {
         "min": [[[0.0]] * c],
@@ -243,7 +243,7 @@ def _build_stats_json(
         stats[key] = _scalar_stats(vals)
 
     for video_key, feat in video_features.items():
-        stats[video_key] = _video_placeholder_stats(feat["shape"])
+        stats[video_key] = _video_default_stats(feat["shape"])
 
     return stats
 

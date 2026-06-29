@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a PICO/UMI LeRobot dataset to an embodiment-specific joint-angle dataset.
+"""Convert a PICO/HandUMI LeRobot dataset to robot-specific joint angles.
 
 The script loads a source LeRobot dataset that contains PICO body-joint poses
 (``observation.pico.body_joints_pose``), runs inverse kinematics for the chosen
@@ -17,7 +17,7 @@ Quick start
 ::
 
     # Axol embodiment (default settings)
-    python scripts/process_umi_to_lerobot.py \
+    python scripts/process_handumi_to_lerobot.py \
         --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
         --dataset-root outputs/datasets/handumi-dataset-v2 \
         --embodiment axol \
@@ -25,7 +25,7 @@ Quick start
         --output-root outputs/datasets/handumi-dataset-v2-axol
 
     # Piper embodiment, push to hub afterwards
-    python scripts/process_umi_to_lerobot.py \
+    python scripts/process_handumi_to_lerobot.py \
         --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
         --dataset-root outputs/datasets/handumi-dataset-v2 \
         --embodiment piper \
@@ -53,7 +53,7 @@ load_dotenv()
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Convert a PICO/UMI LeRobot dataset to an embodiment-specific "
+            "Convert a PICO/HandUMI LeRobot dataset to an embodiment-specific "
             "joint-angle dataset via IK retargeting."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

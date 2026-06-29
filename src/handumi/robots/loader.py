@@ -20,7 +20,7 @@ class DatasetEmbodimentSpec:
 
 @dataclass(frozen=True)
 class EmbodimentBundle:
-    """Runtime objects used by ``process_umi_to_lerobot.py``."""
+    """Runtime objects used by the HandUMI dataset conversion script."""
 
     spec: DatasetEmbodimentSpec
     initial_q: np.ndarray

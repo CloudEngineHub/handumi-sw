@@ -1,0 +1,14 @@
+# Meta Quest / WebXR tracking config.
+
+backend: "meta_quest"
+
+server:
+  host: "0.0.0.0"
+  port: 8765
+
+streams:
+  left_pose: true
+  right_pose: true
+  headset_pose: true
+  buttons: true
+

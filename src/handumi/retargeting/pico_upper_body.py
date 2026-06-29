@@ -1,7 +1,7 @@
 """Upper-body helpers for PICO body-joint recordings.
 
 The production retargeting path intentionally does not depend on recorded
-PICO elbow joints.  They are useful for offline diagnostics, but at runtime
+PICO elbow joints.  They are useful for offline visualization, but at runtime
 we infer elbows from shoulder and wrist positions so the same method can be
 used with controller-only recordings.
 """
