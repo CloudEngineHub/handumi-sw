@@ -145,6 +145,83 @@ def _init_rerun(*, ip: str | None, port: int | None) -> None:
             "LeRobot visualization utilities are required. Run `uv sync` in this repo."
         ) from exc
     init_rerun(session_name="handumi_teleoperate", ip=ip, port=port)
+    _send_rerun_styles()
+    _send_default_blueprint()
+
+
+def _send_rerun_styles() -> None:
+    try:
+        import rerun as rr
+    except ImportError:
+        return
+
+    styles = {
+        "observation.feetech.left_width_mm": ("left_width_mm", [0, 255, 255, 255]),
+        "observation.feetech.right_width_mm": ("right_width_mm", [255, 0, 255, 255]),
+        "observation.feetech.left_normalized": ("left_normalized", [57, 255, 20, 255]),
+        "observation.feetech.right_normalized": ("right_normalized", [255, 149, 0, 255]),
+        "observation.feetech.left_ticks": ("left_ticks", [255, 255, 0, 255]),
+        "observation.feetech.right_ticks": ("right_ticks", [0, 128, 255, 255]),
+    }
+    for path, (name, color) in styles.items():
+        rr.log(
+            path,
+            rr.SeriesLines(colors=[color], widths=[2.5], names=[name]),
+            static=True,
+        )
+
+
+def _send_default_blueprint() -> None:
+    try:
+        import rerun as rr
+        import rerun.blueprint as rrb
+    except ImportError:
+        return
+
+    blueprint = rrb.Blueprint(
+        rrb.Vertical(
+            rrb.Horizontal(
+                rrb.Spatial2DView(
+                    origin="/observation.images.left_wrist",
+                    name="left_wrist",
+                ),
+                rrb.Spatial2DView(
+                    origin="/observation.images.right_wrist",
+                    name="right_wrist",
+                ),
+                name="wrist_cameras",
+            ),
+            rrb.TimeSeriesView(
+                origin="/",
+                contents=[
+                    "/observation.feetech.left_width_mm",
+                    "/observation.feetech.right_width_mm",
+                ],
+                name="gripper_width_mm",
+            ),
+            rrb.TimeSeriesView(
+                origin="/",
+                contents=[
+                    "/observation.feetech.left_normalized",
+                    "/observation.feetech.right_normalized",
+                ],
+                name="gripper_normalized",
+            ),
+            rrb.TimeSeriesView(
+                origin="/",
+                contents=[
+                    "/observation.feetech.left_ticks",
+                    "/observation.feetech.right_ticks",
+                ],
+                name="gripper_ticks",
+            ),
+            row_shares=[3, 1, 1, 1],
+        ),
+        rrb.BlueprintPanel(state="collapsed"),
+        rrb.SelectionPanel(state="collapsed"),
+        rrb.TimePanel(state="expanded"),
+    )
+    rr.send_blueprint(blueprint, make_active=True, make_default=True)
 
 
 def _shutdown_rerun() -> None:

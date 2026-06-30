@@ -1,30 +1,15 @@
 # HandUMI Software
 
-Software stack for recording HandUMI bimanual raw demonstrations as
-LeRobot-compatible datasets.
-
-HandUMI records data without a robot in the collection loop:
+Record HandUMI bimanual raw demonstrations as LeRobot-compatible datasets.
 
 ```text
 left/right wrist cameras
 + left/right Feetech gripper encoder widths
-+ optional left/right VR tracking poses
++ optional VR tracking poses
 -> HandUMI raw LeRobot dataset
 ```
 
-Robot-specific datasets for Piper, Axol, and other embodiments are derived
-later through offline retargeting / IK.
-
-## Requirements
-
-- Linux workstation with USB access.
-- Python 3.12.
-- `uv` installed.
-- Two USB wrist cameras.
-- Two Feetech servos used as gripper encoders.
-- Optional: PICO / Meta Quest tracking for later capture stages.
-
-## Installation
+## Install
 
 ```bash
 git clone <repo-url> handumi-sw
@@ -33,65 +18,97 @@ uv sync --python "$(command -v python3.12)"
 source .venv/bin/activate
 ```
 
-Verify:
+Check:
 
 ```bash
 python --version
 PYTHONPATH=src python scripts/record_handumi.py --help
 ```
 
-## Checkpoint 1: Cameras + Feetech Width
+## Hardware Setup
 
-This is the first hardware target:
-
-```text
-left USB wrist camera
-right USB wrist camera
-left Feetech servo encoder  -> left gripper opening
-right Feetech servo encoder -> right gripper opening
-LeRobotDataset output
-```
-
-PICO / Meta Quest tracking is optional and disabled by default for this
-checkpoint.
-
-### 1. Ports
+### 1. Identify Ports
 
 ```bash
 PYTHONPATH=src python scripts/setup/setup_ports.py
 ```
 
-Follow the prompts: disconnect all devices, then connect left Feetech, left
-camera, right Feetech, and right camera. This assigns Feetech IDs, saves
-`configs/feetech.yaml`, and saves camera indices in `configs/cameras.yaml`.
+Connect/disconnect one device at a time and note the changed port.
+Use `Ctrl+C` to stop.
 
-Check encoder ticks:
+The Feetech section shows each serial port and detected servo IDs:
+
+```text
+/dev/ttyACM0: ids=[0]
+/dev/ttyACM1: ids=[1]
+```
+
+Edit `configs/feetech.yaml`:
+
+```yaml
+left:
+  servo_id: 0
+  port: /dev/ttyACM0
+right:
+  servo_id: 1
+  port: /dev/ttyACM1
+```
+
+Edit `configs/cameras.yaml`:
+
+```yaml
+left_wrist:
+  index_or_path: 0
+right_wrist:
+  index_or_path: 2
+```
+
+### 2. Check Feetech Ticks
 
 ```bash
 PYTHONPATH=src python scripts/setup/calibrate_grippers.py monitor
 ```
 
-### 2. Gripper Calibration
+Open/close each gripper and confirm `ticks` changes.
 
-Run calibration and follow the terminal prompts:
+### 3. Home Servos (centre the encoder range)
+
+The Feetech encoder reports position modulo 4096 and wraps at the 0/4095 seam.
+If a gripper's travel crosses that seam, the width readout flips or saturates.
+Homing stores a correction so the current shaft angle reads 2048 (centre):
+
+```bash
+PYTHONPATH=src python scripts/setup/home_servos.py              # both sides
+PYTHONPATH=src python scripts/setup/home_servos.py --side right # one side
+```
+
+Hold the gripper at **mid-travel** (half open, ~2040 ticks) and press ENTER so
+the full range sits clear of the seam. The script reads the position back and
+reports `OK` / `CHECK`. Always re-calibrate afterwards (closed/open shift).
+
+A software unwrap in `handumi.feetech.gripper` also tracks wraps continuously,
+so even an un-homed range is fine as long as recording **starts with the
+grippers roughly closed** (away from the seam).
+
+### 4. Calibrate Gripper Width
 
 ```bash
 PYTHONPATH=src python scripts/setup/calibrate_grippers.py calibrate
+PYTHONPATH=src python scripts/setup/calibrate_grippers.py calibrate --side right
 ```
 
-It asks for the max gripper opening in mm, then records:
+For each side:
 
 ```text
-left max_width_mm, open_ticks, closed_ticks
-right max_width_mm, open_ticks, closed_ticks
+enter max opening in mm
+open gripper fully while watching live ticks, press ENTER
+close gripper fully while watching live ticks, press ENTER
 ```
 
-Per frame, HandUMI records raw ticks, normalized width, width in mm, and state
-width in meters.
+Use `--side left|right` to recalibrate one gripper without disturbing the other.
+This updates `configs/feetech.yaml`.
 
-### 3. Live Monitor
-
-Before recording, run the live Rerun monitor:
+### 5. Live Monitor
 
 ```bash
 PYTHONPATH=src python -m handumi.capture.teleoperate_handumi \
@@ -99,19 +116,10 @@ PYTHONPATH=src python -m handumi.capture.teleoperate_handumi \
   --fps 30
 ```
 
-This does not save data. It streams:
+Streams cameras and gripper widths to Rerun without saving data. Start with the
+grippers closed so the encoder unwrap anchors correctly.
 
-```text
-left/right wrist camera images
-left/right raw Feetech ticks
-left/right normalized gripper opening
-left/right gripper opening in mm
-```
-
-Use it to verify that camera assignment, servo IDs, ports, and calibration are
-correct before recording.
-
-### 4. Record Dataset
+### 6. Record
 
 ```bash
 PYTHONPATH=src python scripts/record_handumi.py \
@@ -124,7 +132,7 @@ PYTHONPATH=src python scripts/record_handumi.py \
   --fps 30
 ```
 
-Equivalent launcher:
+Or:
 
 ```bash
 bash bin/record.sh \
@@ -135,7 +143,16 @@ bash bin/record.sh \
   --episode-time-s 20
 ```
 
-The raw dataset stores:
+## Inspect Dataset
+
+```bash
+lerobot-dataset-viz \
+  --repo-id local/handumi_width_test \
+  --root outputs/datasets/handumi_width_test \
+  --episode-index 0
+```
+
+## Dataset Fields
 
 ```text
 observation.images.left_wrist
@@ -150,85 +167,11 @@ observation.feetech.left_normalized
 observation.feetech.right_normalized
 ```
 
-`observation.state[14]` and `observation.state[15]` are the calibrated left/right
-gripper widths in meters.
-
-### 5. Inspect With LeRobot
-
-```bash
-lerobot-dataset-viz \
-  --repo-id local/handumi_width_test \
-  --root outputs/datasets/handumi_width_test \
-  --episode-index 0
-```
-
-## Record With Tracking
-
-After the hardware checkpoint works, enable PICO streams with:
-
-```bash
-PYTHONPATH=src python scripts/record_handumi.py \
-  --use-pico \
-  --pico-mandos \
-  --feetech-config configs/feetech.yaml \
-  --repo-id local/handumi_pico_test \
-  --output-dir outputs/datasets/handumi_pico_test
-```
-
-## Retarget / Replay
-
-Convert a HandUMI source dataset to a robot-specific dataset:
-
-```bash
-bash bin/process_handumi_to_lerobot.sh \
-  --embodiment piper \
-  --output-name handumi-dataset-v2-piper \
-  --output-root outputs/datasets/handumi-dataset-v2-piper
-```
-
-Inspect retargeting:
-
-```bash
-python scripts/replay_pico_ik.py --embodiment piper --episode 0 --visualize
-python scripts/compare_axis.py --embodiment axol --episode 0
-```
-
-Replay a Piper robot-specific dataset:
-
-```bash
-bash bin/piper/replay_from_dataset.sh --episode 0 --dry-run
-```
-
-## Project Layout
-
-```text
-.
-├── assets/                  # Robot URDFs and meshes
-├── bin/                     # Shell launchers
-├── configs/                 # Camera, Feetech, tracking configs
-├── docs/                    # Architecture and embodiment guide
-├── scripts/                 # Manual hardware and pipeline scripts
-├── src/handumi/             # Core package
-├── tests/                   # Automated tests
-└── utils/                   # Upload helpers
-```
-
-```text
-src/handumi/
-├── capture/                 # HandUMI raw recorder
-├── cameras/                 # USB wrist cameras
-├── dataset/                 # Raw schema, LeRobot IO, conversion
-├── feetech/                 # Feetech encoder bus/calibration/gripper widths
-├── replay/                  # PICO IK replay and robot replay
-├── retargeting/             # Raw/PICO poses to robot targets
-├── robots/                  # Piper/Axol embodiment registry and IK specs
-└── tracking/                # PICO / tracker backends
-```
+`observation.state[14]` and `observation.state[15]` are left/right gripper width
+in meters.
 
 ## Docs
 
-| Doc | Description |
-|-----|-------------|
-| [docs/architecture.md](docs/architecture.md) | System architecture, raw schema, configs, and manual scripts |
-| [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md) | Meta Quest/WebXR tracking and live Viser plan |
-| [docs/add-new-embodiment.md](docs/add-new-embodiment.md) | How to add a new robot embodiment |
+- [docs/architecture.md](docs/architecture.md)
+- [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md)
+- [docs/add-new-embodiment.md](docs/add-new-embodiment.md)

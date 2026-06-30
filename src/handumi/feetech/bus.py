@@ -92,6 +92,41 @@ class FeetechBus:
         except RuntimeError:
             pass
 
+    def set_middle_position(self, servo_id: int) -> bool:
+        """Re-home the servo so its current shaft angle reads ~2048 (centre).
+
+        Feetech STS/SMS servos treat a write of 128 to ``Torque_Enable`` as a
+        "middle position calibration": the controller stores a position
+        correction in EEPROM so that ``Present_Position`` reports 2048 at the
+        current physical position. We unlock EEPROM first and re-lock after so
+        the correction persists across power cycles.
+
+        Some firmware does not ACK the middle-calibration write (the servo is
+        busy recalibrating), which surfaces as a write error even though the
+        EEPROM update went through. The writes are therefore best-effort: the
+        caller must confirm success by reading the position back. Returns False
+        if any write was rejected.
+        """
+        import time
+
+        ok = True
+        try:
+            self._write_1_byte(servo_id, _LOCK_ADDR, 0, "Lock(unlock)")  # unlock EEPROM
+        except RuntimeError:
+            ok = False
+        try:
+            self._write_1_byte(
+                servo_id, _TORQUE_ENABLE_ADDR, _MIDDLE_CALIBRATION, "Torque_Enable(middle)"
+            )
+        except RuntimeError:
+            ok = False
+        time.sleep(0.1)  # let the EEPROM write commit before re-locking
+        try:
+            self._write_1_byte(servo_id, _LOCK_ADDR, 1, "Lock(relock)")  # re-lock EEPROM
+        except RuntimeError:
+            ok = False
+        return ok
+
     def _write_1_byte(self, servo_id: int, address: int, value: int, name: str) -> None:
         packet = self._require_packet()
         comm, error = packet.write1ByteTxRx(
@@ -133,3 +168,4 @@ _ID_ADDR = 5
 _TORQUE_ENABLE_ADDR = 40
 _LOCK_ADDR = 55
 _PRESENT_POSITION_ADDR = 56
+_MIDDLE_CALIBRATION = 128  # write to Torque_Enable to set current pos as 2048
