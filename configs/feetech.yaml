@@ -1,20 +1,15 @@
-# Feetech servo encoder configuration for the two HandUMI grippers.
-
-backend: "feetech"
 port: null
 baudrate: 1000000
 protocol_version: 0
-
 left:
   servo_id: 0
-  port: null
+  port: /dev/ttyACM0
   closed_ticks: null
   open_ticks: null
   max_width_mm: null
-
 right:
   servo_id: 1
-  port: null
+  port: /dev/ttyACM1
   closed_ticks: null
   open_ticks: null
   max_width_mm: null
