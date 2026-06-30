@@ -19,7 +19,6 @@ No follower robot is required. Action currently mirrors the raw HandUMI state.
 Usage
 ─────
   python scripts/record_handumi.py \
-      --cam-ids 0 2 \
       --repo-id local/my_dataset \
       --output-dir datasets/my_dataset \
       --task "Pick and place cube" \
@@ -45,6 +44,7 @@ from handumi.cameras.usb import (
     connect_cameras,
     disconnect_cameras,
     read_camera_frames,
+    resolve_camera_ids,
 )
 from handumi.capture.reach import (
     REACH_BUDGETS_M,
@@ -473,11 +473,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--cam-ids",
         nargs="+",
-        type=int,
-        default=[0, 2],
+        type=_camera_arg,
+        default=None,
         metavar="ID",
-        help="OpenCV camera indices for left_wrist right_wrist (default: 0 2).",
+        help="OpenCV camera indices or paths for left_wrist right_wrist.",
     )
+    p.add_argument("--camera-config", type=Path, default=Path("configs/cameras.yaml"))
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30, help="Camera capture FPS.")
@@ -755,8 +756,9 @@ def main() -> None:
 
     # ── 2. Camera initialisation ───────────────────────────────────────────────
     log.info("─── Camera setup ───────────────────────────────────────")
+    cam_ids = resolve_camera_ids(args.cam_ids, args.camera_config)
     camera_specs, laptop_cam_name = build_camera_specs(
-        args.cam_ids,
+        cam_ids,
         laptop_camera=args.laptop_camera,
         laptop_cam_id=args.laptop_cam_id,
         laptop_cam_name=args.laptop_cam_name,
@@ -977,6 +979,10 @@ def main() -> None:
         if args.push_to_hub:
             log.info("Pushing dataset to Hugging Face Hub …")
             dataset.push_to_hub()
+
+
+def _camera_arg(value: str) -> int | str:
+    return int(value) if value.isdigit() else value
 
 
 if __name__ == "__main__":

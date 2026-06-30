@@ -5,7 +5,6 @@
 # Usage (all arguments are optional; defaults shown below):
 #
 #   bash bin/record.sh \
-#       --cam-ids 0 2 \
 #       --repo-id local/handumi_dataset \
 #       --output-dir datasets/my_dataset \
 #       --task "Pick and place cube" \
@@ -44,7 +43,8 @@ fi
 export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 
 # ── Default arguments (override via CLI) ──────────────────────────────────────
-CAM_IDS="${CAM_IDS:-0 2}"            # left_wrist right_wrist camera indices
+CAM_IDS="${CAM_IDS:-}"              # Optional left_wrist right_wrist camera override
+CAMERA_CONFIG="${CAMERA_CONFIG:-${REPO_ROOT}/configs/cameras.yaml}"
 FEETECH_CONFIG="${FEETECH_CONFIG:-${REPO_ROOT}/configs/feetech.yaml}"
 FEETECH_PORT="${FEETECH_PORT:-}"
 REPO_ID="${REPO_ID:-local/handumi_dataset}"
@@ -74,6 +74,7 @@ while [[ $# -gt 0 ]]; do
             CAM_IDS="${CAM_IDS# }"  # trim leading space
             ;;
         --feetech-config) FEETECH_CONFIG="$2"; shift 2 ;;
+        --camera-config) CAMERA_CONFIG="$2"; shift 2 ;;
         --feetech-port)   FEETECH_PORT="$2";   shift 2 ;;
         --repo-id)       REPO_ID="$2";       shift 2 ;;
         --output-dir)    OUTPUT_DIR="$2";    shift 2 ;;
@@ -100,7 +101,8 @@ echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║          handumi  –  multi-modal recording                ║"
 echo "╠══════════════════════════════════════════════════════════╣"
-printf "║  Cameras       : %-40s║\n" "${CAM_IDS}"
+printf "║  Cameras       : %-40s║\n" "${CAM_IDS:-from config}"
+printf "║  Camera config : %-40s║\n" "${CAMERA_CONFIG}"
 printf "║  Feetech config: %-40s║\n" "${FEETECH_CONFIG}"
 printf "║  Feetech port  : %-40s║\n" "${FEETECH_PORT:-from config}"
 printf "║  Repo id       : %-40s║\n" "${REPO_ID}"
@@ -119,10 +121,14 @@ FEETECH_ARGS=(--feetech-config "${FEETECH_CONFIG}")
 if [[ -n "${FEETECH_PORT}" ]]; then
     FEETECH_ARGS+=(--feetech-port "${FEETECH_PORT}")
 fi
+CAMERA_ARGS=(--camera-config "${CAMERA_CONFIG}")
+if [[ -n "${CAM_IDS}" ]]; then
+    # shellcheck disable=SC2206
+    CAMERA_ARGS+=(--cam-ids ${CAM_IDS})
+fi
 
-# shellcheck disable=SC2086
 exec python "${REPO_ROOT}/scripts/record_handumi.py" \
-    --cam-ids ${CAM_IDS} \
+    "${CAMERA_ARGS[@]}" \
     --cam-width  "${CAM_WIDTH}" \
     --cam-height "${CAM_HEIGHT}" \
     --cam-fps    "${CAM_FPS}" \

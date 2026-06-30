@@ -55,139 +55,46 @@ LeRobotDataset output
 PICO / Meta Quest tracking is optional and disabled by default for this
 checkpoint.
 
-### 1. Feetech Ports And IDs
-
-Identify serial ports by unplugging/plugging one gripper adapter at a time:
+### 1. Ports
 
 ```bash
-while true; do
-  clear
-  echo "=== $(date) ==="
-  ls -l /dev/serial/by-id 2>/dev/null || true
-  ls -l /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || true
-  sleep 2
-done
+PYTHONPATH=src python scripts/setup/setup_ports.py
 ```
 
-Use `/dev/serial/by-id/...` when available; otherwise use `/dev/ttyACM*` or
-`/dev/ttyUSB*`.
-
-Scan servos:
-
-```bash
-PYTHONPATH=src python scripts/setup/scan_feetech.py \
-  --all-ports \
-  --start-id 0 \
-  --end-id 20
-```
-
-Expected convention:
-
-```text
-left gripper  -> servo ID 0
-right gripper -> servo ID 1
-```
-
-Assign IDs one side at a time if needed:
-
-Left gripper:
-
-```bash
-PYTHONPATH=src python scripts/setup/write_feetech_id.py \
-  --port /dev/SERIAL_LEFT \
-  --current-id <current_left_id> \
-  --new-id 0
-```
-
-Right gripper:
-
-```bash
-PYTHONPATH=src python scripts/setup/write_feetech_id.py \
-  --port /dev/SERIAL_RIGHT \
-  --current-id <current_right_id> \
-  --new-id 1
-```
-
-Verify:
-
-```bash
-PYTHONPATH=src python scripts/setup/scan_feetech.py \
-  --all-ports \
-  --start-id 0 \
-  --end-id 20
-```
-
-Save mapping:
-
-```bash
-PYTHONPATH=src python scripts/setup/save_gripper_config.py \
-  --left-id 0 \
-  --right-id 1 \
-  --left-port /dev/SERIAL_LEFT \
-  --right-port /dev/SERIAL_RIGHT
-```
+Follow the prompts: disconnect all devices, then connect left Feetech, left
+camera, right Feetech, and right camera. This assigns Feetech IDs, saves
+`configs/feetech.yaml`, and saves camera indices in `configs/cameras.yaml`.
 
 Check encoder ticks:
 
 ```bash
-PYTHONPATH=src python scripts/setup/monitor_gripper_ticks.py \
-  --port-id /dev/SERIAL_LEFT 0 \
-  --port-id /dev/SERIAL_RIGHT 1
+PYTHONPATH=src python scripts/setup/calibrate_grippers.py monitor
 ```
 
-### 2. Calibrate Gripper Opening
+### 2. Gripper Calibration
 
-Measure max opening in millimeters, then run:
+Run calibration and follow the terminal prompts:
 
 ```bash
-PYTHONPATH=src python scripts/setup/calibrate_gripper_width.py \
-  --max-width-mm 80
+PYTHONPATH=src python scripts/setup/calibrate_grippers.py calibrate
 ```
 
-The command asks you to close both grippers, then open both grippers. It stores:
+It asks for the max gripper opening in mm, then records:
 
 ```text
-closed_ticks
-open_ticks
-max_width_mm
+left max_width_mm, open_ticks, closed_ticks
+right max_width_mm, open_ticks, closed_ticks
 ```
 
 Per frame, HandUMI records raw ticks, normalized width, width in mm, and state
 width in meters.
 
-### 3. Cameras
-
-Identify cameras by unplugging/plugging one camera at a time:
-
-```bash
-while true; do
-  clear
-  echo "=== $(date) ==="
-  v4l2-ctl --list-devices
-  sleep 2
-done
-```
-
-Scan OpenCV indices:
-
-```bash
-PYTHONPATH=src python scripts/setup/scan_cameras.py
-```
-
-Use camera IDs in this order:
-
-```text
-first --cam-ids value  -> observation.images.left_wrist
-second --cam-ids value -> observation.images.right_wrist
-```
-
-### 4. Live Monitor
+### 3. Live Monitor
 
 Before recording, run the live Rerun monitor:
 
 ```bash
 PYTHONPATH=src python -m handumi.capture.teleoperate_handumi \
-  --cam-ids 0 2 \
   --feetech-config configs/feetech.yaml \
   --fps 30
 ```
@@ -204,11 +111,10 @@ left/right gripper opening in mm
 Use it to verify that camera assignment, servo IDs, ports, and calibration are
 correct before recording.
 
-### 5. Record Dataset
+### 4. Record Dataset
 
 ```bash
 PYTHONPATH=src python scripts/record_handumi.py \
-  --cam-ids 0 2 \
   --feetech-config configs/feetech.yaml \
   --repo-id local/handumi_width_test \
   --output-dir outputs/datasets/handumi_width_test \
@@ -222,7 +128,6 @@ Equivalent launcher:
 
 ```bash
 bash bin/record.sh \
-  --cam-ids 0 2 \
   --repo-id local/handumi_width_test \
   --output-dir outputs/datasets/handumi_width_test \
   --task "gripper width hardware test" \
@@ -248,7 +153,7 @@ observation.feetech.right_normalized
 `observation.state[14]` and `observation.state[15]` are the calibrated left/right
 gripper widths in meters.
 
-### 6. Inspect With LeRobot
+### 5. Inspect With LeRobot
 
 ```bash
 lerobot-dataset-viz \
@@ -265,7 +170,6 @@ After the hardware checkpoint works, enable PICO streams with:
 PYTHONPATH=src python scripts/record_handumi.py \
   --use-pico \
   --pico-mandos \
-  --cam-ids 0 2 \
   --feetech-config configs/feetech.yaml \
   --repo-id local/handumi_pico_test \
   --output-dir outputs/datasets/handumi_pico_test

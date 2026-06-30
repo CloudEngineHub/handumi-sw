@@ -67,3 +67,6 @@ Thumbs.db
 external_dependencies/
 outputs/
 datasets/
+
+# Editor config
+.zed/

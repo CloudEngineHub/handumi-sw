@@ -168,7 +168,7 @@ Setup is side-by-side, not blind global assignment:
 4. save left.port and right.port in configs/feetech.yaml
 5. validate gripper encoder ticks while opening/closing
 6. identify left/right USB cameras physically
-7. record with --cam-ids <left_camera> <right_camera>
+7. record using configs/cameras.yaml
 ```
 
 Each gripper can have its own USB serial port, or both can share one Feetech
@@ -237,12 +237,8 @@ promoted to packaged entrypoints.
 Setup scripts:
 
 ```text
-scripts/setup/scan_feetech.py
-scripts/setup/monitor_gripper_ticks.py
-scripts/setup/write_feetech_id.py
-scripts/setup/save_gripper_config.py
-scripts/setup/calibrate_gripper_width.py
-scripts/setup/scan_cameras.py
+scripts/setup/setup_ports.py
+scripts/setup/calibrate_grippers.py
 ```
 
 Pipeline scripts:

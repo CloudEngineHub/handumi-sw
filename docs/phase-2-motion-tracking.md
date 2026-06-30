@@ -93,10 +93,10 @@ retargeting / IK
 ViserSim robot update
 ```
 
-Live visualization command:
+Planned live visualization script:
 
 ```bash
-handumi-live-viser \
+PYTHONPATH=src python scripts/live_viser.py \
   --tracking-backend meta_quest \
   --feetech-config configs/feetech.yaml \
   --embodiment piper \
@@ -306,10 +306,10 @@ configs/
   tracking_meta_quest.yaml
 ```
 
-Python entry points:
+Python scripts:
 
 ```text
-handumi-live-viser
+PYTHONPATH=src python scripts/live_viser.py
 PYTHONPATH=src python scripts/record_handumi.py --tracking-backend meta_quest
 ```
 
@@ -414,7 +414,7 @@ The Meta Quest backend should normalize to this same shape.
 
 Phase 2 is ready when:
 
-- Quest Browser connects to `handumi-live-viser` over WSS.
+- Quest Browser connects to the live Viser server over WSS.
 - Moving the left/right HandUMI grippers updates left/right frames in Viser.
 - Opening/closing each physical gripper updates Feetech width in Rerun.
 - The Viser robot follows the controller-mounted grippers.

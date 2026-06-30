@@ -1,6 +1,10 @@
 import unittest
+import tempfile
+from pathlib import Path
 
-from handumi.cameras.usb import build_camera_specs
+import yaml
+
+from handumi.cameras.usb import build_camera_specs, resolve_camera_ids
 
 
 class UsbCameraConfigTest(unittest.TestCase):
@@ -37,6 +41,25 @@ class UsbCameraConfigTest(unittest.TestCase):
                 {"id": 9, "name": "right_wrist", "is_laptop": True},
             ],
         )
+
+    def test_resolve_camera_ids_from_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cameras.yaml"
+            with path.open("w", encoding="utf-8") as fh:
+                yaml.safe_dump(
+                    {
+                        "left_wrist": {"index_or_path": 3},
+                        "right_wrist": {"index_or_path": 5},
+                    },
+                    fh,
+                )
+
+            self.assertEqual(resolve_camera_ids(None, path), [3, 5])
+
+    def test_explicit_camera_ids_override_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cameras.yaml"
+            self.assertEqual(resolve_camera_ids([7, 8], path), [7, 8])
 
 
 if __name__ == "__main__":

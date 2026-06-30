@@ -16,6 +16,7 @@ from handumi.cameras.usb import (
     connect_cameras,
     disconnect_cameras,
     read_camera_frames,
+    resolve_camera_ids,
 )
 from handumi.feetech import FeetechGripperPair, GripperWidths, load_config
 from handumi.feetech.bus import FeetechUnavailableError
@@ -27,7 +28,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Stream HandUMI cameras and Feetech gripper widths to Rerun."
     )
-    parser.add_argument("--cam-ids", nargs="+", type=int, default=[0, 2])
+    parser.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
+    parser.add_argument("--camera-config", type=Path, default=Path("configs/cameras.yaml"))
     parser.add_argument("--cam-width", type=int, default=640)
     parser.add_argument("--cam-height", type=int, default=480)
     parser.add_argument("--cam-fps", type=int, default=30)
@@ -51,8 +53,9 @@ def main() -> None:
     args = parse_args()
     _init_rerun(ip=args.display_ip, port=args.display_port)
 
+    cam_ids = resolve_camera_ids(args.cam_ids, args.camera_config)
     camera_specs, _ = build_camera_specs(
-        args.cam_ids,
+        cam_ids,
         laptop_camera=False,
         laptop_cam_id=0,
         laptop_cam_name="laptop",
@@ -212,6 +215,10 @@ def zero_gripper_widths() -> GripperWidths:
         left_ticks=0,
         right_ticks=0,
     )
+
+
+def _camera_arg(value: str) -> int | str:
+    return int(value) if value.isdigit() else value
 
 
 if __name__ == "__main__":

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 log = logging.getLogger("handumi.record")
 
 
 def build_camera_specs(
-    cam_ids: list[int],
+    cam_ids: list[int | str],
     *,
     laptop_camera: bool,
     laptop_cam_id: int,
@@ -34,6 +36,22 @@ def build_camera_specs(
                 {"id": laptop_cam_id, "name": laptop_cam_name, "is_laptop": True}
             )
     return specs, resolved_laptop_name
+
+
+def resolve_camera_ids(
+    cam_ids: list[int | str] | None,
+    camera_config: Path,
+) -> list[int | str]:
+    if cam_ids is not None:
+        return cam_ids
+    if not camera_config.exists():
+        return [0, 2]
+    with camera_config.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    return [
+        _read_camera_value(data, "left_wrist", 0),
+        _read_camera_value(data, "right_wrist", 2),
+    ]
 
 
 def connect_cameras(
@@ -94,3 +112,12 @@ def disconnect_cameras(cameras: list) -> None:
             cam.disconnect()
         except Exception:
             pass
+
+
+def _read_camera_value(data: dict[str, Any], key: str, default: int) -> int | str:
+    section = data.get(key) or {}
+    value = section.get("index_or_path", default)
+    if isinstance(value, int):
+        return value
+    text = str(value)
+    return int(text) if text.isdigit() else text
