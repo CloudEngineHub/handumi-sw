@@ -1,6 +1,6 @@
 import unittest
 
-from handumi.capture.record_handumi import build_features
+from handumi.capture.record_handumi_pico import build_features
 
 
 class RecordHandUMIFeaturesTest(unittest.TestCase):
