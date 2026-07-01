@@ -7,7 +7,12 @@ HandUMI hardware before any robot-specific IK or retargeting.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+
+if TYPE_CHECKING:
+    from handumi.tracking.transforms import Pose
 
 HANDUMI_RAW_STATE_NAMES: tuple[str, ...] = (
     "left_x",
@@ -58,6 +63,25 @@ def validate_raw_state_shape(value: Sequence[object], *, name: str = "raw state"
         )
 
 
+def pose_to_state_vector(
+    left: "Pose",
+    right: "Pose",
+    left_width_m: float,
+    right_width_m: float,
+) -> np.ndarray:
+    """Assemble the 16D HandUMI raw state from calibrated left/right poses + widths.
+
+    Backend-neutral: any tracking source (Quest, PICO) that produces workspace
+    ``Pose`` values plus gripper widths feeds the same raw-state layout.
+    """
+    state = np.zeros(HANDUMI_RAW_STATE_SIZE, dtype=np.float32)
+    state[LEFT_POSE_SLICE] = np.concatenate([left.position, left.quaternion])
+    state[RIGHT_POSE_SLICE] = np.concatenate([right.position, right.quaternion])
+    state[LEFT_GRIPPER_INDEX] = float(left_width_m)
+    state[RIGHT_GRIPPER_INDEX] = float(right_width_m)
+    return state
+
+
 __all__ = [
     "HANDUMI_RAW_IMAGE_KEYS",
     "HANDUMI_RAW_STATE_NAMES",
@@ -66,6 +90,7 @@ __all__ = [
     "LEFT_POSE_SLICE",
     "RIGHT_GRIPPER_INDEX",
     "RIGHT_POSE_SLICE",
+    "pose_to_state_vector",
     "raw_state_feature",
     "validate_raw_state_shape",
 ]

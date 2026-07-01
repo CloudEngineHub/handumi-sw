@@ -15,8 +15,8 @@ owns the (minimal) state machine — the device only forwards button states.
 
 Run with the mock Quest for a dry run:
 
-    PYTHONPATH=src python -m handumi.tracking.mock_quest_sender
-    PYTHONPATH=src python scripts/live_tracking.py --skip-cameras --skip-feetech
+    python -m handumi.tracking.mock_quest_sender
+    python -m handumi.capture.live_tracking_quest --skip-cameras --skip-feetech
 """
 
 from __future__ import annotations
@@ -31,29 +31,21 @@ from pathlib import Path
 
 import numpy as np
 
-from handumi.dataset.raw import (
-    HANDUMI_RAW_STATE_SIZE,
-    LEFT_GRIPPER_INDEX,
-    LEFT_POSE_SLICE,
-    RIGHT_GRIPPER_INDEX,
-    RIGHT_POSE_SLICE,
-)
+from handumi.dataset.raw import HANDUMI_RAW_STATE_SIZE, pose_to_state_vector
 from handumi.tracking.meta_quest import (
-    ControllerState,
-    HmdState,
     MetaQuestConfig,
     MetaQuestReceiver,
     QuestFrame,
+    controller_pose_in_workspace,
+    workspace_from_hmd,
 )
 from handumi.tracking.transforms import (
     MountingOffsets,
     Pose,
     WorkspaceCalibration,
-    apply_mounting_offset,
-    unity_pose_to_handumi,
 )
 
-log = logging.getLogger("handumi.live_tracking")
+log = logging.getLogger("handumi.live_tracking_quest")
 
 LEFT_COLOR = (0, 255, 255)  # cyan — matches Feetech left series
 RIGHT_COLOR = (255, 0, 255)  # magenta — matches Feetech right series
@@ -61,34 +53,9 @@ RIGHT_COLOR = (255, 0, 255)  # magenta — matches Feetech right series
 
 # ---------------------------------------------------------------------------
 # Pure helpers (no I/O — unit-tested).
+# Quest pose->workspace math lives in handumi.tracking.meta_quest; the 16D raw
+# state assembly lives in handumi.dataset.raw. Only the Rerun trail is local.
 # ---------------------------------------------------------------------------
-
-
-def controller_pose_in_workspace(
-    controller: ControllerState,
-    *,
-    mounting_offset: Pose,
-    workspace: WorkspaceCalibration,
-) -> Pose:
-    """Calibrated gripper-TCP pose for one controller (raw Unity -> workspace)."""
-    converted = unity_pose_to_handumi(controller.position, controller.quaternion)
-    gripper_tcp = apply_mounting_offset(converted, mounting_offset)
-    return workspace.apply(gripper_tcp)
-
-
-def pose_to_state_vector(
-    left: Pose,
-    right: Pose,
-    left_width_m: float,
-    right_width_m: float,
-) -> np.ndarray:
-    """Assemble the 16D HandUMI raw state from calibrated poses + widths."""
-    state = np.zeros(HANDUMI_RAW_STATE_SIZE, dtype=np.float32)
-    state[LEFT_POSE_SLICE] = np.concatenate([left.position, left.quaternion])
-    state[RIGHT_POSE_SLICE] = np.concatenate([right.position, right.quaternion])
-    state[LEFT_GRIPPER_INDEX] = float(left_width_m)
-    state[RIGHT_GRIPPER_INDEX] = float(right_width_m)
-    return state
 
 
 class TrajectoryTrail:
@@ -109,12 +76,6 @@ class TrajectoryTrail:
         return np.asarray(self._points, dtype=np.float32)
 
 
-def workspace_from_hmd(hmd: HmdState) -> WorkspaceCalibration:
-    """Build a workspace reset that re-centers on the current HMD pose."""
-    reference = unity_pose_to_handumi(hmd.position, hmd.quaternion)
-    return WorkspaceCalibration.from_reference(reference)
-
-
 # ---------------------------------------------------------------------------
 # Rerun setup + logging.
 # ---------------------------------------------------------------------------
@@ -126,7 +87,7 @@ def _init_rerun(*, spawn: bool, ip: str | None, port: int | None) -> bool:
     except ImportError:
         log.warning("rerun is not installed; running without visualization.")
         return False
-    rr.init("handumi_live_tracking")
+    rr.init("handumi_live_tracking_quest")
     if ip and port:
         rr.connect_grpc(url=f"rerun+http://{ip}:{port}/proxy")
     elif spawn:

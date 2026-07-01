@@ -5,17 +5,12 @@ import unittest
 
 import numpy as np
 
-from handumi.capture.live_tracking import (
-    TrajectoryTrail,
-    controller_pose_in_workspace,
-    pose_to_state_vector,
-    run_live_tracking,
-    workspace_from_hmd,
-)
+from handumi.capture.live_tracking_quest import TrajectoryTrail, run_live_tracking
 from handumi.dataset.raw import (
     HANDUMI_RAW_STATE_SIZE,
     LEFT_GRIPPER_INDEX,
     RIGHT_GRIPPER_INDEX,
+    pose_to_state_vector,
 )
 from handumi.tracking import mock_quest_sender as mock
 from handumi.tracking.meta_quest import (
@@ -24,6 +19,8 @@ from handumi.tracking.meta_quest import (
     HmdState,
     MetaQuestConfig,
     MetaQuestReceiver,
+    controller_pose_in_workspace,
+    workspace_from_hmd,
 )
 from handumi.tracking.transforms import (
     MountingOffsets,
@@ -149,7 +146,7 @@ class LiveLoopSmokeTest(unittest.TestCase):
         import rerun as rr
 
         rr.init("handumi_live_tracking_test")  # memory recording, no viewer
-        from handumi.capture import live_tracking
+        from handumi.capture import live_tracking_quest as live_tracking
 
         live_tracking._send_styles()
         live_tracking._send_blueprint()

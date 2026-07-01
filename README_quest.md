@@ -24,7 +24,7 @@ app. Two terminals:
 python -m handumi.tracking.mock_quest_sender
 
 # terminal 2 — live tracking to Rerun (no cameras/Feetech needed)
-python -m handumi.capture.live_tracking \
+python -m handumi.capture.live_tracking_quest \
   --quest-ip 127.0.0.1 --skip-cameras --skip-feetech
 ```
 
@@ -161,7 +161,7 @@ With the stream verified, visualize the controllers as a live 3D trajectory —
 still without the gripper hardware, so skip cameras and Feetech:
 
 ```bash
-python -m handumi.capture.live_tracking --skip-cameras --skip-feetech
+python -m handumi.capture.live_tracking_quest --skip-cameras --skip-feetech
 ```
 
 A Rerun window opens with a 3D grid. Move the controllers and their trajectories

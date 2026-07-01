@@ -40,16 +40,21 @@ from pathlib import Path
 
 import numpy as np
 
-from handumi.capture.live_tracking import (
+from handumi.dataset.raw import pose_to_state_vector, raw_state_feature
+from handumi.feetech import (
+    FeetechGripperPair,
+    GripperWidths,
+    load_config,
+    zero_gripper_widths,
+)
+from handumi.feetech.bus import FeetechUnavailableError
+from handumi.tracking.meta_quest import (
+    MetaQuestConfig,
+    MetaQuestReceiver,
+    QuestFrame,
     controller_pose_in_workspace,
-    pose_to_state_vector,
     workspace_from_hmd,
 )
-from handumi.capture.record_handumi_pico import zero_gripper_widths
-from handumi.dataset.raw import raw_state_feature
-from handumi.feetech import FeetechGripperPair, GripperWidths, load_config
-from handumi.feetech.bus import FeetechUnavailableError
-from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestReceiver, QuestFrame
 from handumi.tracking.transforms import (
     MountingOffsets,
     Pose,

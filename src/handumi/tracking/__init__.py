@@ -7,7 +7,9 @@ from handumi.tracking.meta_quest import (
     MetaQuestConfig,
     MetaQuestReceiver,
     QuestFrame,
+    controller_pose_in_workspace,
     parse_frame,
+    workspace_from_hmd,
 )
 from handumi.tracking.transforms import (
     MountingOffsets,
@@ -27,7 +29,9 @@ __all__ = [
     "Pose",
     "QuestFrame",
     "WorkspaceCalibration",
+    "controller_pose_in_workspace",
     "gripper_pose_in_workspace",
     "parse_frame",
     "unity_pose_to_handumi",
+    "workspace_from_hmd",
 ]

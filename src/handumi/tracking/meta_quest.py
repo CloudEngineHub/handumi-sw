@@ -36,6 +36,13 @@ from typing import Any, Callable
 import numpy as np
 import yaml
 
+from handumi.tracking.transforms import (
+    Pose,
+    WorkspaceCalibration,
+    apply_mounting_offset,
+    unity_pose_to_handumi,
+)
+
 log = logging.getLogger("handumi.tracking.meta_quest")
 
 # UDP sync wire formats.
@@ -103,6 +110,24 @@ class QuestFrame:
     right: ControllerState
     battery: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+def controller_pose_in_workspace(
+    controller: ControllerState,
+    *,
+    mounting_offset: Pose,
+    workspace: WorkspaceCalibration,
+) -> Pose:
+    """Calibrated gripper-TCP pose for one Quest controller (raw Unity -> workspace)."""
+    converted = unity_pose_to_handumi(controller.position, controller.quaternion)
+    gripper_tcp = apply_mounting_offset(converted, mounting_offset)
+    return workspace.apply(gripper_tcp)
+
+
+def workspace_from_hmd(hmd: HmdState) -> WorkspaceCalibration:
+    """Build a workspace reset that re-centers on the current Quest HMD pose."""
+    reference = unity_pose_to_handumi(hmd.position, hmd.quaternion)
+    return WorkspaceCalibration.from_reference(reference)
 
 
 # Flat YubiQuestApp wire keys, per side (from yubi-sw quest_bridge_node.py).

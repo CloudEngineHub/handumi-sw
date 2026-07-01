@@ -113,8 +113,8 @@ Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
 - **Status: implemented.** Validate with the mock (two terminals):
 
   ```bash
-  PYTHONPATH=src python -m handumi.tracking.mock_quest_sender
-  PYTHONPATH=src python -m handumi.tracking.meta_quest --quest-ip 127.0.0.1
+  python -m handumi.tracking.mock_quest_sender
+  python -m handumi.tracking.meta_quest --quest-ip 127.0.0.1
   ```
 
   Tests: `python -m unittest discover -s tests/tracking`. For the real headset,
@@ -141,7 +141,7 @@ Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
 ### Step 3 — The live view (Feetech merge + Rerun trajectory)
 
 - **Goal:** the visible milestone — move the grippers, see the trajectory.
-- **Build:** `handumi/capture/live_tracking.py` (merge calibrated Quest poses +
+- **Build:** `handumi/capture/live_tracking_quest.py` (merge calibrated Quest poses +
   Feetech width into the 16D raw state; Rerun blueprint = wrist cameras +
   Feetech series + 3D controller trajectory with rolling trails) and the
   dedicated recorder `handumi/capture/record_handumi_quest.py`.
@@ -151,8 +151,8 @@ Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
   opening/closing updates Feetech width; recording writes the 16D layout; no
   gripper width comes from Quest triggers. (This is the Phase 2A acceptance
   bar.)
-- **Status: live view implemented.** `handumi/capture/live_tracking.py` +
-  `scripts/live_tracking.py`: receiver → `gripper_pose_in_workspace` → 16D state,
+- **Status: live view implemented.** `handumi/capture/live_tracking_quest.py` +
+  `handumi.capture.live_tracking_quest`: receiver → `gripper_pose_in_workspace` → 16D state,
   with a Rerun blueprint = wrist cameras + Feetech width series + a 3D
   `Spatial3DView` of each controller (axes + tip + rolling trail, left cyan /
   right magenta). Left **X** resets the workspace on the HMD pose (auto-inits on
@@ -161,15 +161,15 @@ Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
   the mock. Dry run:
 
   ```bash
-  PYTHONPATH=src python -m handumi.tracking.mock_quest_sender
-  PYTHONPATH=src python scripts/live_tracking.py --skip-cameras --skip-feetech
+  python -m handumi.tracking.mock_quest_sender
+  python -m handumi.capture.live_tracking_quest --skip-cameras --skip-feetech
   ```
 
   **Recording: implemented** as a dedicated script (the PICO and Quest record
   paths are split, not flag-toggled):
 
   ```bash
-  PYTHONPATH=src python scripts/record_handumi_quest.py --quest-ip <QUEST_LAN_IP>
+  python -m handumi.capture.record_handumi_quest --quest-ip <QUEST_LAN_IP>
   ```
 
   `handumi/capture/record_handumi_quest.py` writes the same 16D raw state plus
@@ -263,7 +263,7 @@ Implemented in Phase 2A (against the mock; pending validation on real hardware):
 - Python TCP/JSON receiver + UDP time-sync (`handumi.tracking.meta_quest`).
 - Tested calibration transforms (`handumi.tracking.transforms`).
 - Live loop merging Quest pose + Feetech width into the 16D raw state and a
-  Rerun 3D trajectory (`handumi.capture.live_tracking`).
+  Rerun 3D trajectory (`handumi.capture.live_tracking_quest`).
 - Quest recorder writing the 16D state + `observation.quest.*`
   (`handumi.capture.record_handumi_quest`).
 
@@ -355,7 +355,7 @@ Rerun: cameras + Feetech + 3D controller trajectory   (Phase 2A)
 Phase 2A live tracking script (Rerun only — no robot/Viser):
 
 ```bash
-PYTHONPATH=src python scripts/live_tracking.py \
+python -m handumi.capture.live_tracking_quest \
   --quest-ip <QUEST_LAN_IP> \
   --feetech-config configs/feetech.yaml
 ```
@@ -363,7 +363,7 @@ PYTHONPATH=src python scripts/live_tracking.py \
 **[2B, deferred]** live robot view (adds IK + Viser follow-along):
 
 ```bash
-PYTHONPATH=src python scripts/live_viser.py \
+python scripts/live_viser.py \
   --quest-ip <QUEST_LAN_IP> \
   --feetech-config configs/feetech.yaml \
   --embodiment piper
@@ -372,7 +372,7 @@ PYTHONPATH=src python scripts/live_viser.py \
 Recording is a separate, dedicated script:
 
 ```bash
-PYTHONPATH=src python scripts/record_handumi_quest.py \
+python -m handumi.capture.record_handumi_quest \
   --quest-ip <QUEST_LAN_IP> \
   --feetech-config configs/feetech.yaml
 ```
@@ -584,16 +584,16 @@ src/handumi/tracking/
   mock_quest_sender.py   # emits the TCP/JSON contract for offline dev/tests
 
 src/handumi/capture/
-  live_tracking.py          # Phase 2A: Quest + Feetech + Rerun trajectory (no robot)
+  live_tracking_quest.py          # Phase 2A: Quest + Feetech + Rerun trajectory (no robot)
   record_handumi_quest.py   # Phase 2A: dataset recorder (16D state + quest meta)
   record_handumi_pico.py    # PICO recorder (renamed from record_handumi.py)
   live_viser.py             # [2B] adds IK + ViserSim robot follow-along
 
 scripts/
-  live_tracking.py          record_handumi_quest.py   record_handumi_pico.py
+  live_tracking_quest.py          record_handumi_quest.py   record_handumi_pico.py
 
 tests/tracking/   tests/capture/
-  test_meta_quest.py  test_transforms.py  test_live_tracking.py
+  test_meta_quest.py  test_transforms.py  test_live_tracking_quest.py
   test_record_handumi_quest.py
 
 configs/
@@ -604,16 +604,16 @@ configs/
 ```
 
 Phase 2A is implemented end-to-end against the mock: `meta_quest.py`,
-`transforms.py`, `mock_quest_sender.py`, `live_tracking.py`,
+`transforms.py`, `mock_quest_sender.py`, `live_tracking_quest.py`,
 `record_handumi_quest.py`, and their tests. `live_viser.py` is **[2B]**. The
 headset app is the sideloaded YubiQuestApp (see [The Quest app](#the-quest-app)).
 
 Python scripts:
 
 ```text
-PYTHONPATH=src python scripts/live_tracking.py            # Phase 2A (visualize)
-PYTHONPATH=src python scripts/record_handumi_quest.py     # Phase 2A (record)
-PYTHONPATH=src python scripts/live_viser.py               # [2B]
+python -m handumi.capture.live_tracking_quest            # Phase 2A (visualize)
+python -m handumi.capture.record_handumi_quest     # Phase 2A (record)
+python scripts/live_viser.py               # [2B]
 ```
 
 Direct dependencies to add when implementing:
@@ -772,7 +772,7 @@ Phase 2A (motion tracking) is ready when:
 - Opening/closing each physical gripper updates Feetech width in Rerun.
 - Reset/calibration is explicit and repeatable, with confirmation surfaced on
   the workstation (no headset UI).
-- `PYTHONPATH=src python scripts/record_handumi_quest.py` writes the same 16D
+- `python -m handumi.capture.record_handumi_quest` writes the same 16D
   raw state layout used by the current dataset schema.
 - No gripper width is taken from Quest trigger values.
 

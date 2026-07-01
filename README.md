@@ -82,7 +82,7 @@ First set up and smoke-test per [README_quest.md](README_quest.md), then:
 
 ```bash
 # live visualization — Rerun 3D trajectory (uses quest_ip from the config)
-python -m handumi.capture.live_tracking
+python -m handumi.capture.live_tracking_quest
 
 # record a dataset (16D state + observation.quest.* poses/clocks)
 python -m handumi.capture.record_handumi_quest \

@@ -57,6 +57,7 @@ from handumi.feetech import (
     FeetechGripperPair,
     GripperWidths,
     load_config,
+    zero_gripper_widths,
 )
 from handumi.feetech.bus import FeetechUnavailableError
 from handumi.tracking.pico import (
@@ -257,19 +258,6 @@ def build_raw_state(pico_frame: dict, widths: GripperWidths) -> np.ndarray:
             np.array([widths.left, widths.right], dtype=np.float32),
         ]
     ).astype(np.float32)
-
-
-def zero_gripper_widths() -> GripperWidths:
-    return GripperWidths(
-        left=0.0,
-        right=0.0,
-        left_mm=0.0,
-        right_mm=0.0,
-        left_normalized=0.0,
-        right_normalized=0.0,
-        left_ticks=0,
-        right_ticks=0,
-    )
 
 
 def _identity_pose() -> np.ndarray:

@@ -23,6 +23,25 @@ class GripperWidths:
     left_ticks: int
     right_ticks: int
 
+    @classmethod
+    def zero(cls) -> "GripperWidths":
+        """All-zero widths, used when Feetech is skipped or unavailable."""
+        return cls(
+            left=0.0,
+            right=0.0,
+            left_mm=0.0,
+            right_mm=0.0,
+            left_normalized=0.0,
+            right_normalized=0.0,
+            left_ticks=0,
+            right_ticks=0,
+        )
+
+
+def zero_gripper_widths() -> GripperWidths:
+    """Backend-neutral zero widths (thin wrapper over :meth:`GripperWidths.zero`)."""
+    return GripperWidths.zero()
+
 
 class _EncoderUnwrapper:
     """Turn raw 0-4095 Feetech readings into a continuous tick stream.

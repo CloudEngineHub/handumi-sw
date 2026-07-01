@@ -232,19 +232,33 @@ During hardware setup, HandUMI uses direct scripts from the repo instead of
 installed CLIs. Once the hardware flow is stable, the validated commands can be
 promoted to packaged entrypoints.
 
-Setup scripts:
+Setup scripts (interactive hardware setup, kept as direct scripts):
 
 ```text
 scripts/setup/setup_ports.py
 scripts/setup/calibrate_grippers.py
+scripts/setup/home_servos.py
 ```
 
-Pipeline scripts:
+Capture entrypoints — run as modules (editable install, no PYTHONPATH):
 
 ```text
-scripts/record_handumi_pico.py         -> handumi.capture.record_handumi_pico
-scripts/record_handumi_quest.py        -> handumi.capture.record_handumi_quest
-scripts/live_tracking.py               -> handumi.capture.live_tracking
+python -m handumi.capture.teleoperate_handumi     # live monitor, no saving
+python -m handumi.capture.record_handumi_pico      # record: PICO tracking
+python -m handumi.capture.record_handumi_quest     # record: Meta Quest tracking
+python -m handumi.capture.live_tracking_quest       # Quest-only Rerun 3D viewer
+```
+
+The two tracking backends are deliberately separate: PICO
+(`handumi.tracking.pico`, via XRoboToolkit) and Meta Quest
+(`handumi.tracking.meta_quest`, via TCP/JSON + UDP sync). Each has its own
+recorder; the user picks the one matching the hardware they have. Both emit the
+same 16D raw state, so downstream (dataset, conversion) is backend-agnostic.
+
+Legacy robot/retarget scripts (offline dataset -> robot embodiment; kept for the
+Piper/arm path, not part of capture):
+
+```text
 scripts/process_handumi_to_lerobot.py  -> handumi.dataset.conversion
 scripts/replay_pico_ik.py              -> handumi.replay.pico_ik
 scripts/compare_axis.py                -> handumi.retargeting.compare_axis
@@ -254,7 +268,7 @@ scripts/piper/replay_from_dataset.py   -> handumi.replay.piper
 `python -m handumi.capture.teleoperate_handumi` is the LeRobot-style live
 inspection loop. It does not write a dataset; it streams cameras and Feetech
 aperture signals to Rerun so the operator can validate hardware before
-`scripts/record_handumi_pico.py` / `scripts/record_handumi_quest.py`.
+recording.
 
 Shell launchers:
 

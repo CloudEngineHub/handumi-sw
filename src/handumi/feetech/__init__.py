@@ -8,7 +8,7 @@ from handumi.feetech.calibration import (
     save_config,
     update_side,
 )
-from handumi.feetech.gripper import FeetechGripperPair, GripperWidths
+from handumi.feetech.gripper import FeetechGripperPair, GripperWidths, zero_gripper_widths
 
 __all__ = [
     "FeetechConfig",
@@ -19,4 +19,5 @@ __all__ = [
     "load_config",
     "save_config",
     "update_side",
+    "zero_gripper_widths",
 ]
