@@ -244,7 +244,9 @@ scripts/setup/calibrate_grippers.py
 Pipeline scripts:
 
 ```text
-scripts/record_handumi.py              -> handumi.capture.record_handumi
+scripts/record_handumi_pico.py         -> handumi.capture.record_handumi_pico
+scripts/record_handumi_quest.py        -> handumi.capture.record_handumi_quest
+scripts/live_tracking.py               -> handumi.capture.live_tracking
 scripts/process_handumi_to_lerobot.py  -> handumi.dataset.conversion
 scripts/replay_pico_ik.py              -> handumi.replay.pico_ik
 scripts/compare_axis.py                -> handumi.retargeting.compare_axis
@@ -254,7 +256,7 @@ scripts/piper/replay_from_dataset.py   -> handumi.replay.piper
 `python -m handumi.capture.teleoperate_handumi` is the LeRobot-style live
 inspection loop. It does not write a dataset; it streams cameras and Feetech
 aperture signals to Rerun so the operator can validate hardware before
-`scripts/record_handumi.py`.
+`scripts/record_handumi_pico.py` / `scripts/record_handumi_quest.py`.
 
 Shell launchers:
 

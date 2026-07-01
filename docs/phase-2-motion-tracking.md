@@ -85,10 +85,11 @@ Build the motion tracking in three sequential steps, using `../yubi-sw`
 (`airoa_quest/`) as the guide. Each step has a demonstrable outcome; do not
 start a step until the previous one's "Done when" holds.
 
-A native Quest app that emits the [TCP/JSON Payload](#tcpjson-payload) is a
-parallel build track (`clients/quest_app/`). Each Python step is developed
-first against `mock_quest_sender.py`, then validated against the real app — so
-the app does not block progress.
+The headset app is the **prebuilt YubiQuestApp** (sideloaded from yubi-sw — see
+[The Quest app](#the-quest-app)); we do not build one. Each Python step is
+developed first against `mock_quest_sender.py` (which emits the YubiQuestApp wire
+format), then validated against the real app — so the app does not block
+progress.
 
 ```text
 Step 1  The pose pipe       — get controller numbers into Python
@@ -109,6 +110,15 @@ Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
   against the real app, moving each controller changes raw `position` /
   `quaternion` and `tracked` / `valid`, and every sample carries both
   `device_time_ns` and `pc_monotonic_ns`. No transforms yet.
+- **Status: implemented.** Validate with the mock (two terminals):
+
+  ```bash
+  PYTHONPATH=src python -m handumi.tracking.mock_quest_sender
+  PYTHONPATH=src python -m handumi.tracking.meta_quest --quest-ip 127.0.0.1
+  ```
+
+  Tests: `python -m unittest discover -s tests/tracking`. For the real headset,
+  point `--quest-ip` (or `configs/tracking_meta_quest.yaml`) at the Quest LAN IP.
 
 ### Step 2 — The transforms (tested calibration)
 
@@ -121,20 +131,54 @@ Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
 - **Done when:** unit tests pass (known Unity inputs → expected outputs, plus
   round-trips); a captured reset re-centers the workspace; left/right poses sit
   correctly relative to the body when the receiver is fed real frames.
+- **Status: implemented.** `Pose` (compose/inverse/matrix), Unity→right-handed
+  conversion (yubi mapping, verified consistent with the position map),
+  `MountingOffsets` (controller→gripper-TCP, loads from
+  `configs/tracking_meta_quest.yaml`), `WorkspaceCalibration.from_reference`
+  (reset re-centering), and `gripper_pose_in_workspace` (full pipeline).
+  Tests: `python -m unittest discover -s tests/tracking` (22 transform tests).
 
 ### Step 3 — The live view (Feetech merge + Rerun trajectory)
 
 - **Goal:** the visible milestone — move the grippers, see the trajectory.
 - **Build:** `handumi/capture/live_tracking.py` (merge calibrated Quest poses +
   Feetech width into the 16D raw state; Rerun blueprint = wrist cameras +
-  Feetech series + 3D controller trajectory with rolling trails). Then wire
-  `record_handumi.py --tracking-backend meta_quest`.
+  Feetech series + 3D controller trajectory with rolling trails) and the
+  dedicated recorder `handumi/capture/record_handumi_quest.py`.
 - **yubi-sw guide:** the Rerun 3D trajectory image is the target look (see
   [Rerun 3D Trajectory View](#rerun-3d-trajectory-view)).
 - **Done when:** moving each gripper draws its trail in the Rerun 3D view;
   opening/closing updates Feetech width; recording writes the 16D layout; no
   gripper width comes from Quest triggers. (This is the Phase 2A acceptance
   bar.)
+- **Status: live view implemented.** `handumi/capture/live_tracking.py` +
+  `scripts/live_tracking.py`: receiver → `gripper_pose_in_workspace` → 16D state,
+  with a Rerun blueprint = wrist cameras + Feetech width series + a 3D
+  `Spatial3DView` of each controller (axes + tip + rolling trail, left cyan /
+  right magenta). Left **X** resets the workspace on the HMD pose (auto-inits on
+  first tracked frame). Pure logic (`pose_to_state_vector`, `TrajectoryTrail`,
+  calibration) is unit-tested; the full loop has a headless smoke test against
+  the mock. Dry run:
+
+  ```bash
+  PYTHONPATH=src python -m handumi.tracking.mock_quest_sender
+  PYTHONPATH=src python scripts/live_tracking.py --skip-cameras --skip-feetech
+  ```
+
+  **Recording: implemented** as a dedicated script (the PICO and Quest record
+  paths are split, not flag-toggled):
+
+  ```bash
+  PYTHONPATH=src python scripts/record_handumi_quest.py --quest-ip <QUEST_LAN_IP>
+  ```
+
+  `handumi/capture/record_handumi_quest.py` writes the same 16D raw state plus
+  per-frame Quest metadata (`observation.quest.*`: calibrated controller/HMD
+  poses, `tracked` flags, `device_time_ns` + `pc_monotonic_ns` + `seq` for
+  offline alignment). Left **X** resets the workspace; right **A** starts/stops
+  with `--button-control`. Covered by unit tests plus an end-to-end test that
+  records a real LeRobot episode from the mock. The PICO recorder is now
+  `scripts/record_handumi_pico.py`.
 
 ## Reference: yubi-sw motion tracking
 
@@ -180,10 +224,29 @@ Patterns to reuse from yubi-sw:
   HandUMI's controller is rigidly bolted to the gripper, so the equivalent
   fixed **controller→gripper-TCP offset** belongs in `transforms.py`.
 
-**Decided:** HandUMI uses the yubi-style **native Quest app over TCP/JSON**
-(plus UDP time-sync), not the `axol-vr` WebXR/WSS path. See [Decision](#decision)
-and [Transport & Network](#transport--network). `axol-vr` survives only as a
-secondary reference for button/state-machine logic.
+**Decided:** HandUMI uses the **prebuilt YubiQuestApp over TCP/JSON** (plus UDP
+time-sync), not the `axol-vr` WebXR/WSS path. We do not build a headset app — we
+reuse yubi's and parse its exact wire format. See [The Quest app](#the-quest-app),
+[Decision](#decision), and [Transport & Network](#transport--network). `axol-vr`
+survives only as a secondary reference for button/state-machine logic.
+
+## The Quest app
+
+We **reuse the prebuilt YubiQuestApp** from
+[yubi-sw](https://github.com/airoa-org/yubi-sw) rather than building our own. It
+streams OVR controller/HMD poses in the legacy TCP/JSON format documented in
+[TCP/JSON Payload](#tcpjson-payload); our receiver parses exactly those keys and
+`mock_quest_sender.py` emits them, so the Python side runs identically against
+the mock and the real headset.
+
+- **Install:** sideload the APK over USB with `adb` (Developer Mode required).
+  Full step-by-step is in the project README, *Motion Tracking (Phase 2)*.
+- **Compatibility:** our transport already mirrors yubi's (PC dials the Quest,
+  ports `65432`/`42000`, `<B Q>`/`<B Q Q>` UDP sync), so it lines up out of the
+  box. Verify field names on the first real run — the v0.1.0 APK is the source
+  of truth for the wire format.
+- **Building our own** HandUMI app (Unity/OVRPlugin) emitting the same contract
+  is a possible future step (`clients/quest_app/`), not needed for Phase 2A.
 
 ## Current Status
 
@@ -195,13 +258,19 @@ Already in `handumi-sw`:
 - `src/handumi/replay/pico_ik.py --visualize` can update a Viser robot.
 - `src/handumi/retargeting/compare_axis.py` uses Viser diagnostics.
 
-Missing:
+Implemented in Phase 2A (against the mock; pending validation on real hardware):
 
-- Meta Quest tracking backend.
-- Native Quest streaming app (yubi-style; streams controller/HMD poses).
-- Python TCP/JSON receiver + UDP time-sync for Quest frames.
-- Live loop that merges Quest pose + Feetech width into the 16D raw state.
-- Recording path that writes Quest poses into the 16D HandUMI raw state.
+- Python TCP/JSON receiver + UDP time-sync (`handumi.tracking.meta_quest`).
+- Tested calibration transforms (`handumi.tracking.transforms`).
+- Live loop merging Quest pose + Feetech width into the 16D raw state and a
+  Rerun 3D trajectory (`handumi.capture.live_tracking`).
+- Quest recorder writing the 16D state + `observation.quest.*`
+  (`handumi.capture.record_handumi_quest`).
+
+Remaining:
+
+- Sideload the prebuilt YubiQuestApp and validate the live path on the headset.
+- (Optional, later) a dedicated HandUMI Quest app.
 
 ## Decision
 
@@ -223,7 +292,7 @@ Why native-app over WebXR (`axol-vr`):
 
 Keep from `yubi-sw`:
 
-- Native Quest app (OVRPlugin) as the pose source.
+- The **prebuilt YubiQuestApp** as the pose source (sideloaded, not built).
 - TCP/JSON per-sample stream + UDP NTP-style time-sync.
 - Unity→robot coordinate conversion done in **tested Python at the boundary**.
 - Per-controller `tracked`/`valid` flags.
@@ -283,31 +352,29 @@ Rerun: cameras + Feetech + 3D controller trajectory   (Phase 2A)
 [2B] retargeting / IK -> ViserSim robot update          (deferred)
 ```
 
-Planned Phase 2A live tracking script (Rerun only — no robot/Viser):
+Phase 2A live tracking script (Rerun only — no robot/Viser):
 
 ```bash
 PYTHONPATH=src python scripts/live_tracking.py \
-  --tracking-backend meta_quest \
-  --feetech-config configs/feetech.yaml \
-  --port 8000
+  --quest-ip <QUEST_LAN_IP> \
+  --feetech-config configs/feetech.yaml
 ```
 
-Planned **[2B, deferred]** live robot view (adds IK + Viser follow-along):
+**[2B, deferred]** live robot view (adds IK + Viser follow-along):
 
 ```bash
 PYTHONPATH=src python scripts/live_viser.py \
-  --tracking-backend meta_quest \
+  --quest-ip <QUEST_LAN_IP> \
   --feetech-config configs/feetech.yaml \
-  --embodiment piper \
-  --port 8000
+  --embodiment piper
 ```
 
-Recording remains a separate mode:
+Recording is a separate, dedicated script:
 
 ```bash
-PYTHONPATH=src python scripts/record_handumi.py \
-  --config configs/handumi.yaml \
-  --tracking-backend meta_quest
+PYTHONPATH=src python scripts/record_handumi_quest.py \
+  --quest-ip <QUEST_LAN_IP> \
+  --feetech-config configs/feetech.yaml
 ```
 
 ## Tracking Contract
@@ -350,80 +417,65 @@ code in `transforms.py`.
 
 ## TCP/JSON Payload
 
-The Quest app sends one **newline-delimited JSON object per sample** over TCP.
-Poses are raw Unity coordinates; Python converts and timestamps on receive.
+This is the **YubiQuestApp legacy wire format** (the prebuilt app we reuse). The
+app sends one **newline-delimited JSON object per sample** over TCP. Vectors are
+`{x,y,z}` / `{x,y,z,w}` objects in **Unity** coordinates; Python converts and
+timestamps on receive. `handumi.tracking.meta_quest.parse_frame` reads exactly
+these keys (and `mock_quest_sender.py` emits them).
 
 ```json
 {
-  "type": "handumi_quest_frame",
-  "seq": 1234,
-  "device_time_ns": 123456789012345,
-  "delta_time_s": 0.0111,
-  "space": "stage",
-  "hmd": {
-    "tracked": true,
-    "position": [0.02, 1.10, 0.05],
-    "quaternion": [0.0, 0.0, 0.0, 1.0]
-  },
-  "left": {
-    "tracked": true,
-    "valid": true,
-    "position": [-0.18, 0.95, 0.32],
-    "quaternion": [0.01, 0.72, 0.02, 0.69],
-    "buttons": {
-      "trigger": 0.0,
-      "grip": 0.0,
-      "thumbstick": [0.0, 0.0],
-      "thumbstick_click": false,
-      "primary": false,
-      "secondary": false
-    }
-  },
-  "right": {
-    "tracked": true,
-    "valid": true,
-    "position": [0.20, 0.95, 0.30],
-    "quaternion": [0.0, 0.70, 0.0, 0.71],
-    "buttons": {
-      "trigger": 0.0,
-      "grip": 0.0,
-      "thumbstick": [0.0, 0.0],
-      "thumbstick_click": false,
-      "primary": false,
-      "secondary": false
-    }
-  },
-  "battery": {
-    "hmd_pct": 87,
-    "left_pct": 90,
-    "right_pct": 92,
-    "hmd_charging": false
-  }
+  "ovrTimeNs": 123456789012345,
+  "deltaTime": 0.0111,
+  "hmdPosition": {"x": 0.02, "y": 1.10, "z": 0.05},
+  "hmdRotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+  "leftControllerPosition": {"x": -0.18, "y": 0.95, "z": 0.32},
+  "leftControllerRotation": {"x": 0.01, "y": 0.72, "z": 0.02, "w": 0.69},
+  "leftTracked": true,
+  "leftValid": true,
+  "leftJoystick": {"x": 0.0, "y": 0.0},
+  "leftThumbstickClick": false,
+  "leftTriggerPressed": false,
+  "leftGripPressed": false,
+  "buttonXPressed": false,
+  "buttonYPressed": false,
+  "rightControllerPosition": {"x": 0.20, "y": 0.95, "z": 0.30},
+  "rightControllerRotation": {"x": 0.0, "y": 0.70, "z": 0.0, "w": 0.71},
+  "rightTracked": true,
+  "rightValid": true,
+  "rightJoystick": {"x": 0.0, "y": 0.0},
+  "rightThumbstickClick": false,
+  "rightTriggerPressed": false,
+  "rightGripPressed": false,
+  "buttonAPressed": false,
+  "buttonBPressed": false,
+  "hmdBattPct": 87,
+  "leftBattPct": 90,
+  "rightBattPct": 92,
+  "hmdCharging": false
 }
 ```
 
-Field notes:
+Field notes (how `parse_frame` maps them):
 
-- `position` is meters, `quaternion` is `[x, y, z, w]`, both in **Unity
-  left-handed** coordinates. Python converts at the boundary.
-- `device_time_ns` is the Quest monotonic clock at sample generation (OVR
-  runtime clock). Python adds `pc_monotonic_ns = time.monotonic_ns()` on
-  receive and stores both; the UDP sync channel gives the offset between them.
-- `seq` is a per-sample counter for loss detection (0 if the app omits it).
-- `left.primary/secondary` = X/Y; `right.primary/secondary` = A/B.
-- `tracked` = OVR is tracking this device; `valid` = pose is usable this frame.
-  When either is false, mark the pose unreliable (hold last good / flag in
-  Rerun) rather than feeding a stale or garbage pose downstream.
+- Positions are meters, rotations `[x, y, z, w]`, both **Unity left-handed**.
+  Python converts at the boundary (`transforms.unity_pose_to_handumi`).
+- `ovrTimeNs` → `device_time_ns` (Quest monotonic clock). Python adds
+  `pc_monotonic_ns = time.monotonic_ns()` on receive; the UDP sync channel gives
+  the offset between them.
+- `deltaTime` → `delta_time_s`. There is **no `seq`** in the legacy format, so
+  `seq` defaults to 0.
+- `buttonX/Y/A/BPressed` → `primary`/`secondary` (X/Y left, A/B right). Trigger
+  and grip arrive as *pressed booleans only* (no analog), surfaced as 0.0/1.0.
+- `*Tracked` = OVR is tracking this device; `*Valid` = pose usable this frame.
+  When either is false, the pose is treated as unreliable downstream.
 
 Rules:
 
-- If a controller pose is unavailable, set `tracked: false` (and `valid: false`).
-- Keep `trigger` and `grip` analog values for UI/debug only.
-- **Do not use `trigger` or `grip` as gripper width.** Width comes from Feetech
-  in Python and is merged after the frame is received.
-- The `state` machine is owned by Python, not sent in this frame (see
-  [Button Mapping](#button-mapping)); the app forwards raw button states and
-  Python derives transitions.
+- **Do not use trigger/grip as gripper width.** Width comes from Feetech in
+  Python and is merged after the frame is received.
+- The `state` machine is owned by Python (see [Button Mapping](#button-mapping));
+  the app forwards raw button states and Python derives transitions.
 
 ## Button Mapping
 
@@ -517,9 +569,10 @@ WSS / HTTPS secure-context plumbing
 ROS 2 message/topic machinery from yubi (keep the patterns, drop rclpy)
 ```
 
-The Quest **app itself** (Unity/OVRPlugin APK that emits the TCP/JSON above) is a
-separate build component. Phase 2A's Python is developed against the contract
-with a mock sender, then the real app is swapped in without changing Python.
+The Quest **app itself** is the prebuilt **YubiQuestApp** (sideloaded), which
+already emits the TCP/JSON above. Phase 2A's Python is developed against the
+contract with a mock sender, then the real app is swapped in without changing
+Python.
 
 ## Proposed Files
 
@@ -531,29 +584,35 @@ src/handumi/tracking/
   mock_quest_sender.py   # emits the TCP/JSON contract for offline dev/tests
 
 src/handumi/capture/
-  live_tracking.py       # Phase 2A: Quest + Feetech + Rerun trajectory (no robot)
-  live_viser.py          # [2B] adds IK + ViserSim robot follow-along
+  live_tracking.py          # Phase 2A: Quest + Feetech + Rerun trajectory (no robot)
+  record_handumi_quest.py   # Phase 2A: dataset recorder (16D state + quest meta)
+  record_handumi_pico.py    # PICO recorder (renamed from record_handumi.py)
+  live_viser.py             # [2B] adds IK + ViserSim robot follow-along
 
-tests/tracking/
-  test_transforms.py     # Unity<->workspace conversions, mounting offset
+scripts/
+  live_tracking.py          record_handumi_quest.py   record_handumi_pico.py
+
+tests/tracking/   tests/capture/
+  test_meta_quest.py  test_transforms.py  test_live_tracking.py
+  test_record_handumi_quest.py
 
 configs/
   tracking_meta_quest.yaml   # quest_ip, tcp_port, sync_port, calibration
 
-clients/quest_app/         # native Unity/OVRPlugin app (separate build) that
-                           #   emits the TCP/JSON contract above
+# Headset app: reuse the prebuilt YubiQuestApp (sideload). Building a dedicated
+# clients/quest_app/ (Unity/OVRPlugin) is an optional future step.
 ```
 
-Phase 2A builds `meta_quest.py`, `transforms.py`, `mock_quest_sender.py`,
-`live_tracking.py`, and the transform tests. `live_viser.py` is **[2B]**. The
-native `clients/quest_app/` is its own build track, developed against the same
-contract.
+Phase 2A is implemented end-to-end against the mock: `meta_quest.py`,
+`transforms.py`, `mock_quest_sender.py`, `live_tracking.py`,
+`record_handumi_quest.py`, and their tests. `live_viser.py` is **[2B]**. The
+headset app is the sideloaded YubiQuestApp (see [The Quest app](#the-quest-app)).
 
 Python scripts:
 
 ```text
-PYTHONPATH=src python scripts/live_tracking.py            # Phase 2A
-PYTHONPATH=src python scripts/record_handumi.py --tracking-backend meta_quest
+PYTHONPATH=src python scripts/live_tracking.py            # Phase 2A (visualize)
+PYTHONPATH=src python scripts/record_handumi_quest.py     # Phase 2A (record)
 PYTHONPATH=src python scripts/live_viser.py               # [2B]
 ```
 
@@ -713,8 +772,8 @@ Phase 2A (motion tracking) is ready when:
 - Opening/closing each physical gripper updates Feetech width in Rerun.
 - Reset/calibration is explicit and repeatable, with confirmation surfaced on
   the workstation (no headset UI).
-- `PYTHONPATH=src python scripts/record_handumi.py --tracking-backend meta_quest` writes the same 16D raw state
-  layout used by the current dataset schema.
+- `PYTHONPATH=src python scripts/record_handumi_quest.py` writes the same 16D
+  raw state layout used by the current dataset schema.
 - No gripper width is taken from Quest trigger values.
 
 Phase 2B (deferred) adds: the Viser robot follows the controller-mounted
