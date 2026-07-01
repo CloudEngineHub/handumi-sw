@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 
 from handumi.feetech.bus import FeetechBus
-from handumi.feetech.calibration import default_config, resolve_config_path
+from handumi.feetech.calibration import PORTS_PATH, default_config
 
 
 def main() -> None:
@@ -21,17 +21,13 @@ def main() -> None:
     parser.add_argument("--end-id", type=int, default=20)
     args = parser.parse_args()
 
-    # Seed the machine-local config from the repo template so there is a writable
-    # file to record the id->port mapping into (ports are machine-specific).
-    config_path = resolve_config_path(seed=True)
-
     try:
         while True:
             _clear()
             print(f"=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
             _print_serial_ports(range(args.start_id, args.end_id + 1))
             _print_camera_ports()
-            print(f"\nEdit servo_id/port in: {config_path}")
+            print(f"\nEdit servo_id/port in: {PORTS_PATH} (Feetech), configs/cameras.yaml (cameras)")
             if args.once:
                 break
             time.sleep(args.interval_s)

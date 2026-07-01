@@ -1,21 +1,20 @@
 """Feetech servo encoder readout and aperture calibration utilities."""
 
 from handumi.feetech.calibration import (
-    REPO_TEMPLATE_PATH,
+    PORTS_PATH,
     FeetechConfig,
     GripperCalibration,
     assert_calibrated,
     default_config,
     load_config,
-    resolve_config_path,
-    save_config,
-    update_side,
-    user_config_path,
+    load_ports,
+    save_calibration,
+    user_calibration_path,
 )
 from handumi.feetech.gripper import FeetechGripperPair, GripperWidths, zero_gripper_widths
 
 __all__ = [
-    "REPO_TEMPLATE_PATH",
+    "PORTS_PATH",
     "FeetechConfig",
     "FeetechGripperPair",
     "GripperCalibration",
@@ -23,9 +22,8 @@ __all__ = [
     "assert_calibrated",
     "default_config",
     "load_config",
-    "resolve_config_path",
-    "save_config",
-    "update_side",
-    "user_config_path",
+    "load_ports",
+    "save_calibration",
+    "user_calibration_path",
     "zero_gripper_widths",
 ]

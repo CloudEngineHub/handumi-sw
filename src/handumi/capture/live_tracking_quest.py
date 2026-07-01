@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 
 from handumi.dataset.raw import HANDUMI_RAW_STATE_SIZE, pose_to_state_vector
+from handumi.feetech import PORTS_PATH
 from handumi.tracking.meta_quest import (
     MetaQuestConfig,
     MetaQuestReceiver,
@@ -326,7 +327,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--quest-ip", type=str, default=None, help="Override quest_ip from config.")
     p.add_argument("--tcp-port", type=int, default=None)
     p.add_argument("--sync-port", type=int, default=None)
-    p.add_argument("--feetech-config", type=Path, default=None)
+    p.add_argument("--feetech-config", type=Path, default=PORTS_PATH, help="Feetech ports file.")
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
     p.add_argument("--camera-config", type=Path, default=Path("configs/cameras.yaml"))
@@ -440,10 +441,10 @@ def _connect_feetech(args):
     if args.skip_feetech:
         log.info("Feetech disabled: gripper widths will be zero-filled.")
         return None
-    from handumi.feetech import FeetechGripperPair, load_config, resolve_config_path
+    from handumi.feetech import FeetechGripperPair, assert_calibrated, load_config, user_calibration_path
     from handumi.feetech.bus import FeetechUnavailableError
 
-    feetech_config = load_config(resolve_config_path(args.feetech_config))
+    feetech_config = load_config(args.feetech_config)
     if args.feetech_port is not None:
         feetech_config = type(feetech_config)(
             port=args.feetech_port,
@@ -452,6 +453,7 @@ def _connect_feetech(args):
             left=feetech_config.left,
             right=feetech_config.right,
         )
+    assert_calibrated(feetech_config, source=user_calibration_path())
     grippers = FeetechGripperPair(feetech_config)
     try:
         grippers.open()

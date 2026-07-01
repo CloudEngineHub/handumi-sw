@@ -9,11 +9,12 @@ from pathlib import Path
 
 from handumi.feetech.bus import FeetechBus
 from handumi.feetech.calibration import (
+    PORTS_PATH,
     FeetechConfig,
     GripperCalibration,
     load_config,
-    resolve_config_path,
-    save_config,
+    save_calibration,
+    user_calibration_path,
 )
 
 
@@ -36,8 +37,14 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
+        default=PORTS_PATH,
+        help="Ports file (servo_id/port).",
+    )
+    parser.add_argument(
+        "--calibration-config",
+        type=Path,
         default=None,
-        help="Override the config path (default: per-user cache, see resolve_config_path).",
+        help="Override the calibration cache path (default: per-user cache).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -56,15 +63,14 @@ def main() -> None:
     calibrate.set_defaults(func=cmd_calibrate)
 
     args = parser.parse_args()
-    # Read from / write to the machine-local cache (seeded from the repo template
-    # on first use); an explicit --config still wins.
-    args.config = resolve_config_path(args.config, seed=True)
-    print(f"Using config: {args.config}")
+    args.calibration_config = args.calibration_config or user_calibration_path()
+    print(f"Using ports: {args.config}")
+    print(f"Using calibration cache: {args.calibration_config}")
     args.func(args)
 
 
 def cmd_monitor(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
+    config = load_config(args.config, args.calibration_config)
     left_port = _side_port(config, config.left, "left")
     right_port = _side_port(config, config.right, "right")
     monitors: list[Monitor] = []
@@ -92,7 +98,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
 
 
 def cmd_calibrate(args: argparse.Namespace) -> None:
-    current = load_config(args.config)
+    current = load_config(args.config, args.calibration_config)
     sides = ["left", "right"] if args.side == "both" else [args.side]
     side_width = {"left": args.left_max_width_mm, "right": args.right_max_width_mm}
 
@@ -120,8 +126,8 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
         left=results["left"],
         right=results["right"],
     )
-    save_config(config, args.config)
-    print(f"Saved {args.config}")
+    saved_path = save_calibration(config, args.calibration_config)
+    print(f"Saved calibration to {saved_path}")
     for side in sides:
         c = results[side]
         print(f"{side}: closed={c.closed_ticks}, open={c.open_ticks}, max_width_mm={c.max_width_mm}")

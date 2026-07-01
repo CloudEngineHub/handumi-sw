@@ -1,48 +1,37 @@
-"""Calibration helpers for HandUMI Feetech gripper encoders."""
+"""Calibration helpers for HandUMI Feetech gripper encoders.
+
+Two concerns, two homes:
+
+- **Ports** (``servo_id``, ``port``) are per-machine wiring that can change on
+  every replug/reboot. They live in the tracked ``configs/feetech.yaml``,
+  edited directly — the same pattern as ``configs/cameras.yaml``.
+- **Calibration** (``closed_ticks``, ``open_ticks``, ``max_width_mm``) is a
+  measured property of the physical gripper that rarely changes once set. It
+  lives in a per-user cache so it is never committed and each laptop
+  calibrates once. See :func:`user_calibration_path`.
+
+:func:`load_config` merges both into the single :class:`FeetechConfig` the
+rest of the codebase (bus/gripper/recorders) works with.
+"""
 
 from __future__ import annotations
 
 import os
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-# The repo ships a checked-in template; the real, machine-specific calibration
-# (ports + tick ranges) lives in a per-user cache so it is never committed and
-# each laptop calibrates once. See resolve_config_path().
-REPO_TEMPLATE_PATH = Path("configs/feetech.yaml")
+PORTS_PATH = Path("configs/feetech.yaml")
 
 
-def user_config_path() -> Path:
-    """Per-user Feetech config path: ``$XDG_CACHE_HOME/handumi/feetech.yaml``
-    (falling back to ``~/.cache/handumi/feetech.yaml``)."""
+def user_calibration_path() -> Path:
+    """Per-user calibration cache: ``$XDG_CACHE_HOME/handumi/calibration.yaml``
+    (falling back to ``~/.cache/handumi/calibration.yaml``)."""
     base = os.environ.get("XDG_CACHE_HOME")
     root = Path(base).expanduser() if base else Path.home() / ".cache"
-    return root / "handumi" / "feetech.yaml"
-
-
-def resolve_config_path(explicit: Path | None = None, *, seed: bool = False) -> Path:
-    """Resolve which Feetech config file to use.
-
-    Precedence: explicit ``--config`` override > per-user cache > repo template.
-    With ``seed=True`` (used by the setup/calibration tools that write back), the
-    user cache is created from the repo template on first use so there is always
-    a writable, machine-local file to calibrate into.
-    """
-    if explicit is not None:
-        return explicit
-    cache = user_config_path()
-    if cache.exists():
-        return cache
-    if seed:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        if REPO_TEMPLATE_PATH.exists():
-            shutil.copy(REPO_TEMPLATE_PATH, cache)
-        return cache
-    return REPO_TEMPLATE_PATH
+    return root / "handumi" / "calibration.yaml"
 
 
 @dataclass(frozen=True)
@@ -77,25 +66,6 @@ class GripperCalibration:
     def width_m(self, ticks: int) -> float:
         return self.width_mm(ticks) / 1000.0
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "servo_id": self.servo_id,
-            "port": self.port,
-            "closed_ticks": self.closed_ticks,
-            "open_ticks": self.open_ticks,
-            "max_width_mm": self.max_width_mm,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "GripperCalibration":
-        return cls(
-            servo_id=int(data["servo_id"]),
-            port=_optional_str(data.get("port")),
-            closed_ticks=_optional_int(data.get("closed_ticks")),
-            open_ticks=_optional_int(data.get("open_ticks")),
-            max_width_mm=_read_max_width_mm(data),
-        )
-
 
 @dataclass(frozen=True)
 class FeetechConfig:
@@ -104,15 +74,6 @@ class FeetechConfig:
     protocol_version: int
     left: GripperCalibration
     right: GripperCalibration
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "port": self.port,
-            "baudrate": self.baudrate,
-            "protocol_version": self.protocol_version,
-            "left": self.left.to_dict(),
-            "right": self.right.to_dict(),
-        }
 
 
 def default_config() -> FeetechConfig:
@@ -145,7 +106,12 @@ def assert_calibrated(config: FeetechConfig, *, source: Path | None = None) -> N
     )
 
 
-def load_config(path: Path) -> FeetechConfig:
+def load_ports(path: Path = PORTS_PATH) -> FeetechConfig:
+    """Load servo_id/port/baudrate/protocol_version from the tracked ports file.
+
+    Calibration fields (closed/open ticks, max_width_mm) are always ``None``
+    here; use :func:`load_config` to get the full, merged runtime config.
+    """
     if not path.exists():
         return default_config()
     with path.open("r", encoding="utf-8") as fh:
@@ -154,40 +120,71 @@ def load_config(path: Path) -> FeetechConfig:
         port=_optional_str(data.get("port")),
         baudrate=int(data.get("baudrate", 1_000_000)),
         protocol_version=int(data.get("protocol_version", 0)),
-        left=GripperCalibration.from_dict(data.get("left", {"servo_id": 0})),
-        right=GripperCalibration.from_dict(data.get("right", {"servo_id": 1})),
+        left=_port_only_calibration(data.get("left", {}), default_servo_id=0),
+        right=_port_only_calibration(data.get("right", {}), default_servo_id=1),
     )
 
 
-def save_config(config: FeetechConfig, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        yaml.safe_dump(config.to_dict(), fh, sort_keys=False)
+def load_calibration_values(path: Path) -> dict[str, dict[str, Any]]:
+    """Load ``{side: {closed_ticks, open_ticks, max_width_mm}}`` from the
+    per-user calibration cache. Missing file/side -> empty dict (uncalibrated)."""
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    return {side: data.get(side) or {} for side in ("left", "right")}
 
 
-def update_side(
-    config: FeetechConfig,
-    *,
-    side: str,
-    calibration: GripperCalibration,
+def load_config(
+    ports_path: Path = PORTS_PATH, calibration_path: Path | None = None
 ) -> FeetechConfig:
-    if side == "left":
-        return FeetechConfig(
-            config.port,
-            config.baudrate,
-            config.protocol_version,
-            calibration,
-            config.right,
+    """Merge the tracked ports file with the per-user calibration cache into
+    the full runtime :class:`FeetechConfig`."""
+    ports = load_ports(ports_path)
+    values = load_calibration_values(calibration_path or user_calibration_path())
+
+    def merged(side_ports: GripperCalibration, side: str) -> GripperCalibration:
+        v = values.get(side, {})
+        return GripperCalibration(
+            servo_id=side_ports.servo_id,
+            port=side_ports.port,
+            closed_ticks=_optional_int(v.get("closed_ticks")),
+            open_ticks=_optional_int(v.get("open_ticks")),
+            max_width_mm=_read_max_width_mm(v),
         )
-    if side == "right":
-        return FeetechConfig(
-            config.port,
-            config.baudrate,
-            config.protocol_version,
-            config.left,
-            calibration,
-        )
-    raise ValueError(f"Unknown side {side!r}; expected 'left' or 'right'.")
+
+    return FeetechConfig(
+        port=ports.port,
+        baudrate=ports.baudrate,
+        protocol_version=ports.protocol_version,
+        left=merged(ports.left, "left"),
+        right=merged(ports.right, "right"),
+    )
+
+
+def save_calibration(config: FeetechConfig, path: Path | None = None) -> Path:
+    """Persist only the measured calibration (closed/open ticks, max_width_mm)
+    to the per-user cache. Ports are untouched — they live in ``configs/feetech.yaml``."""
+    path = path or user_calibration_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        side: {
+            "closed_ticks": getattr(config, side).closed_ticks,
+            "open_ticks": getattr(config, side).open_ticks,
+            "max_width_mm": getattr(config, side).max_width_mm,
+        }
+        for side in ("left", "right")
+    }
+    with path.open("w", encoding="utf-8") as fh:
+        yaml.safe_dump(data, fh, sort_keys=False)
+    return path
+
+
+def _port_only_calibration(data: dict[str, Any], *, default_servo_id: int) -> GripperCalibration:
+    return GripperCalibration(
+        servo_id=int(data.get("servo_id", default_servo_id)),
+        port=_optional_str(data.get("port")),
+    )
 
 
 def _optional_int(value: Any) -> int | None:

@@ -24,10 +24,10 @@ from pathlib import Path
 
 from handumi.feetech.bus import FeetechBus
 from handumi.feetech.calibration import (
+    PORTS_PATH,
     FeetechConfig,
     GripperCalibration,
-    load_config,
-    resolve_config_path,
+    load_ports,
 )
 
 _ENCODER_CENTER = 2048
@@ -41,8 +41,8 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=None,
-        help="Override the config path (default: per-user cache, see resolve_config_path).",
+        default=PORTS_PATH,
+        help="Ports file (servo_id/port); homing doesn't touch calibration.",
     )
     parser.add_argument(
         "--side",
@@ -53,9 +53,8 @@ def main() -> None:
     parser.add_argument("--interval-s", type=float, default=0.1)
     args = parser.parse_args()
 
-    config_path = resolve_config_path(args.config, seed=True)
-    print(f"Using config: {config_path}")
-    config = load_config(config_path)
+    print(f"Using ports: {args.config}")
+    config = load_ports(args.config)
     sides = ["left", "right"] if args.side == "both" else [args.side]
     for side in sides:
         calibration = getattr(config, side)
@@ -72,7 +71,7 @@ def main() -> None:
     print(
         "\nDone. Reassemble the gripper(s), then recalibrate so closed/open match "
         "the new centred range:\n"
-        "  PYTHONPATH=src python scripts/setup/calibrate_grippers.py calibrate"
+        "  python scripts/setup/calibrate_grippers.py calibrate"
     )
 
 

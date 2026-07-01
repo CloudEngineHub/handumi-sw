@@ -1,29 +1,20 @@
-# Feetech gripper config TEMPLATE (checked in).
+# Feetech serial port assignment — machine-specific, edit for your rig
+# (same pattern as configs/cameras.yaml). Find ports/ids with:
+#   python scripts/setup/setup_ports.py
 #
-# The real, machine-specific config (serial ports + calibrated tick ranges)
-# lives in a per-user cache and is NOT committed:
-#     ${XDG_CACHE_HOME:-~/.cache}/handumi/feetech.yaml
-#
-# The setup tools seed that cache from this template on first run and write
-# back to it, so each laptop calibrates once. Do not put real calibration here;
-# edit the cache file (or pass --config / --feetech-config to override).
-#
-#   python scripts/setup/setup_ports.py          # find id->port, seeds the cache
-#   python scripts/setup/home_servos.py          # centre the encoder range
+# Gripper-width calibration (open/closed ticks, max width in mm) is NOT here —
+# it's a measured property of the physical gripper, not the wiring, and lives
+# in a per-user cache so it's never committed:
+#   ${XDG_CACHE_HOME:-~/.cache}/handumi/calibration.yaml
+# Calibrate via:
+#   python scripts/setup/home_servos.py
 #   python scripts/setup/calibrate_grippers.py calibrate
 
-port: null
 baudrate: 1000000
 protocol_version: 0
 left:
   servo_id: 0
-  port: /dev/ttyACM0   # example — set to your actual port
-  closed_ticks: null
-  open_ticks: null
-  max_width_mm: null
+  port: /dev/ttyACM1
 right:
   servo_id: 1
-  port: /dev/ttyACM1   # example — set to your actual port
-  closed_ticks: null
-  open_ticks: null
-  max_width_mm: null
+  port: /dev/ttyACM0
