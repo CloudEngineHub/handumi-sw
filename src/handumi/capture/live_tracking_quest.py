@@ -50,6 +50,7 @@ log = logging.getLogger("handumi.live_tracking_quest")
 
 LEFT_COLOR = (0, 255, 255)  # cyan — matches Feetech left series
 RIGHT_COLOR = (255, 0, 255)  # magenta — matches Feetech right series
+ORIGIN_COLOR = (255, 255, 0)  # yellow — the workspace origin (HMD pose at last reset)
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +149,26 @@ def _send_blueprint() -> None:
     rr.send_blueprint(blueprint, make_active=True, make_default=True)
 
 
+def _log_workspace_origin() -> None:
+    """Mark the workspace origin (the HMD pose captured at the last reset).
+
+    Both controllers are logged relative to this same point, but it is never
+    itself drawn — only each controller's *current* pose gets an axis gizmo, so
+    the shared reference is invisible otherwise. By definition the origin is
+    always at [0,0,0] in the workspace frame, so this needs no pose input.
+    """
+    import rerun as rr
+
+    rr.log(
+        "tracking/origin",
+        rr.Transform3D(translation=[0.0, 0.0, 0.0], axis_length=0.15),
+    )
+    rr.log(
+        "tracking/origin/marker",
+        rr.Points3D([[0.0, 0.0, 0.0]], colors=[ORIGIN_COLOR], radii=0.018),
+    )
+
+
 def _log_pose(path: str, pose: Pose, color: tuple[int, int, int], trail: TrajectoryTrail) -> None:
     import rerun as rr
 
@@ -242,6 +263,8 @@ def run_live_tracking(
                 workspace_set = True
                 left_trail.clear()
                 right_trail.clear()
+                if rerun_enabled:
+                    _log_workspace_origin()
                 log.info("Workspace %s on HMD pose.", "reset" if reset_edge else "initialized")
 
             left_tracked = frame.left.tracked and frame.left.valid

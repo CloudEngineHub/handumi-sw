@@ -120,9 +120,11 @@ server is up only while the app runs in the foreground **with the headset on**.
 python -m handumi.capture.live_tracking_quest --skip-cameras --skip-feetech
 ```
 
-Move the controllers and their trails draw — **left cyan, right magenta**. The
-**left X button** re-centres the workspace on the current HMD pose (also auto-set
-on the first tracked frame).
+Move the controllers and their trails draw — **left cyan, right magenta**. A
+**yellow marker** shows the workspace origin (the HMD pose captured at the last
+reset) — both trails are positions *relative to that one fixed point*, not to
+each other or to the live head position. The **left X button** re-centres the
+workspace on the current HMD pose (also auto-set on the first tracked frame).
 
 > Headless/SSH? Point at a remote Rerun viewer:
 > `--display-ip <viewer-host> --display-port <port>` (or `--no-rerun-spawn`).
