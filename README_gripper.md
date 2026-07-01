@@ -1,8 +1,7 @@
 # Gripper Setup (Feetech + Cameras)
 
-One-time hardware setup: identify serial ports, home the Feetech servos, and
-calibrate gripper width. Do this before teleoperating or recording. Once done,
-the run commands live in the main [README.md](README.md).
+One-time hardware setup before teleoperating or recording: serial ports, servo
+homing, gripper-width calibration. Run commands live in [README.md](README.md).
 
 ## 1. Identify Ports
 
@@ -50,22 +49,21 @@ Open/close each gripper and confirm `ticks` changes.
 
 ## 3. Home Servos (centre the encoder range)
 
-The Feetech encoder reports position modulo 4096 and wraps at the 0/4095 seam.
-If a gripper's travel crosses that seam, the width readout flips or saturates.
-Homing stores a correction so the current shaft angle reads 2048 (centre):
+The encoder wraps at the 0/4095 seam; travel crossing it makes the width readout
+flip or saturate. Homing stores a correction so the current shaft angle reads
+2048 (centre), clearing the range of the seam:
 
 ```bash
 python scripts/setup/home_servos.py              # both sides
 python scripts/setup/home_servos.py --side right # one side
 ```
 
-Hold the gripper at **mid-travel** (half open, ~2040 ticks) and press ENTER so
-the full range sits clear of the seam. The script reads the position back and
-reports `OK` / `CHECK`. Always re-calibrate afterwards (closed/open shift).
+Hold the gripper at **mid-travel** (~2040 ticks), press ENTER; the script reports
+`OK` / `CHECK`. Re-calibrate afterwards.
 
-A software unwrap in `handumi.feetech.gripper` also tracks wraps continuously,
-so even an un-homed range is fine as long as recording **starts with the
-grippers roughly closed** (away from the seam).
+A software unwrap in `handumi.feetech.gripper` also tracks wraps continuously, so
+an un-homed range is fine as long as recording **starts with the grippers roughly
+closed**.
 
 ## 4. Calibrate Gripper Width
 

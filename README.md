@@ -92,12 +92,9 @@ python -m handumi.capture.record_handumi_quest \
   --task "quest tracking test" --num-episodes 1 --episode-time-s 20
 ```
 
-Move the controllers and their trajectories draw in the Rerun 3D view. Add
-`--skip-cameras` / `--skip-feetech` to run without that hardware.
-
-Controls (no headset UI — feedback is on the workstation): **left X** resets the
-workspace on the current HMD pose (also auto-set on the first tracked frame);
-**right A** starts/stops an episode when recording with `--button-control`.
+Add `--skip-cameras` / `--skip-feetech` to run without that hardware. Controls
+(no headset UI): **left X** resets the workspace on the current HMD pose;
+**right A** starts/stops an episode with `--button-control`.
 
 ## Inspect Dataset
 
