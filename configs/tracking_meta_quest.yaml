@@ -6,16 +6,16 @@
 backend: "meta_quest"
 
 connection:
-  quest_ip: "10.104.18.172"   # Quest LAN IP (pin it; DHCP can change it)
-  tcp_port: 65432          # pose stream (newline-delimited JSON)
-  sync_port: 42000         # NTP-style UDP time-sync
+  quest_ip: "10.104.18.172" # Quest LAN IP (pin it; DHCP can change it)
+  tcp_port: 65432 # pose stream (newline-delimited JSON)
+  sync_port: 42000 # NTP-style UDP time-sync
   connect_retry_s: 1.0
 
 streams:
   left: true
   right: true
-  hmd: true                # used as the body/chest reference frame
-  buttons: true            # forwarded raw; Python owns the state machine
+  hmd: true # used as the body/chest reference frame
+  buttons: true # forwarded raw; Python owns the state machine
 
 # Explicit, unit-tested calibration applied in handumi.tracking.transforms.
 calibration:
@@ -45,6 +45,20 @@ calibration:
   #     reference point, not the moving fingertip
   #   - both stances were held by hand (not a rig) — re-measure and average
   #     if IK orientation looks off
+  # NOTE: left/right Y position must be mirrored (opposite sign), not equal —
+  # the two mounts are physical mirror images of each other. An equal sign on
+  # both sides pushes both TCPs to the same physical side instead of
+  # mirroring them, which showed up as ~12cm of unwanted lateral offset
+  # between the arms (confirmed by mirroring a synthetic symmetric stance
+  # through both offsets and checking the resulting TCPs coincide).
   controller_to_gripper_tcp:
-    left:  { position: [0.140, 0.0, 0.0], quaternion: [-0.0187, 0.5206, -0.3650, 0.7716] }
-    right: { position: [0.140, 0.0, 0.0], quaternion: [0.0112, 0.5325, 0.3246, 0.7816] }
+    left:
+      {
+        position: [0.140, -0.060, 0.0],
+        quaternion: [-0.0187, 0.5206, -0.3650, 0.7716],
+      }
+    right:
+      {
+        position: [0.140, 0.060, 0.0],
+        quaternion: [0.0112, 0.5325, 0.3246, 0.7816],
+      }
