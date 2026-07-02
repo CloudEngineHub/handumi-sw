@@ -129,6 +129,9 @@ workspace on the current HMD pose (also auto-set on the first tracked frame).
 > Headless/SSH? Point at a remote Rerun viewer:
 > `--display-ip <viewer-host> --display-port <port>` (or `--no-rerun-spawn`).
 
+Add `--robot piper` to also render a Piper robot IK-following your hands in
+Viser (http://localhost:8003; first launch JIT-compiles for ~30s).
+
 Once this looks right, mount the headset on the neck and use the full
 live/record commands (with cameras + Feetech) in [README.md](README.md).
 

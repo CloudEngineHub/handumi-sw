@@ -82,6 +82,10 @@ First set up and smoke-test per [README_quest.md](README_quest.md), then:
 # live visualization — Rerun 3D trajectory (uses quest_ip from the config)
 python -m handumi.capture.live_tracking_quest
 
+# same, plus a live Piper robot following your hands via IK
+# (Viser at http://localhost:8003; first launch JIT-compiles for ~30s)
+python -m handumi.capture.live_tracking_quest --robot piper
+
 # record a dataset (16D state + observation.quest.* poses/clocks)
 python -m handumi.capture.record_handumi_quest \
   --repo-id local/handumi_quest_test \

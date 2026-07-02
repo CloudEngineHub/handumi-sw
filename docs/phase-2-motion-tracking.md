@@ -75,9 +75,11 @@ Phase 2B  (DEFERRED — do not build yet)
   - ViserSim robot follow-along ("see the robot move in 3D")
 ```
 
-Everything below tagged **[2B]** is deferred. Build and validate 2A before
-touching IK or Viser. Sections that mention `live_viser.py`, `ViserSim`,
-retargeting, or IK belong to 2B.
+**[2B] status: implemented** — not as a separate `live_viser.py` script but as
+the `--robot piper` flag on `handumi.capture.live_tracking_quest`, backed by
+`handumi.capture.robot_follow.RobotFollower` (16D raw state -> IK -> ViserSim).
+Sections below tagged **[2B]** describe the original plan; where they name
+`live_viser.py`, read "`live_tracking_quest --robot piper`".
 
 ## Phase 2A — Three Steps
 

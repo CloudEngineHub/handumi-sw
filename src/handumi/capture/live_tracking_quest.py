@@ -1,6 +1,6 @@
-"""Live HandUMI motion tracking (Phase 2A, Step 3 — the live view).
+"""Live HandUMI motion tracking (Phase 2A live view + optional 2B robot).
 
-Ties the three Phase 2A pieces together with no robot/IK (that is [2B]):
+Ties the Phase 2A pieces together:
 
   1. receive Quest controller frames           (handumi.tracking.meta_quest)
   2. calibrate poses into handumi_workspace     (handumi.tracking.transforms)
@@ -8,6 +8,9 @@ Ties the three Phase 2A pieces together with no robot/IK (that is [2B]):
   -> build the 16D HandUMI raw state
   -> log to Rerun: wrist cameras + Feetech width series + a live 3D trajectory
      of each controller (rolling trails), the UMI-style view from yubi-sw.
+
+Pass ``--robot piper`` to also solve bimanual IK each frame and render the
+robot following your hands in Viser (Phase 2B, handumi.capture.robot_follow).
 
 The left X button captures a workspace reset (re-centers on the current HMD
 pose); the workspace also auto-initializes on the first tracked frame. Python
@@ -219,6 +222,7 @@ def run_live_tracking(
     compress_images: bool,
     rerun_enabled: bool,
     duration_s: float | None,
+    robot_follower=None,
     stop_check=lambda: False,
 ) -> None:
     """Run the live tracking loop. Returns when stopped / duration elapsed."""
@@ -286,6 +290,11 @@ def run_live_tracking(
             if rerun_enabled:
                 _log_pose("tracking/left", left_pose, LEFT_COLOR, left_trail)
                 _log_pose("tracking/right", right_pose, RIGHT_COLOR, right_trail)
+
+            if robot_follower is not None and workspace_set:
+                robot_follower.step(
+                    last_state, left_tracked=left_tracked, right_tracked=right_tracked
+                )
 
         if rerun_enabled:
             _log_cameras(cam_frames, compress_images)
@@ -362,6 +371,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--trail-seconds", type=float, default=10.0)
     p.add_argument("--duration-s", type=float, default=None)
+    p.add_argument(
+        "--robot",
+        choices=["piper"],
+        default=None,
+        help="Render this robot in Viser, IK-following the tracked poses (Phase 2B).",
+    )
+    p.add_argument("--robot-port", type=int, default=None, help="Viser port (default 8003).")
+    p.add_argument(
+        "--robot-z-lift",
+        type=float,
+        default=0.55,
+        help="Meters added to workspace Z: HMD-origin poses sit below the head; "
+        "the robot base sits on the floor plate.",
+    )
+    p.add_argument("--robot-x-shift", type=float, default=0.0, help="Meters added to workspace X.")
     p.add_argument("--compress-images", action="store_true")
     p.add_argument("--display-ip", type=str, default=None)
     p.add_argument("--display-port", type=int, default=None)
@@ -384,6 +408,17 @@ def main() -> None:
 
     cameras, cam_names = _connect_cameras(args)
     grippers = _connect_feetech(args)
+
+    robot_follower = None
+    if args.robot:
+        from handumi.capture.robot_follow import RobotFollower
+
+        robot_follower = RobotFollower(
+            embodiment=args.robot,
+            port=args.robot_port,
+            z_lift=args.robot_z_lift,
+            x_shift=args.robot_x_shift,
+        )
 
     receiver = MetaQuestReceiver(config)
     receiver.start()
@@ -411,10 +446,13 @@ def main() -> None:
             compress_images=args.compress_images,
             rerun_enabled=rerun_enabled,
             duration_s=args.duration_s,
+            robot_follower=robot_follower,
             stop_check=lambda: stop["flag"],
         )
     finally:
         receiver.stop()
+        if robot_follower is not None:
+            robot_follower.close()
         if grippers is not None:
             grippers.close()
         if cameras:
