@@ -124,6 +124,7 @@ class PipeSmokeTest(unittest.TestCase):
             m = rx.metrics()
             frame = rx.latest()
             self.assertIsNotNone(frame, "no frame received from mock")
+            assert frame is not None
             self.assertTrue(m["connected"])
             self.assertTrue(m["streaming"])
             self.assertGreater(m["fps"], 10.0)
@@ -134,9 +135,13 @@ class PipeSmokeTest(unittest.TestCase):
             self.assertAlmostEqual(m["offset_s"], -5.0, delta=0.2)
 
             # Poses move over time.
-            p1 = rx.latest().left.position.copy()
+            frame = rx.latest()
+            assert frame is not None
+            p1 = frame.left.position.copy()
             time.sleep(0.3)
-            p2 = rx.latest().left.position
+            frame = rx.latest()
+            assert frame is not None
+            p2 = frame.left.position
             self.assertTrue((abs(p1 - p2) > 1e-4).any(), "controller pose did not move")
         finally:
             rx.stop()

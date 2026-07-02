@@ -33,6 +33,7 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 
 from handumi.dataset.raw import HANDUMI_RAW_STATE_SIZE, pose_to_state_vector
 from handumi.feetech import PORTS_PATH
@@ -69,7 +70,7 @@ class TrajectoryTrail:
     def __init__(self, max_points: int) -> None:
         self._points: deque[np.ndarray] = deque(maxlen=max(1, max_points))
 
-    def append(self, position: np.ndarray) -> None:
+    def append(self, position: npt.ArrayLike) -> None:
         self._points.append(np.asarray(position, dtype=np.float32).reshape(3))
 
     def clear(self) -> None:

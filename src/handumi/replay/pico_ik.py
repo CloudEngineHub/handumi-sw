@@ -12,11 +12,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from handumi.robots.registry import EmbodimentRuntime
 
 load_dotenv()
 
@@ -131,7 +135,7 @@ def _line_colors(color: tuple[int, int, int], count: int) -> np.ndarray:
 
 
 def _robot_to_viser_order(
-    viser_order: list[str],
+    viser_order: Sequence[str],
     urdf_arm_joint_names: Callable[..., list[str]],
 ) -> list[int]:
     robot_order = urdf_arm_joint_names(is_left=True) + urdf_arm_joint_names(

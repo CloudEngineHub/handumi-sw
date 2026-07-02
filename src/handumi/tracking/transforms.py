@@ -128,16 +128,16 @@ def matrix_to_quat(m: npt.ArrayLike) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Pose:
     """A rigid transform: translation (3,) + rotation quaternion `[x, y, z, w]`."""
 
     position: np.ndarray
     quaternion: np.ndarray
 
-    def __post_init__(self) -> None:
-        pos = np.asarray(self.position, dtype=np.float64).reshape(3)
-        quat = quat_normalize(self.quaternion)
+    def __init__(self, position: npt.ArrayLike, quaternion: npt.ArrayLike) -> None:
+        pos = np.asarray(position, dtype=np.float64).reshape(3)
+        quat = quat_normalize(quaternion)
         object.__setattr__(self, "position", pos)
         object.__setattr__(self, "quaternion", quat)
 

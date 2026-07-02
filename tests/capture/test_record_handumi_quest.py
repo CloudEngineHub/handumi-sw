@@ -18,7 +18,6 @@ from handumi.feetech import GripperWidths
 from handumi.tracking.meta_quest import parse_frame
 from handumi.tracking.transforms import (
     MountingOffsets,
-    Pose,
     WorkspaceCalibration,
     unity_pose_to_handumi,
 )

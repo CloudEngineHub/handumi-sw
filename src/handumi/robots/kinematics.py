@@ -45,7 +45,10 @@ class KinematicsConfig:
     max_reach: float = 0.8
 
 
-CollisionBuilder = Callable[[yourdfpy.URDF, pk.Robot, object], pk.collision.RobotCollision]
+CollisionBuilder = Callable[
+    [yourdfpy.URDF, pk.Robot, KinematicsConfig],
+    pk.collision.RobotCollision,
+]
 
 
 @dataclass(frozen=True)
@@ -169,7 +172,7 @@ def _solve_ee_ik(
 def _default_collision_builder(
     urdf: yourdfpy.URDF,
     robot: pk.Robot,
-    config: object,
+    config: KinematicsConfig,
 ) -> pk.collision.RobotCollision:
     del robot, config
     return pk.collision.RobotCollision.from_urdf(urdf)
@@ -244,7 +247,7 @@ def _np_to_se3(pos: np.ndarray, rot_3x3: np.ndarray) -> jaxlie.SE3:
 class BimanualPyrokiSolver:
     """Shared bimanual IK solver that tracks end-effectors only."""
 
-    def __init__(self, *, spec: RobotKinematicsSpec, config: object) -> None:
+    def __init__(self, *, spec: RobotKinematicsSpec, config: KinematicsConfig) -> None:
         self.spec = spec
         self.config = config
 
