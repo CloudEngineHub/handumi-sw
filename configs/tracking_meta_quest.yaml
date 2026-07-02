@@ -35,8 +35,20 @@ calibration:
   #     we want the mounted controller to read as the naturally-held one).
   #   The difference cancels the tracking frame's arbitrary yaw and the OVR
   #   controller frame's built-in tilt, so the gripper behaves exactly like a
-  #   naturally-held controller. Left ~79.0 deg, right ~77.2 deg (the two
-  #   mounts aren't perfectly symmetric).
+  #   naturally-held controller.
+  #   The two HandUMI devices are physical mirror-image twins (same as the
+  #   Piper's two arms), so left/right quaternions must be exact reflections
+  #   of each other across the Y=0 (left/right) plane, not two independent
+  #   ~79deg / ~77deg measurements — the raw two-stance readings differed by
+  #   only ~2.6deg (normal per-stance hand variance), so they were averaged
+  #   into one canonical rotation and mirrored: right = (-x, y, -z, w) of left
+  #   (mirroring across Y negates the x and z components, keeps y/w).
+  #   That canonical rotation also had a ~48deg twist about Z (vertical/up)
+  #   baked in from the two-stance measurement (the room-frame yaw isn't the
+  #   same between the two held stances, so it leaks into the result) — but
+  #   mounting the controller vertically is a pure tilt, no spin about up, so
+  #   it was swing-twist decomposed about Z and the twist discarded, keeping
+  #   only the swing (~63.6deg, axis has zero Z component by construction).
   # Still TODO before this is a full calibration:
   #   - Y/Z (lateral/vertical) position offset, not yet measured (assumed ~0)
   #   - refine X: this measures clip edge -> gripper tip, not yet corrected
@@ -54,11 +66,11 @@ calibration:
   controller_to_gripper_tcp:
     left:
       {
-        position: [0.140, -0.060, 0.0],
-        quaternion: [-0.0187, 0.5206, -0.3650, 0.7716],
+        position: [0.200, 0, -0.60],
+        quaternion: [0.2000, 0.4875, 0.3000, 0.8499],
       }
     right:
       {
-        position: [0.140, 0.060, 0.0],
-        quaternion: [0.0112, 0.5325, 0.3246, 0.7816],
+        position: [0.200, 0, -0.60],
+        quaternion: [-0.2000, 0.4875, -0.3000, 0.8499],
       }

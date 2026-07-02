@@ -167,17 +167,21 @@ class MountingOffsetsTest(unittest.TestCase):
 
     def test_from_repo_config_loads(self):
         m = MountingOffsets.from_yaml(CONFIG)
-        # Position: X (forward, CAD) + Y (lateral) measured; Z still TODO.
-        # left/right Y must be mirrored (opposite sign) — the two mounts are
-        # physical mirror images of each other.
-        self.assertTrue(np.allclose(m.left.position, [0.140, -0.060, 0.0]))
-        self.assertTrue(np.allclose(m.right.position, [0.140, 0.060, 0.0]))
+        # Position: X (forward) + Z (vertical) are the same on both sides;
+        # only Y (lateral) would need mirroring, and it's currently 0.
+        self.assertTrue(np.allclose(m.left.position, [0.200, 0.0, -0.60]))
+        self.assertTrue(np.allclose(m.right.position, [0.200, 0.0, -0.60]))
         # Rotation: measured empirically (print_controller_pose.py), each side a
         # unit quaternion — not identity, since the controller mounts vertically.
         self.assertAlmostEqual(float(np.linalg.norm(m.left.quaternion)), 1.0, places=5)
         self.assertAlmostEqual(float(np.linalg.norm(m.right.quaternion)), 1.0, places=5)
         self.assertFalse(np.allclose(m.left.quaternion, [0.0, 0.0, 0.0, 1.0]))
         self.assertFalse(np.allclose(m.right.quaternion, [0.0, 0.0, 0.0, 1.0]))
+        # The two HandUMI mounts are physical mirror-image twins (same as the
+        # Piper's two arms), so right's quaternion must be the exact mirror of
+        # left's across the Y=0 plane: negate x and z, keep y and w.
+        lx, ly, lz, lw = m.left.quaternion
+        self.assertTrue(np.allclose(m.right.quaternion, [-lx, ly, -lz, lw], atol=1e-6))
 
 
 class PipelineTest(unittest.TestCase):
