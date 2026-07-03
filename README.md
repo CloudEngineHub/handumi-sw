@@ -11,12 +11,18 @@ left/right wrist cameras
 
 ## Install
 
+Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.12.
+
 ```bash
 git clone <repo-url> handumi-sw
 cd handumi-sw
-uv sync --python "$(command -v python3.12)"
+bash bin/install.sh
 source .venv/bin/activate
 ```
+
+`bin/install.sh` creates the venv, runs `uv sync`, fetches/builds the XRoboToolkit
+native SDK (needed for PICO), and installs `xrobotoolkit_sdk`. Re-run it safely
+after pulling changes.
 
 Check:
 
