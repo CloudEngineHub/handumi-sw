@@ -19,7 +19,7 @@ ports, servo homing, gripper-width calibration. Run commands live in
 ## 1. Identify Ports
 
 ```bash
-python scripts/setup/setup_ports.py
+handumi-setup-ports
 ```
 
 Connect/disconnect one device at a time and note the changed port. `Ctrl+C` to
@@ -54,7 +54,7 @@ right_wrist:
 ## 2. Check Feetech Ticks
 
 ```bash
-python scripts/setup/calibrate_grippers.py monitor
+handumi-calibrate-grippers monitor
 ```
 
 Open/close each gripper and confirm `ticks` changes.
@@ -66,8 +66,8 @@ flip or saturate. Homing stores a correction so the current shaft angle reads
 2048 (centre), clearing the range of the seam:
 
 ```bash
-python scripts/setup/home_servos.py              # both sides
-python scripts/setup/home_servos.py --side right # one side
+handumi-home-servos              # both sides
+handumi-home-servos --side right # one side
 ```
 
 Hold the gripper at **mid-travel** (~2040 ticks), press ENTER; the script reports
@@ -80,8 +80,8 @@ closed**.
 ## 4. Calibrate Gripper Width
 
 ```bash
-python scripts/setup/calibrate_grippers.py calibrate
-python scripts/setup/calibrate_grippers.py calibrate --side right
+handumi-calibrate-grippers calibrate
+handumi-calibrate-grippers calibrate --side right
 ```
 
 For each side:

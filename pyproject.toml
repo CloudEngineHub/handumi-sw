@@ -38,6 +38,10 @@ handumi-convert = "handumi.scripts.conversion:main"
 handumi-record-pico = "handumi.scripts.record_handumi_pico:main"
 handumi-live-tracking-quest = "handumi.scripts.live_tracking_quest:main"
 handumi-record-quest = "handumi.scripts.record_handumi_quest:main"
+handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"
+handumi-home-servos = "handumi.scripts.setup.home_servos:main"
+handumi-calibrate-grippers = "handumi.scripts.setup.calibrate_grippers:main"
+handumi-print-controller-pose = "handumi.scripts.setup.print_controller_pose:main"
 
 [dependency-groups]
 dev = [

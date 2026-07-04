@@ -12,7 +12,14 @@ comfortably away from the seam.
 Workflow (gripper disassembled is easiest):
   1. Move the servo shaft to roughly half of the gripper's travel.
   2. Run this script and press ENTER to capture/centre.
-  3. Reassemble and recalibrate with ``calibrate_grippers.py calibrate``.
+  3. Reassemble and recalibrate with ``handumi-calibrate-grippers calibrate``.
+
+Usage
+-----
+::
+
+    handumi-home-servos              # both sides
+    handumi-home-servos --side right
 """
 
 from __future__ import annotations
@@ -71,7 +78,7 @@ def main() -> None:
     print(
         "\nDone. Reassemble the gripper(s), then recalibrate so closed/open match "
         "the new centred range:\n"
-        "  python scripts/setup/calibrate_grippers.py calibrate"
+        "  handumi-calibrate-grippers calibrate"
     )
 
 

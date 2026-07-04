@@ -16,6 +16,13 @@ neither stance needs to be aligned with the tracking origin.
 
 No mounting offset or workspace reset is applied here — this is the raw
 Unity->handumi-converted controller pose, on purpose.
+
+Usage
+-----
+::
+
+    handumi-print-controller-pose
+    handumi-print-controller-pose --quest-ip 192.168.1.42
 """
 
 from __future__ import annotations

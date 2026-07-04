@@ -1,3 +1,19 @@
+"""Monitor and calibrate HandUMI Feetech gripper encoder widths.
+
+``monitor`` streams live encoder ticks so you can confirm each gripper responds
+when opened/closed. ``calibrate`` records open/closed ticks and max aperture in
+mm, writing the result to the per-user cache at
+``~/.cache/handumi/calibration.yaml``.
+
+Usage
+-----
+::
+
+    handumi-calibrate-grippers monitor
+    handumi-calibrate-grippers calibrate
+    handumi-calibrate-grippers calibrate --side right
+"""
+
 from __future__ import annotations
 
 import argparse

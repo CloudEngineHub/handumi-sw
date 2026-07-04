@@ -120,7 +120,7 @@ the LAN IP hint in Wi-Fi mode when you run the recorder.
 PICO-only smoke test (no wrist cameras or Feetech):
 
 ```bash
-python -m handumi.capture.record_handumi_pico \
+handumi-record-pico \
   --use-pico --only-pico --skip-feetech \
   --repo-id local/pico_smoke \
   --output-dir outputs/datasets/pico_smoke \
@@ -145,7 +145,7 @@ saved episode should be non-zero. Use `--pico-mandos` for controllers only, or
 Once [README_gripper.md](README_gripper.md) camera + Feetech setup is done:
 
 ```bash
-python -m handumi.capture.record_handumi_pico \
+handumi-record-pico \
   --use-pico \
   --repo-id local/handumi_width_test \
   --output-dir outputs/datasets/handumi_width_test \
@@ -153,18 +153,6 @@ python -m handumi.capture.record_handumi_pico \
   --num-episodes 1 \
   --episode-time-s 20 \
   --fps 30
-```
-
-Or use the launcher:
-
-```bash
-bash bin/record_pico.sh \
-  --use-pico \
-  --repo-id local/handumi_width_test \
-  --output-dir outputs/datasets/handumi_width_test \
-  --task "gripper width hardware test" \
-  --num-episodes 1 \
-  --episode-time-s 20
 ```
 
 Add `--pico-wifi` if you are not using USB/ADB. Add `--manual-control` to

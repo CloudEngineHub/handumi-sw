@@ -1,3 +1,17 @@
+"""Identify Feetech serial ports and USB cameras while plugging hardware.
+
+Polls ``/dev/ttyACM*`` / ``/dev/ttyUSB*`` for Feetech servo IDs and lists USB
+cameras via ``v4l2-ctl``. Use this to fill in ``configs/feetech.yaml`` and
+``configs/cameras.yaml``.
+
+Usage
+-----
+::
+
+    handumi-setup-ports
+    handumi-setup-ports --once
+"""
+
 from __future__ import annotations
 
 import argparse
