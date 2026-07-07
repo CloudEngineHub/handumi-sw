@@ -8,57 +8,46 @@ skill format.
 
 ## Commits
 
-When asked to commit changes in this repo, follow these conventions.
+When asked to commit changes in this repo, keep messages short — a few lines,
+not a report.
 
 ### Behavior
 
-1. Inspect `git status --short`.
-2. Analyze staged changes with `git diff --staged`.
-3. If nothing is staged, inspect unstaged changes and stage only the files that belong
-   to the requested commit.
-4. Group changes into meaningful commits that are easy to track.
-5. Generate a conventional commit message.
-6. Include an English body that summarizes what changed and what was verified.
-7. Create the commit with proper formatting.
+1. Inspect `git status --short` and `git diff` (staged and unstaged).
+2. Split the changes into one or more coherent units of work (see below).
+3. For each unit, stage only the files that belong to it and commit separately.
+4. Write a conventional commit message: short subject, optional 1-3 line body.
 
-### Commit cadence
+### One commit = one unit of work
 
-Commit at meaningful checkpoints, not after every tiny edit.
+Before committing, ask: "do these changes belong together, or are they two
+different things I happened to do in the same session?"
 
-Do create a commit for a coherent unit of work, such as:
+- If the changes serve one purpose (a bug fix, a feature, a refactor, its
+  tests), commit them together.
+- If the changes serve two+ unrelated purposes (e.g. a bug fix plus an
+  unrelated doc update, or two independent features), **split them into
+  separate commits**, even if that means more than one commit per request.
+  Mixing unrelated work in one commit makes history harder to read, revert,
+  or bisect later.
+- Don't fold in incidental drive-by edits (whitespace, unrelated renames,
+  typos) unless they're part of the same change or the user asks for them
+  explicitly.
+- Never commit files unrelated to the requested change just because they
+  happen to be modified in the working tree.
 
-- A bug fix that changes behavior.
-- A small feature or user-visible improvement.
-- A refactor that changes structure without changing behavior.
-- A test or build fix that belongs with the related code change.
-- A documentation update that explains a completed implementation change.
-
-Do not create a separate commit for incidental edits, such as only changing a button
-color, adjusting whitespace, renaming a local variable, or fixing a typo, unless the
-user explicitly asks for that granularity or the change is independently useful to review.
-
-### Commit format
+### Commit message format
 
 ```text
-<type>(<scope>): <description>
+<type>(<scope>): <short description>
 
-What changed:
-- <specific file-oriented summary>
-- <specific file-oriented summary>
-
-Verification passed:
-- <command>
-- <command>
-
-[optional footer]
+<1-3 line body: what changed and why, only if the subject line isn't enough>
 ```
 
-If verification was not run, use:
-
-```text
-Verification not run:
-- <concrete reason>
-```
+Keep it tight — most commits need nothing beyond a good subject line. Only add
+a body when the "why" isn't obvious from the diff or the subject alone. Skip
+verification reports, file-by-file changelogs, and footers unless the user
+asks for that level of detail.
 
 ### Types
 
@@ -70,30 +59,10 @@ Verification not run:
 - test: Adding or modifying tests
 - chore: Maintenance tasks
 
-### Body guidelines
-
-Write the body like a handoff summary for Codex, Claude Code, or another LLM coding tool that may inspect
-the commit later.
-
-- Keep bullets specific and file-oriented.
-- Mention behavior changes, not just edited filenames.
-- Include important file paths and line numbers when useful.
-- Do not include unrelated user changes.
-- If generated files or temporary state were changed only by verification, restore or
-  exclude them unless the user asked to keep them.
-
-### Example output
+### Example
 
 ```text
 fix(parser): handle empty configuration files
 
-What changed:
-- Added an explicit empty-file guard in src/config/parser.ts:42 so the parser returns the default configuration instead of throwing.
-- Updated src/config/loader.ts:88 to pass the source path into parser errors, which keeps diagnostics useful for invalid non-empty files.
-- Added regression coverage in tests/config-parser.test.ts:17 for empty, whitespace-only, and invalid configuration files.
-
-Verification passed:
-- <project build command>
-- <project lint command>
-- <project test command>
+Returns the default config instead of throwing when the file is empty.
 ```
