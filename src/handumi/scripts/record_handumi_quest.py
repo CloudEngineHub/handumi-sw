@@ -390,13 +390,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--robot-port", type=int, default=None, help="Viser port (default 8003).")
     p.add_argument(
-        "--robot-z-lift",
-        type=float,
-        default=0.55,
-        help="Meters added to workspace Z: HMD-origin poses sit below the head; "
-        "the robot base sits on the floor plate.",
+        "--teleop-config",
+        type=Path,
+        default=Path("configs/teleop.yaml"),
+        help="Fixed workspace->robot transform (calibrate with handumi-calibrate-workspace).",
     )
-    p.add_argument("--robot-x-shift", type=float, default=0.0, help="Meters added to workspace X.")
     p.add_argument(
         "--scene",
         type=str,
@@ -446,10 +444,9 @@ def main() -> None:
         robot_follower = RobotFollower(
             embodiment=args.robot,
             port=args.robot_port,
-            z_lift=args.robot_z_lift,
-            x_shift=args.robot_x_shift,
             open_browser=not args.no_robot_browser,
             scene_name=args.scene,
+            teleop_config_path=args.teleop_config,
         )
 
     log.info("─── Quest receiver ───")

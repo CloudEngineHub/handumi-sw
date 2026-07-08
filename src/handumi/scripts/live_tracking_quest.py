@@ -56,6 +56,7 @@ from handumi.tracking.transforms import (
     MountingOffsets,
     Pose,
     WorkspaceCalibration,
+    unity_pose_to_handumi,
 )
 from handumi.utils.trajectory import TrajectoryTrail
 
@@ -235,6 +236,20 @@ def _log_pose(path: str, pose: Pose, color: tuple[int, int, int], trail: Traject
         rr.log(f"{path}/trail", rr.LineStrips3D([points], colors=[color], radii=0.003))
 
 
+def _log_raw_controller(path: str, position, color: tuple[int, int, int],
+                        trail: TrajectoryTrail) -> None:
+    """Faint marker + trail of the RAW controller anchor (no mounting offset)
+    next to the calibrated-TCP trail, so the whole chain is visible in Rerun:
+    raw controller -> estimated gripper TCP (here) -> robot TCP (Viser)."""
+    import rerun as rr
+
+    faint = [*color, 90]
+    rr.log(f"{path}/raw", rr.Points3D([position], colors=[faint], radii=0.007))
+    points = trail.points()
+    if len(points) >= 2:
+        rr.log(f"{path}/raw_trail", rr.LineStrips3D([points], colors=[faint], radii=0.0015))
+
+
 def _log_cameras(cam_frames: dict, compress: bool) -> None:
     from lerobot.utils.visualization_utils import log_rerun_data
 
@@ -275,6 +290,8 @@ def run_live_tracking(
     max_points = max(2, int(trail_seconds * fps))
     left_trail = TrajectoryTrail(max_points)
     right_trail = TrajectoryTrail(max_points)
+    left_raw_trail = TrajectoryTrail(max_points)
+    right_raw_trail = TrajectoryTrail(max_points)
     workspace = WorkspaceCalibration.identity()
     workspace_set = False
     prev_reset_pressed = False
@@ -320,6 +337,8 @@ def run_live_tracking(
                 workspace_set = True
                 left_trail.clear()
                 right_trail.clear()
+                left_raw_trail.clear()
+                right_raw_trail.clear()
                 if rerun_enabled:
                     _log_workspace_origin()
                 if robot_follower is not None:
@@ -339,14 +358,27 @@ def run_live_tracking(
             last_state = pose_to_state_vector(
                 left_pose, right_pose, widths["left_m"], widths["right_m"]
             )
+            # Raw controller anchors (workspace frame, NO mounting offset) —
+            # the faint companion trails that isolate the config calibration:
+            # raw vs TCP trails differing only by a rigid offset = good.
+            left_raw = workspace.apply(
+                unity_pose_to_handumi(frame.left.position, frame.left.quaternion)
+            )
+            right_raw = workspace.apply(
+                unity_pose_to_handumi(frame.right.position, frame.right.quaternion)
+            )
             if left_tracked:
                 left_trail.append(left_pose.position)
+                left_raw_trail.append(left_raw.position)
             if right_tracked:
                 right_trail.append(right_pose.position)
+                right_raw_trail.append(right_raw.position)
 
             if rerun_enabled:
                 _log_pose("tracking/left", left_pose, LEFT_COLOR, left_trail)
                 _log_pose("tracking/right", right_pose, RIGHT_COLOR, right_trail)
+                _log_raw_controller("tracking/left", left_raw.position, LEFT_COLOR, left_raw_trail)
+                _log_raw_controller("tracking/right", right_raw.position, RIGHT_COLOR, right_raw_trail)
 
             if robot_follower is not None and workspace_set:
                 robot_follower.step(
@@ -436,13 +468,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--robot-port", type=int, default=None, help="Viser port (default 8003).")
     p.add_argument(
-        "--robot-z-lift",
-        type=float,
-        default=0.55,
-        help="Meters added to workspace Z: HMD-origin poses sit below the head; "
-        "the robot base sits on the floor plate.",
+        "--teleop-config",
+        type=Path,
+        default=Path("configs/teleop.yaml"),
+        help="Fixed workspace->robot transform (calibrate with handumi-calibrate-workspace).",
     )
-    p.add_argument("--robot-x-shift", type=float, default=0.0, help="Meters added to workspace X.")
     p.add_argument(
         "--scene",
         type=str,
@@ -485,10 +515,9 @@ def main() -> None:
         robot_follower = RobotFollower(
             embodiment=args.robot,
             port=args.robot_port,
-            z_lift=args.robot_z_lift,
-            x_shift=args.robot_x_shift,
             open_browser=not args.no_robot_browser,
             scene_name=args.scene,
+            teleop_config_path=args.teleop_config,
         )
 
     receiver = MetaQuestReceiver(config)

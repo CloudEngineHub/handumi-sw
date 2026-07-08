@@ -5,11 +5,19 @@ source that produces it (Quest today, PICO later) can drive the robot view.
 Runs alongside Rerun: Rerun keeps cameras/series/controller trails, Viser
 renders the URDF arms following your hands (http://localhost:<port>).
 
+Teleop mapping is ABSOLUTE: one fixed workspace -> robot-world transform
+(``configs/teleop.yaml``, calibrated once with handumi-calibrate-workspace)
+maps every tracked TCP pose to the same robot-world point, every session.
+There is deliberately no per-session or per-hand re-anchoring — that would
+break the correspondence between a real task scene and the simulated one
+(``--scene``), which is the whole point: a pick & place done with the real
+HandUMI replays 1:1 on the simulated arms when the cube/box sit at the same
+coordinates in both worlds.
+
 Frame mapping (verified against Piper FK): the dual-Piper URDF world and
 ``handumi_workspace`` share the same right-handed X-forward / Y-left / Z-up
-convention, so positions only need a fixed translation — the workspace origin
-is the HMD at reset (neck height) while the robot origin is the arm-base
-plate. Orientations get one constant alignment: the gripper-TCP identity
+convention, so positions need the calibrated translation (+ optional yaw).
+Orientations get one constant alignment: the gripper-TCP identity
 (X-forward) maps to the Piper EE rest orientation (EE Z forward, X down).
 
 The heavy IK stack (JAX/pyroki, ~30s JIT warmup) is imported lazily inside
@@ -25,12 +33,14 @@ import webbrowser
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 from handumi.retargeting.handumi_to_robot import raw_state_target_poses
 
 log = logging.getLogger("handumi.robot_follow")
 
 DEFAULT_SCENE_CONFIG_PATH = Path("configs/scene.yaml")
+DEFAULT_TELEOP_CONFIG_PATH = Path("configs/teleop.yaml")
 
 # Identity controller orientation (gripper X-forward, workspace frame) -> Piper
 # EE rest orientation (EE Z axis forward, X axis down). Columns are the EE
@@ -48,27 +58,57 @@ WRIST_ALIGN = np.array(
 DEFAULT_GRIPPER_MAX_WIDTH_M = 0.08
 
 
+def load_workspace_to_robot(
+    path: str | Path = DEFAULT_TELEOP_CONFIG_PATH,
+) -> tuple[np.ndarray, float]:
+    """Load the fixed workspace->robot transform: (translation, yaw_deg).
+
+    Missing file or keys fall back to the uncalibrated default (see
+    configs/teleop.yaml).
+    """
+    translation = np.array([0.0, 0.0, 0.55], dtype=np.float32)
+    yaw_deg = 0.0
+    path = Path(path)
+    if path.exists():
+        with path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        section = data.get("workspace_to_robot") or {}
+        translation = np.asarray(
+            section.get("translation", translation), dtype=np.float32
+        )
+        yaw_deg = float(section.get("yaw_deg", yaw_deg))
+    return translation, yaw_deg
+
+
+def _yaw_matrix(yaw_deg: float) -> np.ndarray:
+    yaw = np.deg2rad(yaw_deg)
+    c, s = np.cos(yaw), np.sin(yaw)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+
+
 def raw_state_to_robot_targets(
     state: np.ndarray,
     *,
-    z_lift: float,
-    x_shift: float = 0.0,
+    translation: np.ndarray,
+    yaw_deg: float = 0.0,
     gripper_max_width_m: float = DEFAULT_GRIPPER_MAX_WIDTH_M,
 ) -> dict:
     """Map one 16D raw state from ``handumi_workspace`` into robot-world targets.
 
-    Returns ``{"left"/"right": (pos, rot_3x3), "left_grip"/"right_grip": float}``
-    with positions translated by ``[x_shift, 0, z_lift]``, orientations
-    composed with :data:`WRIST_ALIGN`, and gripper widths normalized to [0, 1].
+    Applies the fixed workspace->robot transform (yaw about Z, then
+    translation) to both TCP positions, composes orientations with the yaw
+    and :data:`WRIST_ALIGN`, and normalizes gripper widths to [0, 1].
+    Returns ``{"left"/"right": (pos, rot_3x3), "left_grip"/"right_grip": float}``.
     Pure numpy — no solver, no JAX.
     """
     (left_pos, left_rot), (right_pos, right_rot) = raw_state_target_poses(state)
-    offset = np.array([x_shift, 0.0, z_lift], dtype=np.float32)
+    yaw_rot = _yaw_matrix(yaw_deg)
+    offset = np.asarray(translation, dtype=np.float32)
     arr = np.asarray(state, dtype=np.float32)
     max_w = max(gripper_max_width_m, 1e-6)
     return {
-        "left": (left_pos + offset, left_rot @ WRIST_ALIGN),
-        "right": (right_pos + offset, right_rot @ WRIST_ALIGN),
+        "left": (yaw_rot @ left_pos + offset, yaw_rot @ left_rot @ WRIST_ALIGN),
+        "right": (yaw_rot @ right_pos + offset, yaw_rot @ right_rot @ WRIST_ALIGN),
         "left_grip": float(np.clip(arr[14] / max_w, 0.0, 1.0)),
         "right_grip": float(np.clip(arr[15] / max_w, 0.0, 1.0)),
     }
@@ -86,21 +126,23 @@ class RobotFollower:
         *,
         embodiment: str = "piper",
         port: int | None = None,
-        z_lift: float = 0.55,
-        x_shift: float = 0.0,
         gripper_max_width_m: float = DEFAULT_GRIPPER_MAX_WIDTH_M,
         open_browser: bool = True,
         scene_config_path: Path = DEFAULT_SCENE_CONFIG_PATH,
         scene_name: str | None = None,
+        teleop_config_path: Path = DEFAULT_TELEOP_CONFIG_PATH,
     ) -> None:
         import dataclasses
 
         from handumi.sim.mujoco_sim import SceneConfig
         from handumi.robots.registry import load_embodiment
 
-        self._z_lift = z_lift
-        self._x_shift = x_shift
         self._gripper_max_width_m = gripper_max_width_m
+        self._translation, self._yaw_deg = load_workspace_to_robot(teleop_config_path)
+        log.info(
+            "workspace->robot transform: translation=%s yaw=%.1f deg (%s)",
+            np.round(self._translation, 4).tolist(), self._yaw_deg, teleop_config_path,
+        )
 
         scene_config = SceneConfig.from_yaml(scene_config_path)
         if scene_name is not None:
@@ -112,18 +154,9 @@ class RobotFollower:
         runtime = load_embodiment(embodiment)
         self._solver = runtime.solver_cls()
         self._command_size = runtime.command_size
+        self._tcp_offset_ee = np.asarray(runtime.tcp_offset_ee, dtype=np.float32)
         self._gripper_index = runtime.command_size - 1
         self._q = np.zeros(self._solver.num_joints, dtype=np.float32)
-
-        # Rest-pose EE positions (q = 0): each workspace reset re-anchors the
-        # tracked targets here, so the arms always start from position 0 and
-        # follow relative hand motion from there.
-        left_rest, right_rest = self._solver.fk(self._q)
-        self._rest_ee = {
-            "left": np.asarray(left_rest.translation(), dtype=np.float32),
-            "right": np.asarray(right_rest.translation(), dtype=np.float32),
-        }
-        self._anchor: dict[str, np.ndarray | None] = {"left": None, "right": None}
 
         self._aio = asyncio.new_event_loop()
 
@@ -147,12 +180,10 @@ class RobotFollower:
     def reset(self) -> None:
         """Return the arms to the rest pose (used on workspace reset).
 
-        Also drops the position anchors: the next tracked frame per side
-        re-anchors that hand to the arm's rest EE position, so tracking
-        always resumes from position 0.
+        The workspace->robot transform is fixed, so nothing is re-anchored:
+        tracking resumes wherever the mapped hand poses actually are.
         """
         self._q = np.zeros(self._solver.num_joints, dtype=np.float32)
-        self._anchor = {"left": None, "right": None}
         rest = np.zeros(self._command_size, dtype=np.float32)
         if self._physics is not None:
             self._aio.run_until_complete(self._physics.reset())
@@ -174,20 +205,10 @@ class RobotFollower:
         """
         targets = raw_state_to_robot_targets(
             state,
-            z_lift=self._z_lift,
-            x_shift=self._x_shift,
+            translation=self._translation,
+            yaw_deg=self._yaw_deg,
             gripper_max_width_m=self._gripper_max_width_m,
         )
-        # Re-anchor each side on its first tracked frame (after start/reset):
-        # the hand pose at that instant maps to the arm's rest EE position, and
-        # everything after is relative motion from there.
-        for side, tracked in (("left", left_tracked), ("right", right_tracked)):
-            if not tracked:
-                continue
-            pos, rot = targets[side]
-            if self._anchor[side] is None:
-                self._anchor[side] = self._rest_ee[side] - pos
-            targets[side] = (pos + self._anchor[side], rot)
         self._q = self._solver.ik(
             self._q,
             left_pose=targets["left"] if left_tracked else None,
@@ -219,14 +240,15 @@ class RobotFollower:
         # TCP marker + trail (see ViserSim.set_tcp_pose): always the IK-solved
         # FK, not MuJoCo's physically-settled pose, since the point is to
         # visually sanity-check calibration/IK against the tracked hand
-        # motion, independent of contact dynamics.
+        # motion, independent of contact dynamics. FK stops at the wrist
+        # flange, so push the marker out to the gripper tip with the
+        # embodiment's fixed EE-frame offset (registry tcp_offset_ee).
         left_fk, right_fk = self._solver.fk(self._q)
-        self._aio.run_until_complete(
-            self._sim.set_tcp_pose("left", np.asarray(left_fk.translation(), dtype=np.float32))
-        )
-        self._aio.run_until_complete(
-            self._sim.set_tcp_pose("right", np.asarray(right_fk.translation(), dtype=np.float32))
-        )
+        for side, fk in (("left", left_fk), ("right", right_fk)):
+            position = np.asarray(fk.translation(), dtype=np.float32)
+            rotation = np.asarray(fk.rotation().as_matrix(), dtype=np.float32)
+            tip = position + rotation @ self._tcp_offset_ee
+            self._aio.run_until_complete(self._sim.set_tcp_pose(side, tip))
 
     def _push_physics_state_to_viser(self) -> None:
         """Read the current MuJoCo state (arms + every dynamic scene body)

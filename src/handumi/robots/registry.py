@@ -75,6 +75,11 @@ class EmbodimentRuntime:
     # same as before physics existed at all.
     mjcf_path: Path | None = None
     mujoco_arm_joint_names: Callable[..., list[str]] | None = None
+    # Fixed translation from the IK solver's EE link frame to the gripper
+    # tip (the TCP), in that EE frame. The solver's FK stops at the wrist
+    # flange; anything drawn or measured "at the TCP" must add this.
+    # Derive/verify it with: handumi-print-tcp-offset
+    tcp_offset_ee: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def make_sim(
         self,
@@ -153,6 +158,10 @@ def load_embodiment(name: str) -> EmbodimentRuntime:
             wrist_lateral=0.23,
             mjcf_path=MJCF_PATH,
             mujoco_arm_joint_names=mujoco_arm_joint_names,
+            # URDF joint7/joint8 origin: fingertip sits 135.8mm along the EE
+            # Z axis from link6 (verified against the finger meshes with
+            # handumi-print-tcp-offset).
+            tcp_offset_ee=(0.0, 0.0, 0.1358),
         )
 
     if name == "axol":
