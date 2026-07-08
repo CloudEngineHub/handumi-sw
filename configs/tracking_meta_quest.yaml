@@ -22,55 +22,31 @@ calibration:
   # Fixed mounting offset from the OVR controller anchor to the gripper TCP,
   # in HandUMI convention (right-handed X-forward/Y-left/Z-up, meters + [x,y,z,w]).
   #
-  # Position: PARTIAL, first-pass — only the forward (X) reach is measured so
-  #   far, from CAD: left/right controller-clip edge -> gripper-tip TCP,
-  #   along the gripper's long axis = 140 mm = 0.140 m.
-  # Rotation: measured empirically (2026-07-02) with
-  #   scripts/setup/print_controller_pose.py, two-stance method:
-  #     A) hold the BARE controller in the natural handheld grip, pointing
-  #        forward -> read quaternion q_A
-  #     B) mount it in the HandUMI (it sits vertically) and hold the device
-  #        pointing the SAME forward -> read quaternion q_B
-  #     offset = conj(q_B) * q_A  (since gripper = controller compose offset,
-  #     we want the mounted controller to read as the naturally-held one).
-  #   The difference cancels the tracking frame's arbitrary yaw and the OVR
-  #   controller frame's built-in tilt, so the gripper behaves exactly like a
-  #   naturally-held controller.
-  #   The two HandUMI devices are physical mirror-image twins (same as the
-  #   Piper's two arms), so left/right quaternions must be exact reflections
-  #   of each other across the Y=0 (left/right) plane, not two independent
-  #   ~79deg / ~77deg measurements — the raw two-stance readings differed by
-  #   only ~2.6deg (normal per-stance hand variance), so they were averaged
-  #   into one canonical rotation and mirrored: right = (-x, y, -z, w) of left
-  #   (mirroring across Y negates the x and z components, keeps y/w).
-  #   That canonical rotation also had a ~48deg twist about Z (vertical/up)
-  #   baked in from the two-stance measurement (the room-frame yaw isn't the
-  #   same between the two held stances, so it leaks into the result) — but
-  #   mounting the controller vertically is a pure tilt, no spin about up, so
-  #   it was swing-twist decomposed about Z and the twist discarded, keeping
-  #   only the swing (~63.6deg, axis has zero Z component by construction).
-  # Still TODO before this is a full calibration:
-  #   - Y/Z (lateral/vertical) position offset, not yet measured (assumed ~0)
-  #   - refine X: this measures clip edge -> gripper tip, not yet corrected
-  #     for (a) where the controller's actual OVR tracking origin sits inside
-  #     the handle, or (b) that "gripper tip" should be the fixed TCP
-  #     reference point, not the moving fingertip
-  #   - both stances were held by hand (not a rig) — re-measure and average
-  #     if IK orientation looks off
-  # NOTE: left/right Y position must be mirrored (opposite sign), not equal —
-  # the two mounts are physical mirror images of each other. An equal sign on
-  # both sides pushes both TCPs to the same physical side instead of
-  # mirroring them, which showed up as ~12cm of unwanted lateral offset
-  # between the arms (confirmed by mirroring a synthetic symmetric stance
-  # through both offsets and checking the resulting TCPs coincide).
+  # INVARIANT (enforced by tests/tracking/test_transforms.py): the two
+  # HandUMI mounts are physical mirror-image twins across the Y=0 plane, so
+  # right must be the exact mirror of left — position (x, -y, z), quaternion
+  # (-x, y, -z, w). Two independent per-side measurements break this and
+  # showed up as ~12cm of unwanted lateral offset between the arms.
+  #
+  # For re-calibration, scripts/setup/print_controller_pose.py + the
+  # two-stance method (bare handheld grip vs. mounted, offset =
+  # conj(q_mounted) * q_bare) worked before — see git history of this file
+  # for the full write-up of that 2026-07-02 measurement.
+  #
+  # STARTING POINT (2026-07-07): CAD-derived mount baseline, derived from a
+  # gripper -> controller transform of xyz [-0.063, ±0.016, 0.0525],
+  # rpy [0, -45deg, ±45deg], INVERTED here because this config expresses the
+  # opposite direction (controller -> gripper TCP). Treat these as the
+  # baseline to calibrate from — verify against the TCP marker + trail in
+  # Viser and refine.
   controller_to_gripper_tcp:
     left:
       {
-        position: [0.200, 0.0, 0.0],
-        quaternion: [0.2000, 0.4875, 0.0000, 0.8499],
+        position: [-0.0136, -0.0559, -0.0606],
+        quaternion: [-0.1464, 0.3536, -0.3536, 0.8536],
       }
     right:
       {
-        position: [0.200, 0.0, 0.0],
-        quaternion: [-0.2000, 0.4875, 0.0000, 0.8499],
+        position: [-0.0136, 0.0559, -0.0606],
+        quaternion: [0.1464, 0.3536, 0.3536, 0.8536],
       }

@@ -167,11 +167,13 @@ class MountingOffsetsTest(unittest.TestCase):
 
     def test_from_repo_config_loads(self):
         m = MountingOffsets.from_yaml(CONFIG)
-        # Position: X (forward) + Z (vertical) are the same on both sides;
-        # only Y (lateral) would need mirroring, and it's currently 0.
-        self.assertTrue(np.allclose(m.left.position, [0.200, 0.0, 0.0]))
-        self.assertTrue(np.allclose(m.right.position, [0.200, 0.0, 0.0]))
-        # Rotation: measured empirically (print_controller_pose.py), each side a
+        # Position: the two mounts are physical mirror images across the Y=0
+        # plane, so X (forward) + Z (vertical) match and Y (lateral) is
+        # opposite-signed. Exact values are calibration data (currently the
+        # yubi-sw CAD baseline, see the config comments), not asserted here.
+        lx_p, ly_p, lz_p = m.left.position
+        self.assertTrue(np.allclose(m.right.position, [lx_p, -ly_p, lz_p], atol=1e-6))
+        # Rotation: each side a
         # unit quaternion — not identity, since the controller mounts vertically.
         self.assertAlmostEqual(float(np.linalg.norm(m.left.quaternion)), 1.0, places=5)
         self.assertAlmostEqual(float(np.linalg.norm(m.right.quaternion)), 1.0, places=5)
