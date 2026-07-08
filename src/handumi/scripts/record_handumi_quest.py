@@ -398,6 +398,13 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--robot-x-shift", type=float, default=0.0, help="Meters added to workspace X.")
     p.add_argument(
+        "--scene",
+        type=str,
+        default=None,
+        help="Load a task scene (assets/scenes/<name>/scene.xml) into the physics "
+        "sim, e.g. cube_in_box. Omit for arms-only (no task props).",
+    )
+    p.add_argument(
         "--no-robot-browser",
         action="store_true",
         help="Don't auto-open the Viser robot view in a browser tab (e.g. headless/SSH).",
@@ -442,6 +449,7 @@ def main() -> None:
             z_lift=args.robot_z_lift,
             x_shift=args.robot_x_shift,
             open_browser=not args.no_robot_browser,
+            scene_name=args.scene,
         )
 
     log.info("─── Quest receiver ───")

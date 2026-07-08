@@ -91,7 +91,10 @@ class RobotFollower:
         gripper_max_width_m: float = DEFAULT_GRIPPER_MAX_WIDTH_M,
         open_browser: bool = True,
         scene_config_path: Path = DEFAULT_SCENE_CONFIG_PATH,
+        scene_name: str | None = None,
     ) -> None:
+        import dataclasses
+
         from handumi.sim.mujoco_sim import SceneConfig
         from handumi.robots.registry import load_embodiment
 
@@ -100,6 +103,10 @@ class RobotFollower:
         self._gripper_max_width_m = gripper_max_width_m
 
         scene_config = SceneConfig.from_yaml(scene_config_path)
+        if scene_name is not None:
+            # --scene overrides configs/scene.yaml (which defaults to no
+            # scene) so task props only appear when explicitly requested.
+            scene_config = dataclasses.replace(scene_config, name=scene_name)
 
         log.info("Loading %s IK solver (JAX JIT warmup, ~30s on CPU)...", embodiment)
         runtime = load_embodiment(embodiment)

@@ -5,6 +5,12 @@
 # assets/scenes/<name>/scene.xml. To switch tasks or add a new one, add a
 # folder under assets/scenes/ and point `name` at it — nothing here or in
 # code needs to know what shape the task is.
+#
+# `name: null` means no scene props (arms-only physics) — this is the
+# default so plain teleop/tracking runs don't show task objects unless
+# explicitly requested. Override per-run with --scene <name> (see
+# live_tracking_quest.py / record_handumi_quest.py --help) instead of
+# editing this file, unless you want a new *default*.
 scene:
-  name: cube_in_box
+  name: null
   position: [0.35, 0.0, 0.0]
