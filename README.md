@@ -166,19 +166,15 @@ handumi-replay-in-sim \
 
 ## Train
 
-Datasets in `outputs/` train directly with lerobot via the thin
-`handumi-train` wrapper (hyperparameters versioned in
-[configs/train/act.yaml](configs/train/act.yaml); checkpoints land in
-lerobot's default `outputs/train/`, gitignored):
+Training is out of scope for this repo — HandUMI produces LeRobot-compatible
+datasets, so train with [lerobot](https://github.com/huggingface/lerobot)
+directly (already a dependency):
 
 ```bash
-handumi-train --latest                              # newest dataset in outputs/
-handumi-train --dataset outputs/<ts> --steps=50000  # explicit dataset + overrides
-handumi-train --latest --policy <name>              # configs/train/<name>.yaml
+lerobot-train \
+  --dataset.repo_id=<repo-id> --dataset.root=outputs/datasets/<name> \
+  --policy.type=act --wandb.enable=true
 ```
-
-Extra flags pass straight through to `lerobot-train` and override the YAML.
-wandb logging is enabled by default (`wandb.enable` in the config).
 
 ## Dataset Fields
 
