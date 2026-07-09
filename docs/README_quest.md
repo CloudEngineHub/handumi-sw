@@ -12,20 +12,20 @@ to skip fetching/building it entirely.
 
 We reuse the prebuilt **YubiQuestApp** from
 [yubi-sw](https://github.com/airoa-org/yubi-sw) (no custom headset app); it
-streams poses in the exact format `handumi.devices.meta_quest` parses.
+streams poses in the exact format `handumi.tracking.meta_quest` parses.
 
 ## 0. Try it without a Quest (mock)
 
 ```bash
 # terminal 1 — fake Quest (TCP + UDP sync on localhost)
-python -m handumi.devices.mock_quest_sender
+python -m handumi.tracking.mock_quest_sender
 
-# terminal 2 — live tracking to Rerun (no cameras/Feetech)
-python -m handumi.capture.live_tracking_quest \
-  --quest-ip 127.0.0.1 --skip-cameras --skip-feetech
+# terminal 2 — receiver status line (no cameras/Feetech)
+python -m handumi.tracking.meta_quest \
+  --config configs/tracking_meta_quest.yaml --quest-ip 127.0.0.1
 ```
 
-Expect fps, a non-zero clock offset, and left/right trajectories in Rerun.
+Expect fps, a non-zero clock offset, and both `trk=1` with moving positions.
 
 ## 1. Enable Developer Mode (one-time)
 
@@ -113,7 +113,7 @@ server is up only while the app runs in the foreground **with the headset on**.
 4. **Run the receiver** (`Ctrl+C` to stop) — one self-updating line:
 
    ```bash
-   python -m handumi.devices.meta_quest --config configs/tracking_meta_quest.yaml
+   python -m handumi.tracking.meta_quest --config configs/tracking_meta_quest.yaml
    ```
 
    ```text
@@ -124,23 +124,25 @@ server is up only while the app runs in the foreground **with the headset on**.
    **both `trk=1`** with positions that move as you move the controllers. `trk=0`
    → revisit step 2. (`seq` is always 0 — yubi's format carries none.)
 
-## 6. See the 3D trajectory (Rerun)
+## 6. Record and replay
+
+Once the status line looks right, mount the headset on the neck and record
+with the unified recorder (full flags in [README.md](README.md)):
 
 ```bash
-python -m handumi.capture.live_tracking_quest --skip-cameras --skip-feetech
+handumi-record --device meta --skip-feetech \
+  --repo-id local/handumi_quest_test \
+  --output-dir outputs/datasets/handumi_quest_test \
+  --task "quest smoke test" --num-episodes 1 --episode-time-s 20
 ```
 
-Move the controllers and their trails draw — **left cyan, right magenta**. A
-**yellow marker** shows the workspace origin (the HMD pose captured at the last
-reset) — both trails are positions *relative to that one fixed point*, not to
-each other or to the live head position. The **left X button** re-centres the
-workspace on the current HMD pose (also auto-set on the first tracked frame).
+Then inspect the recorded trajectories by replaying the episode through
+bimanual IK in Viser:
 
-> Headless/SSH? Point at a remote Rerun viewer:
-> `--display-ip <viewer-host> --display-port <port>` (or `--no-rerun-spawn`).
-
-Once this looks right, mount the headset on the neck and use the full
-live/record commands (with cameras + Feetech) in [README.md](README.md).
+```bash
+handumi-replay-in-sim --repo-id local/handumi_quest_test \
+  --dataset-root outputs/datasets/handumi_quest_test --robot piper
+```
 
 ## 7. Calibrate
 
@@ -160,9 +162,9 @@ recorded data itself.
 - **Fields look wrong** — the APK defines the wire format. Dump a raw sample and
   compare against
   [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md) → *TCP/JSON
-  Payload*; adjust `handumi.devices.meta_quest.parse_frame` if keys differ:
+  Payload*; adjust `handumi.tracking.meta_quest.parse_frame` if keys differ:
 
   ```bash
-  python -m handumi.devices.meta_quest \
+  python -m handumi.tracking.meta_quest \
     --config configs/tracking_meta_quest.yaml --print-raw
   ```

@@ -20,7 +20,7 @@ raw datasets are stored in the workspace frame and don't depend on it.
 
 Prerequisites: Quest streaming (`README_quest.md` steps 1-5), controllers
 awake and visible to the headset cameras (`trk=1` in
-`python -m handumi.devices.meta_quest --config configs/tracking_meta_quest.yaml`).
+`python -m handumi.tracking.meta_quest --config configs/tracking_meta_quest.yaml`).
 
 ---
 
@@ -46,7 +46,7 @@ anything:
 3. **Stance B** — mount it in the HandUMI and hold the device pointing the
    SAME forward direction. Note `q_B`.
 4. The offset is `conj(q_B) * q_A` (use `quat_multiply` / `quat_conjugate`
-   from `handumi.devices.transforms`).
+   from `handumi.tracking.transforms`).
 5. The right side must be the exact Y-mirror of the left (the two devices
    are physical mirror twins): `(-x, y, -z, w)` of the left quaternion.
    Don't measure both sides independently — measure left, mirror it.
