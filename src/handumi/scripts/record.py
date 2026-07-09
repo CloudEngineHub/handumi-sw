@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Unified HandUMI recorder for PICO and Meta Quest tracking backends."""
+"""Unified HandUMI recorder for PICO and Meta Quest tracking backends.
+
+Episode control: timed by default (--episode-time-s), PICO buttons with
+--manual-control, or hands-free with --clap-control (a double clap — close
+both grippers twice within ~1.2s — starts and stops each episode; works
+with either device since it reads the Feetech widths).
+
+Spoken status announcements ("Recording episode 3", "Episode 3 saved, 812
+frames", ...) are on by default — pass --no-sounds to disable them. Without
+--output-dir each run writes a fresh outputs/<YYYYMMDD_HHMMSS>/ folder
+(outputs/ is gitignored).
+"""
 
 from __future__ import annotations
 
@@ -10,6 +21,7 @@ import signal
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +52,7 @@ from handumi.feetech import (
 from handumi.feetech.bus import FeetechUnavailableError
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.tracking.base import ControllerPairSample, TrackingProvider
+from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
 from handumi.tracking.pico import (
     START_BUTTON_CHOICES,
@@ -49,6 +62,7 @@ from handumi.tracking.pico import (
     wait_for_start_button,
 )
 from handumi.tracking.transforms import Pose
+from handumi.utils.speech import log_say
 
 logging.basicConfig(
     level=logging.INFO,
@@ -135,11 +149,13 @@ def record_episode(
     repeat_button: str,
     finish_button: str,
     start_threshold: float,
+    clap_detector: DoubleClapDetector | None = None,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
     n_frames = 0
     start_t = time.perf_counter()
     status = "recorded"
+    clap_control = clap_detector is not None
     xrt = getattr(tracker, "xrt", None)
     prev_start = (
         read_start_button_value(xrt, start_button) >= start_threshold
@@ -157,10 +173,13 @@ def record_episode(
         else False
     )
 
+    # Clap-controlled episodes end on the next double clap, not on a timer.
+    timed = not manual_control and not clap_control
+
     while True:
         loop_start = time.perf_counter()
         elapsed = loop_start - start_t
-        if (not manual_control and elapsed >= episode_time_s) or stop_event.is_set():
+        if (timed and elapsed >= episode_time_s) or stop_event.is_set():
             break
 
         if manual_control and xrt is not None:
@@ -184,6 +203,8 @@ def record_episode(
 
         cam_frames = read_camera_frames(cameras, cam_names, width=cam_width, height=cam_height)
         widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
+        if clap_control and clap_detector.update(widths.left_mm, widths.right_mm, loop_start):
+            break
         sample = tracker.latest()
         dataset.add_frame({**cam_frames, **build_observation(sample, widths), "task": task})
         n_frames += 1
@@ -210,7 +231,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
     p.add_argument("--repo-id", type=str, default="local/handumi_dataset")
-    p.add_argument("--output-dir", type=Path, default=None)
+    p.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Dataset folder. Defaults to a fresh outputs/<YYYYMMDD_HHMMSS>/ "
+        "named after when recording started (outputs/ is gitignored).",
+    )
     p.add_argument("--task", type=str, default="HandUMI recording")
     p.add_argument("--num-episodes", type=int, default=10)
     p.add_argument("--episode-time-s", type=float, default=60.0)
@@ -240,6 +267,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--manual-control", action="store_true")
     p.add_argument("--repeat-button", choices=START_BUTTON_CHOICES, default="B")
     p.add_argument("--finish-button", choices=START_BUTTON_CHOICES, default="Y")
+    p.add_argument(
+        "--clap-control",
+        action="store_true",
+        help="Hands-free: a double clap (close both grippers twice within "
+        "~1.2s) starts and stops each episode. Needs real Feetech widths.",
+    )
+    p.add_argument(
+        "--no-sounds",
+        action="store_true",
+        help="Disable spoken episode-status announcements (start/save/discard/stop).",
+    )
     return p.parse_args()
 
 
@@ -250,6 +288,13 @@ def main() -> None:
     if args.manual_control and args.start_button == "enter":
         args.start_button = "A"
         log.info("--manual-control set: using PICO A as start/stop button.")
+    if args.clap_control and args.skip_feetech:
+        raise SystemExit("--clap-control needs real Feetech widths; drop --skip-feetech.")
+    if args.clap_control and args.manual_control:
+        raise SystemExit("--clap-control and --manual-control are mutually exclusive.")
+    if args.output_dir is None:
+        args.output_dir = _default_output_dir()
+    play_sounds = not args.no_sounds
 
     log.info("--- Tracking setup ---")
     calibration = ControllerTcpCalibration(
@@ -305,12 +350,17 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _on_signal)
 
     recorded = 0
+    clap_detector = DoubleClapDetector() if args.clap_control else None
     try:
         while (args.num_episodes <= 0 or recorded < args.num_episodes) and not stop_event.is_set():
             ep_num = dataset.num_episodes + 1
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
             log.info("--- Episode %d/%s ---", ep_num, ep_total)
-            if args.manual_control:
+            if args.clap_control:
+                log.info("  Double-clap both grippers to start episode %d ...", ep_num)
+                if not _wait_for_clap(grippers, clap_detector, stop_event):
+                    break
+            elif args.manual_control:
                 action = wait_for_manual_start(
                     getattr(tracker, "xrt"),
                     start_button=args.start_button,
@@ -334,6 +384,7 @@ def main() -> None:
                 raise SystemExit("--start-button other than enter currently requires --device pico.")
 
             stop_event.clear()
+            log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
             n_frames, status = record_episode(
                 dataset=dataset,
                 cameras=cameras,
@@ -351,9 +402,11 @@ def main() -> None:
                 repeat_button=args.repeat_button,
                 finish_button=args.finish_button,
                 start_threshold=args.start_threshold,
+                clap_detector=clap_detector,
             )
             if n_frames == 0 or status == "repeat":
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
+                log_say("Episode discarded", play_sounds=play_sounds)
                 dataset.clear_episode_buffer()
                 if status == "finish":
                     break
@@ -361,9 +414,11 @@ def main() -> None:
             dataset.save_episode()
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
+            log_say(f"Episode {ep_num} saved, {n_frames} frames", play_sounds=play_sounds)
             if status == "finish":
                 break
     finally:
+        log_say("Stop recording", play_sounds=play_sounds, blocking=True)
         log.info("--- Finalising ---")
         dataset.finalize()
         _update_info_json(
@@ -381,6 +436,7 @@ def main() -> None:
             grippers.close()
         tracker.stop()
         log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
+        log_say("Exiting", play_sounds=play_sounds)
 
 
 def _build_tracker(args: argparse.Namespace, calibration) -> TrackingProvider:
@@ -427,6 +483,28 @@ def _connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:
     except FeetechUnavailableError as exc:
         raise SystemExit(str(exc)) from exc
     return grippers
+
+
+def _wait_for_clap(
+    grippers: FeetechGripperPair | None,
+    clap_detector: DoubleClapDetector,
+    stop_event: threading.Event,
+) -> bool:
+    """Poll Feetech widths until a double-clap fires (or ``stop_event`` sets)."""
+    while not stop_event.is_set():
+        widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
+        if clap_detector.update(widths.left_mm, widths.right_mm, time.perf_counter()):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _default_output_dir() -> Path:
+    """``outputs/<YYYYMMDD_HHMMSS>/`` named after the moment recording starts.
+
+    ``outputs/`` is gitignored — datasets never get committed by accident.
+    """
+    return Path("outputs") / datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def _update_info_json(root: Path, handumi: dict[str, str]) -> None:
