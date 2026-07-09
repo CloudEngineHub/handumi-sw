@@ -3,8 +3,8 @@
 
 Companion to the PICO recorder (`handumi-record-pico`). This one sources left/right
 gripper poses from the native Quest app (TCP/JSON, see
-`handumi.devices.meta_quest`), calibrates them into `handumi_workspace`
-(`handumi.devices.transforms`), merges Feetech gripper width, and writes the
+`handumi.tracking.meta_quest`), calibrates them into `handumi_workspace`
+(`handumi.tracking.transforms`), merges Feetech gripper width, and writes the
 **same 16D HandUMI raw state** the rest of the pipeline expects.
 
 Per-frame schema

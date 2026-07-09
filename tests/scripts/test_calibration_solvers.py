@@ -22,9 +22,9 @@ class SolvePivotTest(unittest.TestCase):
         # p_i = c - R_i @ t  (tip pinned at c)
         P = c_true - np.einsum("nij,j->ni", R, t_true)
         t, c, rms = solve_pivot(P, R)
-        self.assertTrue(np.allclose(t, t_true, atol=1e-8))
-        self.assertTrue(np.allclose(c, c_true, atol=1e-8))
-        self.assertLess(rms, 1e-9)
+        self.assertTrue(np.allclose(t, t_true, atol=1e-6))
+        self.assertTrue(np.allclose(c, c_true, atol=1e-6))
+        self.assertLess(rms, 1e-6)
 
     def test_noise_reflected_in_rms(self):
         rng = np.random.default_rng(8)

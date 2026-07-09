@@ -43,7 +43,7 @@ from handumi.calibration.control_tcp import (
     calibration_path_for_device,
     load_controller_tcp_calibration,
 )
-from handumi.dataset.ref import dataset_root_from_repo_id
+from handumi.dataset.reader import dataset_root_from_repo_id
 from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
 from handumi.retargeting.handumi_to_robot import (
     local_frame_adapter,

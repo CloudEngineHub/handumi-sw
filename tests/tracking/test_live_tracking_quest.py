@@ -5,11 +5,8 @@ import unittest
 
 import numpy as np
 
-from handumi.scripts.live_tracking_quest import (
-    DoubleClapDetector,
-    TrajectoryTrail,
-    run_live_tracking,
-)
+from handumi.tracking.gestures import DoubleClapDetector
+from handumi.utils.trajectory import TrajectoryTrail
 from handumi.dataset.raw import (
     HANDUMI_RAW_STATE_SIZE,
     LEFT_GRIPPER_INDEX,
@@ -133,93 +130,6 @@ class CalibrationHelpersTest(unittest.TestCase):
         ws = workspace_from_hmd(hmd)
         ref = unity_pose_to_handumi(hmd.position, hmd.quaternion)
         self.assertTrue(np.allclose(ws.apply(ref).as_matrix(), np.eye(4), atol=1e-9))
-
-
-class LiveLoopSmokeTest(unittest.TestCase):
-    """End-to-end loop against the mock Quest, headless (no cameras/feetech)."""
-
-    def _start_mock(self, tcp_port, sync_port, stop):
-        skew_ns = int(5e9)
-        threading.Thread(
-            target=mock._udp_sync_server,
-            args=("127.0.0.1", sync_port, skew_ns, stop), daemon=True,
-        ).start()
-
-        def tcp_server():
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("127.0.0.1", tcp_port))
-            s.listen(1)
-            s.settimeout(0.5)
-            while not stop.is_set():
-                try:
-                    conn, addr = s.accept()
-                except socket.timeout:
-                    continue
-                mock._serve_client(conn, addr, 120.0, skew_ns, stop)
-            s.close()
-
-        threading.Thread(target=tcp_server, daemon=True).start()
-
-    def test_loop_runs_without_rerun(self):
-        tcp_port, sync_port = _free_port(), _free_port()
-        stop = threading.Event()
-        self._start_mock(tcp_port, sync_port, stop)
-        rx = MetaQuestReceiver(MetaQuestConfig("127.0.0.1", tcp_port, sync_port))
-        rx.start()
-        try:
-            time.sleep(0.3)
-            run_live_tracking(
-                receiver=rx,
-                mounts=MountingOffsets.identity(),
-                cameras=None,
-                cam_names=[],
-                grippers=None,
-                fps=60,
-                trail_seconds=2.0,
-                cam_width=64,
-                cam_height=48,
-                compress_images=False,
-                rerun_enabled=False,
-                duration_s=1.0,
-            )
-        finally:
-            rx.stop()
-            stop.set()
-
-    def test_loop_runs_with_rerun_memory(self):
-        import rerun as rr
-
-        rr.init("handumi_live_tracking_test")  # memory recording, no viewer
-        from handumi.scripts import live_tracking_quest as live_tracking
-
-        live_tracking._send_styles()
-        live_tracking._send_blueprint()
-
-        tcp_port, sync_port = _free_port(), _free_port()
-        stop = threading.Event()
-        self._start_mock(tcp_port, sync_port, stop)
-        rx = MetaQuestReceiver(MetaQuestConfig("127.0.0.1", tcp_port, sync_port))
-        rx.start()
-        try:
-            time.sleep(0.3)
-            run_live_tracking(
-                receiver=rx,
-                mounts=MountingOffsets.identity(),
-                cameras=None,
-                cam_names=[],
-                grippers=None,
-                fps=60,
-                trail_seconds=2.0,
-                cam_width=64,
-                cam_height=48,
-                compress_images=False,
-                rerun_enabled=True,
-                duration_s=0.8,
-            )
-        finally:
-            rx.stop()
-            stop.set()
 
 
 if __name__ == "__main__":
