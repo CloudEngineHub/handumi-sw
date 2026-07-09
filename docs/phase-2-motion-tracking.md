@@ -115,8 +115,8 @@ Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
 - **Status: implemented.** Validate with the mock (two terminals):
 
   ```bash
-  python -m handumi.tracking.mock_quest_sender
-  python -m handumi.tracking.meta_quest --quest-ip 127.0.0.1
+  python -m handumi.devices.mock_quest_sender
+  python -m handumi.devices.meta_quest --quest-ip 127.0.0.1
   ```
 
   Tests: `python -m unittest discover -s tests/tracking`. For the real headset,
@@ -170,7 +170,7 @@ Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
   the mock. Dry run:
 
   ```bash
-  python -m handumi.tracking.mock_quest_sender
+  python -m handumi.devices.mock_quest_sender
   python -m handumi.capture.live_tracking_quest --skip-cameras --skip-feetech
   ```
 
@@ -269,8 +269,8 @@ Already in `handumi-sw`:
 
 Implemented in Phase 2A (against the mock; pending validation on real hardware):
 
-- Python TCP/JSON receiver + UDP time-sync (`handumi.tracking.meta_quest`).
-- Tested calibration transforms (`handumi.tracking.transforms`).
+- Python TCP/JSON receiver + UDP time-sync (`handumi.devices.meta_quest`).
+- Tested calibration transforms (`handumi.devices.transforms`).
 - Live loop merging Quest pose + Feetech width into the 16D raw state and a
   Rerun 3D trajectory (`handumi.capture.live_tracking_quest`).
 - Quest recorder writing the 16D state + `observation.quest.*`
@@ -324,7 +324,7 @@ HandUMI specifics:
 - Feetech is the only source of gripper opening. Quest trigger/grip values are
   UI controls only.
 - Keep `hmd.pose` as the body/chest reference frame for calibration.
-- Python receiver lives in `handumi.tracking.meta_quest`.
+- Python receiver lives in `handumi.devices.meta_quest`.
 - Camera/scalar monitoring + the live 3D controller trajectory are in Rerun.
   Viser robot follow-along is **[2B]** deferred.
 
@@ -341,7 +341,7 @@ Native Quest app (OVRPlugin)
   TCP/JSON pose stream + UDP time-sync
         |
         v
-Python TCP receiver (handumi.tracking.meta_quest)
+Python TCP receiver (handumi.devices.meta_quest)
   + UDP NTP-style offset estimation
         |
         v
@@ -429,7 +429,7 @@ code in `transforms.py`.
 This is the **YubiQuestApp legacy wire format** (the prebuilt app we reuse). The
 app sends one **newline-delimited JSON object per sample** over TCP. Vectors are
 `{x,y,z}` / `{x,y,z,w}` objects in **Unity** coordinates; Python converts and
-timestamps on receive. `handumi.tracking.meta_quest.parse_frame` reads exactly
+timestamps on receive. `handumi.devices.meta_quest.parse_frame` reads exactly
 these keys (and `mock_quest_sender.py` emits them).
 
 ```json

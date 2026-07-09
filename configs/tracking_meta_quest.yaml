@@ -17,7 +17,7 @@ streams:
   hmd: true # used as the body/chest reference frame
   buttons: true # forwarded raw; Python owns the state machine
 
-# Explicit, unit-tested calibration applied in handumi.tracking.transforms.
+# Explicit, unit-tested calibration applied in handumi.devices.transforms.
 calibration:
   # Fixed mounting offset from the OVR controller anchor to the gripper TCP,
   # in HandUMI convention (right-handed X-forward/Y-left/Z-up, meters + [x,y,z,w]).

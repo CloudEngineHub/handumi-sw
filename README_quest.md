@@ -12,13 +12,13 @@ to skip fetching/building it entirely.
 
 We reuse the prebuilt **YubiQuestApp** from
 [yubi-sw](https://github.com/airoa-org/yubi-sw) (no custom headset app); it
-streams poses in the exact format `handumi.tracking.meta_quest` parses.
+streams poses in the exact format `handumi.devices.meta_quest` parses.
 
 ## 0. Try it without a Quest (mock)
 
 ```bash
 # terminal 1 — fake Quest (TCP + UDP sync on localhost)
-python -m handumi.tracking.mock_quest_sender
+python -m handumi.devices.mock_quest_sender
 
 # terminal 2 — live tracking to Rerun (no cameras/Feetech)
 python -m handumi.capture.live_tracking_quest \
@@ -113,7 +113,7 @@ server is up only while the app runs in the foreground **with the headset on**.
 4. **Run the receiver** (`Ctrl+C` to stop) — one self-updating line:
 
    ```bash
-   python -m handumi.tracking.meta_quest --config configs/tracking_meta_quest.yaml
+   python -m handumi.devices.meta_quest --config configs/tracking_meta_quest.yaml
    ```
 
    ```text
@@ -163,9 +163,9 @@ recorded data itself.
 - **Fields look wrong** — the APK defines the wire format. Dump a raw sample and
   compare against
   [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md) → *TCP/JSON
-  Payload*; adjust `handumi.tracking.meta_quest.parse_frame` if keys differ:
+  Payload*; adjust `handumi.devices.meta_quest.parse_frame` if keys differ:
 
   ```bash
-  python -m handumi.tracking.meta_quest \
+  python -m handumi.devices.meta_quest \
     --config configs/tracking_meta_quest.yaml --print-raw
   ```

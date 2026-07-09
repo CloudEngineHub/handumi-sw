@@ -81,7 +81,7 @@ First set up and smoke-test per [README_quest.md](README_quest.md), then:
 ```bash
 # tracking check only (no cameras/sim): expect fps ~120 and both trk=1;
 # trk=0 = controllers asleep or out of the headset cameras' view
-python -m handumi.tracking.meta_quest --config configs/tracking_meta_quest.yaml
+python -m handumi.devices.meta_quest --config configs/tracking_meta_quest.yaml
 
 # live visualization — Rerun 3D trajectory (uses quest_ip from the config)
 handumi-live-tracking-quest

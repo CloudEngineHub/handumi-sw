@@ -259,8 +259,8 @@ python -m handumi.capture.live_tracking_quest       # Quest-only Rerun 3D viewer
 ```
 
 The two tracking backends are deliberately separate: PICO
-(`handumi.tracking.pico`, via XRoboToolkit) and Meta Quest
-(`handumi.tracking.meta_quest`, via TCP/JSON + UDP sync). Each has its own
+(`handumi.devices.pico`, via XRoboToolkit) and Meta Quest
+(`handumi.devices.meta_quest`, via TCP/JSON + UDP sync). Each has its own
 recorder; the user picks the one matching the hardware they have. Both emit the
 same 16D raw state, so downstream (dataset, conversion) is backend-agnostic.
 

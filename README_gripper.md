@@ -73,7 +73,7 @@ handumi-home-servos --side right # one side
 Hold the gripper at **mid-travel** (~2040 ticks), press ENTER; the script reports
 `OK` / `CHECK`. Re-calibrate afterwards.
 
-A software unwrap in `handumi.feetech.gripper` also tracks wraps continuously, so
+A software unwrap in `handumi.devices.feetech.gripper` also tracks wraps continuously, so
 an un-homed range is fine as long as recording **starts with the grippers roughly
 closed**.
 
