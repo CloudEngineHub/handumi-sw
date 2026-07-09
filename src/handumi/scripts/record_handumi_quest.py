@@ -33,10 +33,7 @@ By default (neither flag), episodes start on ENTER and stop after
 outputs/<YYYYMMDD_HHMMSS>/ folder named after when recording started
 (outputs/ is gitignored — never committed).
 
-Pass --robot piper to mirror each episode live in Viser (real MuJoCo physics,
-same as live_tracking_quest.py --robot) while it's being recorded, so the
-collector can watch the robot follow their hands during the real HandUMI
-task. Spoken status announcements ("Recording episode 3", "Episode 3 saved,
+Spoken status announcements ("Recording episode 3", "Episode 3 saved,
 812 frames", ...) are on by default — pass --no-sounds to disable them.
 
 Usage
@@ -257,16 +254,8 @@ def record_episode(
     stop_event: threading.Event,
     clap_control: bool = False,
     clap_detector: DoubleClapDetector | None = None,
-    robot_follower=None,
 ) -> tuple[int, str]:
-    """Record one episode. Returns (n_frames, status).
-
-    ``robot_follower`` (see ``handumi.capture.robot_follow.RobotFollower``) is
-    optional and mirrors this episode's tracked poses into the Viser/MuJoCo
-    sim live, exactly like ``live_tracking_quest.py --robot`` does — so the
-    collector can watch the robot (and, if configured, the task scene) follow
-    their hands while HandUMI data is being recorded.
-    """
+    """Record one episode. Returns (n_frames, status)."""
     from handumi.devices.cameras import read_camera_frames
 
     control_interval = 1.0 / fps
@@ -284,8 +273,7 @@ def record_episode(
             return n_frames, "recorded"
 
         frame = receiver.latest()
-        if workspace.update(frame) and robot_follower is not None:
-            robot_follower.reset()
+        workspace.update(frame)
 
         if button_control:
             pressed = _right_a(receiver)
@@ -303,15 +291,6 @@ def record_episode(
         observation = build_observation(
             frame, mounts=mounts, workspace=workspace.calibration, widths=widths
         )
-
-        if robot_follower is not None and workspace.is_set:
-            left_tracked = bool(observation["observation.quest.left_tracked"][0])
-            right_tracked = bool(observation["observation.quest.right_tracked"][0])
-            robot_follower.step(
-                observation["observation.state"],
-                left_tracked=left_tracked,
-                right_tracked=right_tracked,
-            )
 
         dataset.add_frame({**cam_frames, **observation, "task": task})
         n_frames += 1
@@ -382,32 +361,6 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--push-to-hub", action="store_true")
     p.add_argument(
-        "--robot",
-        choices=["piper"],
-        default=None,
-        help="Mirror this episode live in Viser, IK-following the tracked poses "
-        "while recording (same as live_tracking_quest.py --robot).",
-    )
-    p.add_argument("--robot-port", type=int, default=None, help="Viser port (default 8003).")
-    p.add_argument(
-        "--teleop-config",
-        type=Path,
-        default=Path("configs/teleop.yaml"),
-        help="Fixed workspace->robot transform (calibrate with handumi-calibrate-workspace).",
-    )
-    p.add_argument(
-        "--scene",
-        type=str,
-        default=None,
-        help="Load a task scene (assets/scenes/<name>/scene.xml) into the physics "
-        "sim, e.g. cube_in_box. Omit for arms-only (no task props).",
-    )
-    p.add_argument(
-        "--no-robot-browser",
-        action="store_true",
-        help="Don't auto-open the Viser robot view in a browser tab (e.g. headless/SSH).",
-    )
-    p.add_argument(
         "--no-sounds",
         action="store_true",
         help="Disable spoken episode-status announcements (start/save/discard/stop).",
@@ -435,19 +388,6 @@ def main() -> None:
 
     log.info("─── Feetech setup ───")
     grippers = _connect_feetech(args)
-
-    robot_follower = None
-    if args.robot:
-        from handumi.capture.robot_follow import RobotFollower
-
-        log.info("─── Robot sim setup (%s) ───", args.robot)
-        robot_follower = RobotFollower(
-            embodiment=args.robot,
-            port=args.robot_port,
-            open_browser=not args.no_robot_browser,
-            scene_name=args.scene,
-            teleop_config_path=args.teleop_config,
-        )
 
     log.info("─── Quest receiver ───")
     receiver = MetaQuestReceiver(config)
@@ -517,7 +457,6 @@ def main() -> None:
                 stop_event=stop_event,
                 clap_control=args.clap_control,
                 clap_detector=clap_detector,
-                robot_follower=robot_follower,
             )
             print()
             if n_frames == 0:
@@ -540,8 +479,6 @@ def main() -> None:
             disconnect_cameras(cameras)
         if grippers is not None:
             grippers.close()
-        if robot_follower is not None:
-            robot_follower.close()
         log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
         if args.push_to_hub:
             dataset.push_to_hub()

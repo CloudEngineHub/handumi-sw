@@ -20,7 +20,7 @@ dependencies = [
     "jaxls @ git+https://github.com/brentyi/jaxls.git",
     "yourdfpy",
     "pyroki @ git+https://github.com/chungmin99/pyroki.git",
-    # Live robot view (--robot piper); also a pyroki transitive, pinned direct.
+    # Viser utilities and pyroki transitive dependency, pinned direct.
     "viser>=1.0.0",
     "matplotlib>=3.11.0",
     "pyvista>=0.43.0",

@@ -46,12 +46,6 @@ from handumi.devices.cameras import (
     read_camera_frames,
     resolve_camera_ids,
 )
-from handumi.capture.reach import (
-    REACH_BUDGETS_M,
-    compute_reach_features,
-    empty_reach_features,
-    update_episode_reach_flags,
-)
 from handumi.dataset.raw import raw_state_feature
 from handumi.devices.feetech import (
     PORTS_PATH,
@@ -65,6 +59,7 @@ from handumi.devices.feetech import (
 from handumi.devices.feetech.bus import FeetechUnavailableError
 from handumi.devices.pico import (
     MAX_MOTION_TRACKERS,
+    PICO_SERVICE_PORT,
     START_BUTTON_CHOICES,
     empty_pico_frame,
     guess_lan_ip,
@@ -221,25 +216,6 @@ def build_features(
         "names": None,
     }
 
-    for robot in REACH_BUDGETS_M:
-        for name in ("left_ratio", "right_ratio", "max_ratio"):
-            features[f"observation.reach.{robot}_{name}"] = {
-                "dtype": "float32",
-                "shape": (1,),
-                "names": None,
-            }
-        for name in ("frame_feasible", "episode_feasible"):
-            features[f"observation.reach.{robot}_{name}"] = {
-                "dtype": "int64",
-                "shape": (1,),
-                "names": None,
-            }
-    features["observation.reach.any_episode_feasible"] = {
-        "dtype": "int64",
-        "shape": (1,),
-        "names": None,
-    }
-
     return features
 
 
@@ -293,8 +269,7 @@ def record_episode(
     laptop_cam_name: str | None,
     laptop_overlay: bool,
     laptop_preview: LaptopPreview | None,
-    save_unreachable: bool,
-) -> tuple[int, str, dict[str, bool]]:
+) -> tuple[int, str]:
     """
     Record one episode.  Returns the number of frames saved.
     stop_event is a threading.Event (or any object with .is_set()) that
@@ -303,10 +278,7 @@ def record_episode(
     control_interval = 1.0 / fps
     n_frames = 0
     start_t = time.perf_counter()
-    anchor_l = None
-    anchor_r = None
     status = "recorded"
-    episode_feasible = {robot: False for robot in REACH_BUDGETS_M} if include_pico else {}
     prev_start = (
         read_start_button_value(xrt, start_button) >= start_threshold
         if manual_control and xrt is not None
@@ -360,22 +332,12 @@ def record_episode(
         # ── PICO data ──────────────────────────────────────────────────────
         if not include_pico:
             pico_frame = {}
-            reach_frame = {}
-            reach_metrics = {}
         else:
             pico_frame = (
                 read_pico_frame(xrt, mode=pico_mode)
                 if xrt is not None
                 else empty_pico_frame()
             )
-            if anchor_l is None or anchor_r is None:
-                anchor_l = np.asarray(
-                    pico_frame["observation.pico.left_controller_pose"], dtype=np.float32
-                )[:3].copy()
-                anchor_r = np.asarray(
-                    pico_frame["observation.pico.right_controller_pose"], dtype=np.float32
-                )[:3].copy()
-            reach_frame, reach_metrics = compute_reach_features(pico_frame, anchor_l, anchor_r)
 
         # ── Feetech gripper widths ─────────────────────────────────────────
         widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
@@ -410,7 +372,6 @@ def record_episode(
                         elapsed_s=elapsed,
                         n_frames=n_frames + 1,
                         tracker_count=tracker_count,
-                        reach_metrics=reach_metrics,
                         manual_control=manual_control,
                     )
                 if laptop_preview is not None:
@@ -423,7 +384,6 @@ def record_episode(
             "action": state_vec.copy(),
             **feetech_frame,
             **pico_frame,
-            **reach_frame,
             "task": task,
         }
         dataset.add_frame(data_frame)
@@ -440,16 +400,7 @@ def record_episode(
         else:
             time.sleep(sleep)
 
-    if include_pico and n_frames > 0 and status != "repeat":
-        should_save, episode_feasible = update_episode_reach_flags(
-            dataset,
-            save_unreachable=save_unreachable,
-        )
-        if not should_save:
-            status = "unreachable"
-            dataset.clear_episode_buffer()
-
-    return n_frames, status, episode_feasible
+    return n_frames, status
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -593,7 +544,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--laptop-camera",
         action="store_true",
-        help="Append/record a laptop camera stream with stopwatch + reach overlay.",
+        help="Append/record a laptop camera stream with stopwatch overlay.",
     )
     p.add_argument(
         "--laptop-cam-id",
@@ -613,20 +564,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-laptop-overlay",
         action="store_true",
-        help="Record the laptop camera without drawing stopwatch/reach overlay.",
+        help="Record the laptop camera without drawing the stopwatch overlay.",
     )
     p.add_argument(
         "--no-laptop-preview",
         action="store_true",
         help="Do not open the live preview window for the saved laptop video stream.",
-    )
-    p.add_argument(
-        "--save-unreachable",
-        action="store_true",
-        help=(
-            "Save episodes even when both Piper and OpenArm exceed the reach budget. "
-            "By default those episodes are discarded."
-        ),
     )
     pico_mode = p.add_mutually_exclusive_group()
     pico_mode.add_argument(
@@ -887,7 +830,7 @@ def main() -> None:
             else:
                 log.info(f"  Recording for {args.episode_time_s}s …  (Ctrl+C to end early)")
             stop_event.clear()  # allow Ctrl+C to end only this episode
-            n_frames, status, episode_feasible = record_episode(
+            n_frames, status = record_episode(
                 dataset=dataset,
                 cameras=cameras,
                 cam_names=cam_names,
@@ -909,14 +852,11 @@ def main() -> None:
                 laptop_cam_name=laptop_cam_name,
                 laptop_overlay=args.laptop_camera and not args.no_laptop_overlay,
                 laptop_preview=laptop_preview,
-                save_unreachable=args.save_unreachable,
             )
 
-            if n_frames == 0 or status in {"repeat", "unreachable"}:
+            if n_frames == 0 or status == "repeat":
                 if status == "repeat":
                     log.warning("  Episode discarded by repeat button.")
-                elif status == "unreachable":
-                    log.warning("  Episode discarded: out of reach for both Piper and OpenArm.")
                 else:
                     log.warning("  No frames recorded – discarding episode.")
                 dataset.clear_episode_buffer()
@@ -927,14 +867,7 @@ def main() -> None:
             log.info(f"  Saving {n_frames} frames …")
             dataset.save_episode()
             recorded += 1
-            if episode_feasible:
-                log.info(
-                    f"  Episode {ep_num} saved. ({recorded}/{ep_total} done) "
-                    f"Piper={int(episode_feasible['piper'])} "
-                    f"OpenArm={int(episode_feasible['openarm'])}"
-                )
-            else:
-                log.info(f"  Episode {ep_num} saved. ({recorded}/{ep_total} done)")
+            log.info(f"  Episode {ep_num} saved. ({recorded}/{ep_total} done)")
 
             if status == "finish":
                 break

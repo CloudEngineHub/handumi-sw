@@ -86,17 +86,10 @@ python -m handumi.devices.meta_quest --config configs/tracking_meta_quest.yaml
 # live visualization — Rerun 3D trajectory (uses quest_ip from the config)
 handumi-live-tracking-quest
 
-# same, plus a live Piper robot following your hands via IK
-# (Viser at http://localhost:8003; first launch JIT-compiles for ~30s)
-handumi-live-tracking-quest --robot piper
-
-# add a task scene with real physics (assets/scenes/cube_in_box)
-handumi-live-tracking-quest --robot piper --scene cube_in_box
-
 # record a dataset (16D state + observation.quest.* poses/clocks),
 # hands-free: double-clap starts/stops each episode, voice announcements,
 # saved to outputs/<timestamp>/
-handumi-record-quest --robot piper --scene cube_in_box --clap-control
+handumi-record-quest --clap-control
 ```
 
 Add `--skip-cameras` / `--skip-feetech` to run without that hardware. Controls

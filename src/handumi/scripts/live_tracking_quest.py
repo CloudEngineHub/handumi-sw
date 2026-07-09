@@ -1,4 +1,4 @@
-"""Live HandUMI motion tracking (Phase 2A live view + optional 2B robot).
+"""Live HandUMI motion tracking (Phase 2A live view).
 
 Ties the Phase 2A pieces together:
 
@@ -8,9 +8,6 @@ Ties the Phase 2A pieces together:
   -> build the 16D HandUMI raw state
   -> log to Rerun: wrist cameras + Feetech width series + a live 3D trajectory
      of each controller (rolling trails), the UMI-style view from yubi-sw.
-
-Pass ``--robot piper`` to also solve bimanual IK each frame and render the
-robot following your hands in Viser (Phase 2B, handumi.capture.robot_follow).
 
 The left X button captures a workspace reset (re-centers on the current HMD
 pose); the workspace also auto-initializes on the first tracked frame. Python
@@ -22,9 +19,6 @@ Usage
 
     # live Rerun view (quest_ip from config/tracking.yaml)
     handumi-live-tracking-quest
-
-    # live Piper robot following your hands via IK
-    handumi-live-tracking-quest --robot piper
 
     # dry run with the mock Quest sender
     python -m handumi.devices.mock_quest_sender
@@ -283,7 +277,6 @@ def run_live_tracking(
     compress_images: bool,
     rerun_enabled: bool,
     duration_s: float | None,
-    robot_follower=None,
     stop_check=lambda: False,
 ) -> None:
     """Run the live tracking loop. Returns when stopped / duration elapsed."""
@@ -341,8 +334,6 @@ def run_live_tracking(
                 right_raw_trail.clear()
                 if rerun_enabled:
                     _log_workspace_origin()
-                if robot_follower is not None:
-                    robot_follower.reset()
                 source = "double clap" if clap_reset else ("button" if reset_edge else "startup")
                 log.info("Workspace %s on HMD pose (%s).",
                          "reset" if reset_edge else "initialized", source)
@@ -379,11 +370,6 @@ def run_live_tracking(
                 _log_pose("tracking/right", right_pose, RIGHT_COLOR, right_trail)
                 _log_raw_controller("tracking/left", left_raw.position, LEFT_COLOR, left_raw_trail)
                 _log_raw_controller("tracking/right", right_raw.position, RIGHT_COLOR, right_raw_trail)
-
-            if robot_follower is not None and workspace_set:
-                robot_follower.step(
-                    last_state, left_tracked=left_tracked, right_tracked=right_tracked
-                )
 
         if rerun_enabled:
             _log_cameras(cam_frames, compress_images)
@@ -460,31 +446,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--trail-seconds", type=float, default=10.0)
     p.add_argument("--duration-s", type=float, default=None)
-    p.add_argument(
-        "--robot",
-        choices=["piper"],
-        default=None,
-        help="Render this robot in Viser, IK-following the tracked poses (Phase 2B).",
-    )
-    p.add_argument("--robot-port", type=int, default=None, help="Viser port (default 8003).")
-    p.add_argument(
-        "--teleop-config",
-        type=Path,
-        default=Path("configs/teleop.yaml"),
-        help="Fixed workspace->robot transform (calibrate with handumi-calibrate-workspace).",
-    )
-    p.add_argument(
-        "--scene",
-        type=str,
-        default=None,
-        help="Load a task scene (assets/scenes/<name>/scene.xml) into the physics "
-        "sim, e.g. cube_in_box. Omit for arms-only (no task props).",
-    )
-    p.add_argument(
-        "--no-robot-browser",
-        action="store_true",
-        help="Don't auto-open the Viser robot view in a browser tab (e.g. headless/SSH).",
-    )
     p.add_argument("--compress-images", action="store_true")
     p.add_argument("--display-ip", type=str, default=None)
     p.add_argument("--display-port", type=int, default=None)
@@ -507,18 +468,6 @@ def main() -> None:
 
     cameras, cam_names = _connect_cameras(args)
     grippers = _connect_feetech(args)
-
-    robot_follower = None
-    if args.robot:
-        from handumi.capture.robot_follow import RobotFollower
-
-        robot_follower = RobotFollower(
-            embodiment=args.robot,
-            port=args.robot_port,
-            open_browser=not args.no_robot_browser,
-            scene_name=args.scene,
-            teleop_config_path=args.teleop_config,
-        )
 
     receiver = MetaQuestReceiver(config)
     receiver.start()
@@ -546,13 +495,10 @@ def main() -> None:
             compress_images=args.compress_images,
             rerun_enabled=rerun_enabled,
             duration_s=args.duration_s,
-            robot_follower=robot_follower,
             stop_check=lambda: stop["flag"],
         )
     finally:
         receiver.stop()
-        if robot_follower is not None:
-            robot_follower.close()
         if grippers is not None:
             grippers.close()
         if cameras:

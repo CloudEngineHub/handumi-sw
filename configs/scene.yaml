@@ -1,5 +1,5 @@
 # Which task scene to load into the physics sim, and where to place it in
-# the dual-arm robot-world frame (the same frame RobotFollower solves IK in).
+# the dual-arm robot-world frame.
 #
 # Scene geometry (dimensions, colors, mass, friction) lives entirely in
 # assets/scenes/<name>/scene.xml. To switch tasks or add a new one, add a

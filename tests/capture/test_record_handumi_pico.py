@@ -18,7 +18,6 @@ class RecordHandUMIFeaturesTest(unittest.TestCase):
         self.assertIn("observation.feetech.left_ticks", features)
         self.assertIn("observation.feetech.right_width_mm", features)
         self.assertNotIn("observation.pico.left_controller_pose", features)
-        self.assertNotIn("observation.reach.piper_left_ratio", features)
 
 
 if __name__ == "__main__":

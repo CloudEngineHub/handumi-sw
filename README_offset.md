@@ -131,18 +131,17 @@ at the start of each session, and don't reset the workspace mid-session
 5. Press Enter on an empty line to finish; paste the printed block into
    `configs/teleop.yaml`.
 
-### Final checkpoint (validates the whole TCP→joints chain)
+### Final checkpoint
 
 ```bash
-handumi-live-tracking-quest --robot piper --scene cube_in_box
+handumi-live-tracking-quest
 ```
 
-- Touch the real box corner with the real gripper tip → the TCP sphere in
-  Viser must touch the sim box corner. Off by a constant shift → redo 3.
-- Do a full real pick & place → the Piper must repeat it on the sim cube.
-- If the TCP sphere drifts far from the rendered arm tip during motion,
-  the IK target is outside the Piper's reach — usually a bad step-3
-  translation sending your hands too far/high.
+- Move both controllers and confirm the Rerun trails follow the expected
+  workspace axes.
+- Touch a known workspace point with each real gripper tip. Off by a constant
+  shift usually means the mount position or workspace calibration needs another
+  pass.
 
 ---
 

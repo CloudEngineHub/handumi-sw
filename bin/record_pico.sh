@@ -87,7 +87,7 @@ while [[ $# -gt 0 ]]; do
         --cam-fps)       CAM_FPS="$2";       shift 2 ;;
         --vcodec)        VCODEC="$2";        shift 2 ;;
         --push-to-hub|--no-video|--skip-pico|--use-pico|--skip-feetech|--skip-adb-check|--laptop-camera|\
-        --manual-control|--no-laptop-overlay|--no-laptop-preview|--save-unreachable|--pico-mandos|\
+        --manual-control|--no-laptop-overlay|--no-laptop-preview|--pico-mandos|\
         --pico-object|--pico-whole-body|--pico-adb|--pico-wifi)
             EXTRA_FLAGS+=("$1"); shift ;;
         *)
