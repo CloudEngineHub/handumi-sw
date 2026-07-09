@@ -2,7 +2,7 @@
 
 One-time setup to stream PICO body/controller poses to the workstation via
 **XRoboToolkit** (PC service + headset app + Python SDK). Run recording commands
-live in [README.md](README.md); PICO data lands in `observation.pico.*` fields.
+live in [README.md](README.md); PICO data lands in `observation.tracking.*` fields.
 
 `install.sh` (without `--skip-xrt`) already builds and installs `xrobotoolkit_sdk`;
 you still need the **PC service** (workstation) and **PICO app** (headset) below.
@@ -122,8 +122,7 @@ the LAN IP hint in Wi-Fi mode when you run the recorder.
 PICO-only smoke test (no wrist cameras or Feetech):
 
 ```bash
-handumi-record-pico \
-  --use-pico --only-pico --skip-feetech \
+handumi-record --device pico --skip-feetech \
   --repo-id local/pico_smoke \
   --output-dir outputs/datasets/pico_smoke \
   --task "pico smoke test" \
@@ -138,17 +137,16 @@ Good signs in the log:
 - `PICO body-tracking data is available.` (default whole-body mode)
 - No repeated `still waiting for PICO data` after ~15 s
 
-Move the controllers / body while recording; `observation.pico.*` fields in the
-saved episode should be non-zero. Use `--pico-mandos` for controllers only, or
-`--pico-object` for motion trackers.
+Move the controllers / body while recording; `observation.tracking.*` fields in the
+saved episode should be non-zero. Use `--pico-mode mandos` for controllers only, or
+`--pico-mode object` for motion trackers.
 
 ## 5. Record a full HandUMI dataset
 
 Once [README_gripper.md](README_gripper.md) camera + Feetech setup is done:
 
 ```bash
-handumi-record-pico \
-  --use-pico \
+handumi-record --device pico \
   --repo-id local/handumi_width_test \
   --output-dir outputs/datasets/handumi_width_test \
   --task "gripper width hardware test" \
@@ -172,6 +170,6 @@ start/stop episodes from PICO buttons (**A** = start/stop, **B** = repeat,
   the PC-service IP matches the table in step 3, and port `63901` is open. In
   USB mode, check `adb reverse --list` shows `tcp:63901`.
 - **Body joints empty** — enable body tracking in the PICO app, or pass
-  `--pico-mandos` if you only need controller poses.
+  `--pico-mode mandos` if you only need controller poses.
 - **SDK import error** — re-run `bash install.sh` (without `--skip-xrt`) to build
   `xrobotoolkit_sdk`.

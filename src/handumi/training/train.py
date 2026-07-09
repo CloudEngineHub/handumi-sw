@@ -31,8 +31,8 @@ from pathlib import Path
 
 import yaml
 
-# Must match the recorders' --repo-id default (record_handumi_quest.py).
-DEFAULT_REPO_ID = "local/handumi_quest"
+# Must match the recorder's --repo-id default (scripts/record.py).
+DEFAULT_REPO_ID = "local/handumi_dataset"
 DATASETS_DIR = Path("outputs")
 TRAIN_CONFIGS_DIR = Path("configs/train")
 
@@ -48,7 +48,7 @@ def _latest_dataset(datasets_dir: Path = DATASETS_DIR) -> Path:
     if not candidates:
         raise SystemExit(
             f"No datasets found under {datasets_dir}/ — record one first "
-            "(handumi-record-quest) or pass --dataset <path>."
+            "(handumi-record) or pass --dataset <path>."
         )
     return candidates[-1]
 
