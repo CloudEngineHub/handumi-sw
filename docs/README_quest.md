@@ -146,7 +146,7 @@ handumi-replay-in-sim --repo-id local/handumi_quest_test \
 
 ## 7. Calibrate
 
-Follow **[README_offset.md](README_offset.md)** — the full step-by-step for
+Follow **[README_calibration.md](README_calibration.md)** — the full step-by-step for
 the three calibrations (mount rotation, mount position via pivot
 calibration, workspace → robot world), with per-step checkpoints and
 troubleshooting. Do it before recording datasets: steps 1-2 affect the

@@ -111,7 +111,7 @@ def _load_calibration(args: argparse.Namespace):
         return calibration
     log.warning(
         "No calibration at %s — previewing RAW controller poses. "
-        "See docs/README_offset.md to calibrate.",
+        "See docs/README_calibration.md to calibrate.",
         path,
     )
     return ControllerTcpCalibration(

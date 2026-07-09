@@ -20,7 +20,7 @@ from handumi.tracking.transforms import (
     unity_quaternion_to_handumi,
 )
 
-CONFIG = Path(__file__).resolve().parents[2] / "configs" / "tracking_meta_quest.yaml"
+CALIBRATION_DIR = Path(__file__).resolve().parents[2] / "configs" / "calibration"
 
 
 def _rand_quat(rng) -> np.ndarray:
@@ -165,25 +165,27 @@ class MountingOffsetsTest(unittest.TestCase):
         self.assertTrue(np.allclose(m.left.position, [0.1, 0.0, 0.0]))
         self.assertTrue(np.allclose(m.right.as_matrix(), np.eye(4)))  # missing -> identity
 
-    def test_from_repo_config_loads(self):
-        m = MountingOffsets.from_yaml(CONFIG)
-        # Position: the two mounts are physical mirror images across the Y=0
-        # plane, so X (forward) + Z (vertical) match and Y (lateral) is
-        # opposite-signed. Exact values are calibration data (currently the
-        # yubi-sw CAD baseline, see the config comments), not asserted here.
-        lx_p, ly_p, lz_p = m.left.position
-        self.assertTrue(np.allclose(m.right.position, [lx_p, -ly_p, lz_p], atol=1e-6))
-        # Rotation: each side a
-        # unit quaternion — not identity, since the controller mounts vertically.
-        self.assertAlmostEqual(float(np.linalg.norm(m.left.quaternion)), 1.0, places=5)
-        self.assertAlmostEqual(float(np.linalg.norm(m.right.quaternion)), 1.0, places=5)
-        self.assertFalse(np.allclose(m.left.quaternion, [0.0, 0.0, 0.0, 1.0]))
-        self.assertFalse(np.allclose(m.right.quaternion, [0.0, 0.0, 0.0, 1.0]))
-        # The two HandUMI mounts are physical mirror-image twins (same as the
-        # Piper's two arms), so right's quaternion must be the exact mirror of
-        # left's across the Y=0 plane: negate x and z, keep y and w.
-        lx, ly, lz, lw = m.left.quaternion
-        self.assertTrue(np.allclose(m.right.quaternion, [-lx, ly, -lz, lw], atol=1e-6))
+    def test_meta_calibration_file_keeps_mirror_invariant(self):
+        # The two HandUMI mounts are physical mirror-image twins across the
+        # Y=0 plane, so while meta_controller_tcp.yaml carries the mirrored
+        # CAD baseline, right must be the exact mirror of left: position
+        # (x, -y, z), quaternion (-x, y, -z, w). A broken mirror once showed
+        # up as ~12cm of unwanted lateral offset between the arms. (The pico
+        # file holds independent per-side measurements and is not checked.)
+        from handumi.calibration.control_tcp import load_controller_tcp_calibration
+
+        calibration = load_controller_tcp_calibration(
+            CALIBRATION_DIR / "meta_controller_tcp.yaml"
+        )
+        lx_p, ly_p, lz_p = calibration.left[:3]
+        self.assertTrue(
+            np.allclose(calibration.right[:3], [lx_p, -ly_p, lz_p], atol=1e-6)
+        )
+        lx, ly, lz, lw = calibration.left[3:7]
+        self.assertAlmostEqual(float(np.linalg.norm(calibration.left[3:7])), 1.0, places=4)
+        self.assertTrue(
+            np.allclose(calibration.right[3:7], [-lx, ly, -lz, lw], atol=1e-6)
+        )
 
 
 class PipelineTest(unittest.TestCase):

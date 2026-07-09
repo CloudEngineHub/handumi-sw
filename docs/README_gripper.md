@@ -1,20 +1,12 @@
 # Gripper Setup (Feetech + Cameras)
 
-One-time **per-laptop** hardware setup before teleoperating or recording: serial
-ports, servo homing, gripper-width calibration. Run commands live in
-[README.md](README.md).
+One-time **per-laptop** hardware setup before teleoperating or recording:
+serial ports, camera indices, servo homing. Width calibration lives in
+[README_calibration.md](README_calibration.md).
 
-> **Where things are stored.** Two different concerns, two different homes:
-> - **Ports** (`servo_id`/`port`, like camera `index_or_path`) are wiring, so
->   they're committed in `configs/feetech.yaml` — edit that file directly, same
->   as `configs/cameras.yaml`.
-> - **Calibration** (open/closed ticks, max width mm) is a measured property of
->   the physical gripper, so it lives in a per-user cache — never committed —
->   at `~/.cache/handumi/calibration.yaml` (or `$XDG_CACHE_HOME/...`). Homing
->   itself is stored in the servo's EEPROM (persists across power cycles and
->   laptops).
->
-> Every setup tool prints the path(s) it's using as its first line(s) of output.
+Ports (`servo_id`/`port`, camera `index_or_path`) are wiring — committed in
+`configs/feetech.yaml` / `configs/cameras.yaml`; edit them directly. Homing
+is stored in the servo's EEPROM (persists across power cycles and laptops).
 
 ## 1. Identify Ports
 
@@ -77,23 +69,9 @@ A software unwrap in `handumi.feetech.gripper` also tracks wraps continuously, s
 an un-homed range is fine as long as recording **starts with the grippers roughly
 closed**.
 
-## 4. Calibrate Gripper Width
+## 4. Calibrate
 
-```bash
-handumi-calibrate-grippers calibrate
-handumi-calibrate-grippers calibrate --side right
-```
-
-For each side:
-
-```text
-enter max opening in mm
-open gripper fully while watching live ticks, press ENTER
-close gripper fully while watching live ticks, press ENTER
-```
-
-Use `--side left|right` to recalibrate one gripper without disturbing the other.
-This writes to the per-user calibration cache (`~/.cache/handumi/calibration.yaml`),
-not to `configs/feetech.yaml`.
-
-Setup done — head back to [README.md](README.md) to teleoperate and record.
+Hardware done — calibrate the gripper widths (and, once per mount design,
+the controller → TCP transform) per
+[README_calibration.md](README_calibration.md), then head back to
+[README.md](README.md) to record.

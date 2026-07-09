@@ -1,7 +1,10 @@
-# Meta Quest native-app tracking config (yubi-style TCP/JSON + UDP time-sync).
+# Meta Quest tracking connection (yubi-style TCP/JSON + UDP time-sync).
 #
 # The PC dials the Quest: the Quest app is the TCP server, the workstation
-# connects to quest_ip:tcp_port and binds the UDP sync_port. No TLS / WSS.
+# connects to quest_ip:tcp_port and binds the UDP sync_port.
+#
+# Calibration does NOT live here — see configs/calibration/ and
+# docs/README_calibration.md.
 
 backend: "meta_quest"
 
@@ -16,37 +19,3 @@ streams:
   right: true
   hmd: true # used as the body/chest reference frame
   buttons: true # forwarded raw; Python owns the state machine
-
-# Explicit, unit-tested calibration applied in handumi.devices.transforms.
-calibration:
-  # Fixed mounting offset from the OVR controller anchor to the gripper TCP,
-  # in HandUMI convention (right-handed X-forward/Y-left/Z-up, meters + [x,y,z,w]).
-  #
-  # INVARIANT (enforced by tests/tracking/test_transforms.py): the two
-  # HandUMI mounts are physical mirror-image twins across the Y=0 plane, so
-  # right must be the exact mirror of left — position (x, -y, z), quaternion
-  # (-x, y, -z, w). Two independent per-side measurements break this and
-  # showed up as ~12cm of unwanted lateral offset between the arms.
-  #
-  # For re-calibration, scripts/setup/print_controller_pose.py + the
-  # two-stance method (bare handheld grip vs. mounted, offset =
-  # conj(q_mounted) * q_bare) worked before — see git history of this file
-  # for the full write-up of that 2026-07-02 measurement.
-  #
-  # STARTING POINT (2026-07-07): CAD-derived mount baseline, derived from a
-  # gripper -> controller transform of xyz [-0.063, ±0.016, 0.0525],
-  # rpy [0, -45deg, ±45deg], INVERTED here because this config expresses the
-  # opposite direction (controller -> gripper TCP). Treat these as the
-  # baseline to calibrate from — verify against the TCP marker + trail in
-  # Viser and refine.
-  controller_to_gripper_tcp:
-    left:
-      {
-        position: [-0.0136, -0.0559, -0.0606],
-        quaternion: [-0.1464, 0.3536, -0.3536, 0.8536],
-      }
-    right:
-      {
-        position: [-0.0136, 0.0559, -0.0606],
-        quaternion: [0.1464, 0.3536, 0.3536, 0.8536],
-      }
