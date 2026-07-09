@@ -1,6 +1,6 @@
 """Feetech servo encoder readout and aperture calibration utilities."""
 
-from handumi.devices.feetech.calibration import (
+from handumi.feetech.calibration import (
     PORTS_PATH,
     FeetechConfig,
     GripperCalibration,
@@ -11,7 +11,7 @@ from handumi.devices.feetech.calibration import (
     save_calibration,
     user_calibration_path,
 )
-from handumi.devices.feetech.gripper import FeetechGripperPair, GripperWidths, zero_gripper_widths
+from handumi.feetech.gripper import FeetechGripperPair, GripperWidths, zero_gripper_widths
 
 __all__ = [
     "PORTS_PATH",

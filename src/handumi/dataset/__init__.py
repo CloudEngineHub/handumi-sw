@@ -2,7 +2,6 @@
 
 from typing import Any
 
-from handumi.devices.pico import load_pico_body_poses
 from handumi.dataset.reader import (
     DatasetDownloadResult,
     download_dataset,
@@ -44,6 +43,10 @@ def __getattr__(name: str) -> Any:
         )
 
         return locals()[name]
+    if name == "load_pico_body_poses":
+        from handumi.devices.pico import load_pico_body_poses
+
+        return load_pico_body_poses
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [

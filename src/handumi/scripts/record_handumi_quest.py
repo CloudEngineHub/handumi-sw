@@ -62,7 +62,7 @@ from pathlib import Path
 import numpy as np
 
 from handumi.dataset.raw import pose_to_state_vector, raw_state_feature
-from handumi.devices.feetech import (
+from handumi.feetech import (
     PORTS_PATH,
     FeetechGripperPair,
     GripperWidths,
@@ -71,16 +71,16 @@ from handumi.devices.feetech import (
     user_calibration_path,
     zero_gripper_widths,
 )
-from handumi.devices.feetech.bus import FeetechUnavailableError
-from handumi.devices.gestures import DoubleClapDetector
-from handumi.devices.meta_quest import (
+from handumi.feetech.bus import FeetechUnavailableError
+from handumi.tracking.gestures import DoubleClapDetector
+from handumi.tracking.meta_quest import (
     MetaQuestConfig,
     MetaQuestReceiver,
     QuestFrame,
     controller_pose_in_workspace,
     workspace_from_hmd,
 )
-from handumi.devices.transforms import (
+from handumi.tracking.transforms import (
     MountingOffsets,
     Pose,
     WorkspaceCalibration,
@@ -256,7 +256,7 @@ def record_episode(
     clap_detector: DoubleClapDetector | None = None,
 ) -> tuple[int, str]:
     """Record one episode. Returns (n_frames, status)."""
-    from handumi.devices.cameras import read_camera_frames
+    from handumi.cameras import read_camera_frames
 
     control_interval = 1.0 / fps
     n_frames = 0
@@ -327,6 +327,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sync-port", type=int, default=None)
     p.add_argument("--camera-config", type=Path, default=Path("configs/cameras.yaml"))
     p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
+    p.add_argument(
+        "--camera-backend",
+        choices=["opencv", "cv2"],
+        default="opencv",
+        help="Camera backend used for configured USB cameras.",
+    )
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
@@ -474,7 +480,7 @@ def main() -> None:
         dataset.finalize()
         receiver.stop()
         if cameras:
-            from handumi.devices.cameras import disconnect_cameras
+            from handumi.cameras import disconnect_cameras
 
             disconnect_cameras(cameras)
         if grippers is not None:
@@ -533,7 +539,7 @@ def _resolve_config(args) -> MetaQuestConfig:
 
 
 def _connect_cameras(args):
-    from handumi.devices.cameras import build_camera_specs, connect_cameras, resolve_camera_ids
+    from handumi.cameras import build_camera_specs, connect_cameras, resolve_camera_ids
 
     cam_ids = resolve_camera_ids(args.cam_ids, args.camera_config)
     camera_specs, _ = build_camera_specs(
@@ -542,7 +548,7 @@ def _connect_cameras(args):
     cam_names = [spec["name"] for spec in camera_specs]
     cameras = connect_cameras(
         camera_specs, fps=args.cam_fps, width=args.cam_width, height=args.cam_height,
-        zero_non_laptop=False,
+        zero_non_laptop=False, backend=args.camera_backend,
     )
     return cameras, cam_names
 

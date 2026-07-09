@@ -13,6 +13,7 @@ dependencies = [
     "setuptools>=71",
     "python-dotenv==1.2.2",
     "pyyaml>=6.0",
+    "opencv-python>=4.10,<5",
     # Axol IK solver (src/handumi/robots/axol/solver.py)
     "numpy>=2.0",
     "jax[cuda13]>=0.4.0",

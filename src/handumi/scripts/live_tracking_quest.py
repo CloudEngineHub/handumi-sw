@@ -4,7 +4,7 @@ Ties the Phase 2A pieces together:
 
   1. receive Quest controller frames           (handumi.devices.meta_quest)
   2. calibrate poses into handumi_workspace     (handumi.devices.transforms)
-  3. read Feetech gripper width                 (handumi.devices.feetech)
+  3. read Feetech gripper width                 (handumi.feetech)
   -> build the 16D HandUMI raw state
   -> log to Rerun: wrist cameras + Feetech width series + a live 3D trajectory
      of each controller (rolling trails), the UMI-style view from yubi-sw.
@@ -37,7 +37,7 @@ from pathlib import Path
 import numpy as np
 
 from handumi.dataset.raw import HANDUMI_RAW_STATE_SIZE, pose_to_state_vector
-from handumi.devices.feetech import PORTS_PATH
+from handumi.feetech import PORTS_PATH
 from handumi.devices.gestures import DoubleClapDetector
 from handumi.devices.meta_quest import (
     MetaQuestConfig,
@@ -306,7 +306,7 @@ def run_live_tracking(
 
         cam_frames = {}
         if cameras:
-            from handumi.devices.cameras import read_camera_frames
+            from handumi.cameras import read_camera_frames
 
             cam_frames = read_camera_frames(cameras, cam_names, width=cam_width, height=cam_height)
 
@@ -439,6 +439,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-feetech", action="store_true")
     p.add_argument("--camera-config", type=Path, default=Path("configs/cameras.yaml"))
     p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
+    p.add_argument(
+        "--camera-backend",
+        choices=["opencv", "cv2"],
+        default="opencv",
+        help="Camera backend used for configured USB cameras.",
+    )
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
@@ -502,7 +508,7 @@ def main() -> None:
         if grippers is not None:
             grippers.close()
         if cameras:
-            from handumi.devices.cameras import disconnect_cameras
+            from handumi.cameras import disconnect_cameras
 
             disconnect_cameras(cameras)
 
@@ -530,7 +536,7 @@ def _connect_cameras(args):
     if args.skip_cameras:
         log.info("Cameras disabled.")
         return None, []
-    from handumi.devices.cameras import build_camera_specs, connect_cameras, resolve_camera_ids
+    from handumi.cameras import build_camera_specs, connect_cameras, resolve_camera_ids
 
     cam_ids = resolve_camera_ids(args.cam_ids, args.camera_config)
     camera_specs, _ = build_camera_specs(
@@ -539,7 +545,7 @@ def _connect_cameras(args):
     cam_names = [spec["name"] for spec in camera_specs]
     cameras = connect_cameras(
         camera_specs, fps=args.cam_fps, width=args.cam_width, height=args.cam_height,
-        zero_non_laptop=False,
+        zero_non_laptop=False, backend=args.camera_backend,
     )
     return cameras, cam_names
 
@@ -548,8 +554,8 @@ def _connect_feetech(args):
     if args.skip_feetech:
         log.info("Feetech disabled: gripper widths will be zero-filled.")
         return None
-    from handumi.devices.feetech import FeetechGripperPair, assert_calibrated, load_config, user_calibration_path
-    from handumi.devices.feetech.bus import FeetechUnavailableError
+    from handumi.feetech import FeetechGripperPair, assert_calibrated, load_config, user_calibration_path
+    from handumi.feetech.bus import FeetechUnavailableError
 
     feetech_config = load_config(args.feetech_config)
     if args.feetech_port is not None:
