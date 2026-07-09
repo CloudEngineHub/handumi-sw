@@ -34,9 +34,8 @@ piper = [
 ]
 
 [project.scripts]
-handumi-convert = "handumi.scripts.conversion:main"
 handumi-record = "handumi.scripts.record:main"
-handumi-live-tracking-quest = "handumi.scripts.live_tracking_quest:main"
+handumi-convert = "handumi.scripts.conversion:main"
 handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"
 handumi-home-servos = "handumi.scripts.setup.home_servos:main"
 handumi-calibrate-grippers = "handumi.scripts.setup.calibrate_grippers:main"
