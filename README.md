@@ -1,132 +1,158 @@
 # HandUMI Software
 
-Record HandUMI bimanual raw demonstrations as LeRobot-compatible datasets.
+HandUMI records bimanual demonstrations as LeRobot-compatible datasets:
 
 ```text
 left/right wrist cameras
-+ left/right Feetech gripper encoder widths
-+ optional VR tracking poses (Meta Quest / PICO)
--> HandUMI raw LeRobot dataset
++ left/right Feetech gripper widths
++ optional VR tracking poses (PICO / Meta Quest)
+-> raw HandUMI LeRobot dataset
+```
+
+The usual flow is:
+
+```text
+record data -> optionally push to Hugging Face -> convert to robot joints or replay in sim
 ```
 
 ## Install
 
-Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.12.
+Requires [uv](https://docs.astral.sh/uv/) and Python >= 3.12.
 
 ```bash
 git clone <repo-url> handumi-sw
 cd handumi-sw
-bash install.sh              # Meta Quest only: bash install.sh --skip-xrt
+bash install.sh              # PICO support included
+# bash install.sh --skip-xrt # Meta Quest only
 source .venv/bin/activate
 ```
-
-`install.sh` creates the venv, runs `uv sync`, fetches/builds the XRoboToolkit
-native SDK (needed for PICO), and installs `xrobotoolkit_sdk`. Re-run it safely
-after pulling changes.
-
-Use `--skip-xrt` if you only track with **Meta Quest** — XRoboToolkit is PICO-only
-tracking software, so building it is wasted time/dependencies on a Quest-only
-setup (see [README_quest.md](README_quest.md)). Without the flag, install.sh
-builds it for PICO support (see [README_pico.md](README_pico.md)).
 
 Check:
 
 ```bash
 python --version
-handumi-record-pico --help
+handumi-record --help
 ```
 
-## Setup (one-time)
+`install.sh` creates the virtual environment, runs `uv sync`, and builds the
+XRoboToolkit SDK needed for PICO. Use `--skip-xrt` when the setup only uses
+Meta Quest.
 
-Do these before teleoperating or recording:
+## Setup
 
-- **[README_gripper.md](README_gripper.md)** — Feetech + camera ports, servo
-  homing, and gripper-width calibration.
-- **[README_quest.md](README_quest.md)** — Meta Quest tracking (Phase 2): install
-  the YubiQuestApp, find the Quest IP, and smoke-test the pose stream.
+Before recording, configure and calibrate the hardware once:
 
-Everything below assumes that setup is done.
+- [docs/README_gripper.md](docs/README_gripper.md) - Feetech ports, camera
+  ports, servo homing, and gripper-width calibration.
+- [docs/README_pico.md](docs/README_pico.md) - PICO / XRoboToolkit setup.
+- [docs/README_quest.md](docs/README_quest.md) - Meta Quest tracking setup.
+- [docs/README_offset.md](docs/README_offset.md) - controller to TCP / robot
+  calibration.
 
-## Teleoperate (live monitor, no saving)
+## Record Data
+
+Use `handumi-record` ([src/handumi/scripts/record.py](src/handumi/scripts/record.py))
+with `--device pico` or `--device meta`.
+
+Example with the common flags:
 
 ```bash
-python -m handumi.capture.teleoperate_handumi \
+handumi-record \
+  --device pico \
+  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --output-dir outputs/datasets/handumi-demo \
+  --task "pick and place with HandUMI" \
+  --num-episodes 10 \
+  --episode-time-s 30 \
+  --fps 30 \
+  --cam-width 640 \
+  --cam-height 480
+```
+
+For Meta Quest:
+
+```bash
+handumi-record \
+  --device meta \
+  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --output-dir outputs/datasets/handumi-demo \
+  --task "pick and place with HandUMI" \
+  --num-episodes 10 \
+  --episode-time-s 30 \
   --fps 30
 ```
 
-Streams cameras and gripper widths to Rerun without saving data. Start with the
-grippers closed so the encoder unwrap anchors correctly.
+Useful options:
 
-## Record
+- `--push-to-hub` pushes the dataset after recording.
+- `--skip-feetech` records with zero-filled gripper widths.
+- `--pico-wifi` uses PICO over Wi-Fi instead of ADB.
+- `--manual-control` lets PICO buttons start/repeat/finish episodes.
+- `--no-video` stores image frames instead of encoded video.
 
-Two recorders share the same 16D HandUMI raw state + Feetech width; pick the one
-matching your tracking source.
+By default, each episode starts when you press ENTER in the terminal.
 
-### PICO / XRoboToolkit
+## Push to Hugging Face
+
+If the dataset was not recorded with `--push-to-hub`, upload the local folder:
 
 ```bash
-handumi-record-pico \
-  --repo-id local/handumi_width_test \
-  --output-dir outputs/datasets/handumi_width_test \
-  --task "gripper width hardware test" \
-  --num-episodes 1 \
-  --episode-time-s 20 \
-  --fps 30
+huggingface-cli login
+huggingface-cli upload NONHUMAN-RESEARCH/handumi-demo \
+  outputs/datasets/handumi-demo --repo-type dataset
 ```
 
-### Meta Quest (Phase 2)
+## Convert to Robot Joints
 
-First set up and smoke-test per [README_quest.md](README_quest.md), then:
+`handumi-convert`
+([src/handumi/scripts/conversion.py](src/handumi/scripts/conversion.py))
+converts the raw 16D HandUMI dataset into a robot-specific joint dataset using
+the robot configuration in `configs/robots/`.
+
+Minimal conversion:
 
 ```bash
-# tracking check only (no cameras/sim): expect fps ~120 and both trk=1;
-# trk=0 = controllers asleep or out of the headset cameras' view
-python -m handumi.devices.meta_quest --config configs/tracking_meta_quest.yaml
-
-# live visualization — Rerun 3D trajectory (uses quest_ip from the config)
-handumi-live-tracking-quest
-
-# record a dataset (16D state + observation.quest.* poses/clocks),
-# hands-free: double-clap starts/stops each episode, voice announcements,
-# saved to outputs/<timestamp>/
-handumi-record-quest --clap-control
+handumi-convert --repo-id NONHUMAN-RESEARCH/handumi-demo
 ```
 
-Add `--skip-cameras` / `--skip-feetech` to run without that hardware. Controls
-(no headset UI): **left X** resets the workspace on the current HMD pose;
-**right A** starts/stops an episode with `--button-control`; a double clap
-(close both grippers twice within ~1.2s) does the same with `--clap-control`.
-
-## Train
-
-Datasets in `outputs/` train directly with lerobot (config in
-`configs/train/act.yaml`, checkpoints in `outputs/train/`):
+The default embodiment is `axol`. To convert for Piper, use:
 
 ```bash
-handumi-train --latest                              # newest dataset, ACT + wandb
-handumi-train --dataset outputs/<ts> --steps=50000  # explicit dataset, overrides
+handumi-convert \
+  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --embodiment piper
 ```
 
-## Inspect Dataset
+Robot configs live in `configs/robots/`, for example
+[configs/robots/piper.yaml](configs/robots/piper.yaml) and
+[configs/robots/axol.yaml](configs/robots/axol.yaml).
+
+Add `--push-to-hub` to upload the converted dataset.
+
+## Replay in Simulation
+
+To inspect how a recorded dataset moves the robot in simulation with
+`handumi-replay-in-sim`
+([src/handumi/scripts/replay/replay_in_sim.py](src/handumi/scripts/replay/replay_in_sim.py)):
 
 ```bash
-lerobot-dataset-viz \
-  --repo-id local/handumi_width_test \
-  --root outputs/datasets/handumi_width_test \
-  --episode-index 0
+handumi-replay-in-sim --repo-id NONHUMAN-RESEARCH/handumi-demo
 ```
 
-## Upload to Hugging Face
+This opens a local Viser viewer and saves a rollout under `outputs/replay_in_sim/`.
+The default robot is `piper`; choose another configured robot with `--robot axol`.
 
-A recorded dataset is a plain folder, so push it with the Hugging Face CLI:
+Headless example:
 
 ```bash
-huggingface-cli login   # once, with a write token
-huggingface-cli upload NONHUMAN-RESEARCH/handumi-dataset-v2 \
-  outputs/datasets/handumi_quest_test --repo-type dataset
+handumi-replay-in-sim \
+  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --headless
 ```
 
 ## Dataset Fields
+
+Raw HandUMI datasets include:
 
 ```text
 observation.images.left_wrist
@@ -141,17 +167,15 @@ observation.feetech.left_normalized
 observation.feetech.right_normalized
 ```
 
-`observation.state[14]` and `observation.state[15]` are left/right gripper width
-in meters.
+`observation.state[14]` and `observation.state[15]` are the left/right gripper
+widths in meters.
 
-## Docs
+## More Docs
 
-- [README_gripper.md](README_gripper.md) — gripper + camera setup and calibration
-- [README_quest.md](README_quest.md) — Meta Quest tracking setup (Phase 2)
-- [README_offset.md](README_offset.md) — controller→TCP→robot-world calibration
-  (do before recording datasets)
-- [docs/architecture.md](docs/architecture.md)
-- [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md) — Meta Quest
-  motion tracking (body-worn, no-UI), Rerun trajectory rendering, yubi-sw/axol-vr
-  references
-- [docs/add-new-embodiment.md](docs/add-new-embodiment.md)
+- [docs/add_new_embodiment.md](docs/add_new_embodiment.md) - add a new robot
+  embodiment.
+- [docs/README_gripper.md](docs/README_gripper.md) - gripper and camera setup.
+- [docs/README_pico.md](docs/README_pico.md) - PICO setup.
+- [docs/README_quest.md](docs/README_quest.md) - Quest setup.
+- [docs/README_offset.md](docs/README_offset.md) - TCP and workspace
+  calibration.
