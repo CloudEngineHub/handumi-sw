@@ -7,7 +7,7 @@ frame in a buffer. A companion UDP NTP-style loop estimates the Quest<->PC clock
 offset so poses can be aligned with camera/Feetech frames in post-processing.
 
 This step does NOT transform coordinates — poses are kept as raw Unity values.
-``handumi.devices.transforms`` (Step 2) converts them.
+``handumi.tracking.transforms`` (Step 2) converts them.
 
 Reference:
   ../yubi-sw/airoa_quest/airoa_quest_bridge/transport/tcp_json.py
@@ -36,6 +36,8 @@ from typing import Any, Callable
 import numpy as np
 import yaml
 
+from handumi.calibration.control_tcp import ControllerTcpCalibration
+from handumi.tracking.base import ControllerPairSample, apply_tcp_calibration_pose7
 from handumi.tracking.transforms import (
     Pose,
     WorkspaceCalibration,
@@ -43,7 +45,7 @@ from handumi.tracking.transforms import (
     unity_pose_to_handumi,
 )
 
-log = logging.getLogger("handumi.devices.meta_quest")
+log = logging.getLogger("handumi.tracking.meta_quest")
 
 # UDP sync wire formats.
 _PING = struct.Struct("<BQ")  # (msg_type=1, t1_pc_ns)
@@ -128,6 +130,11 @@ def workspace_from_hmd(hmd: HmdState) -> WorkspaceCalibration:
     """Build a workspace reset that re-centers on the current Quest HMD pose."""
     reference = unity_pose_to_handumi(hmd.position, hmd.quaternion)
     return WorkspaceCalibration.from_reference(reference)
+
+
+def pose_to_pose7(pose: Pose) -> np.ndarray:
+    """Return ``[x,y,z,qx,qy,qz,qw]`` for a tracking :class:`Pose`."""
+    return np.concatenate([pose.position, pose.quaternion]).astype(np.float32)
 
 
 # Flat YubiQuestApp wire keys, per side (from yubi-sw quest_bridge_node.py).
@@ -454,6 +461,66 @@ class MetaQuestReceiver:
                 sock.close()
             except OSError:
                 pass
+
+
+class MetaQuestTrackingProvider:
+    """Meta Quest provider normalized to the common controller schema."""
+
+    device = "meta"
+
+    def __init__(
+        self,
+        *,
+        config: MetaQuestConfig,
+        calibration: ControllerTcpCalibration,
+    ) -> None:
+        self.config = config
+        self.calibration = calibration
+        self.receiver = MetaQuestReceiver(config)
+        self.workspace = WorkspaceCalibration.identity()
+        self.workspace_set = False
+        self._prev_reset = False
+
+    def start(self) -> None:
+        self.receiver.start()
+        log.info("Connecting to Quest at %s:%d ...", self.config.quest_ip, self.config.tcp_port)
+
+    def stop(self) -> None:
+        self.receiver.stop()
+
+    def latest(self) -> ControllerPairSample:
+        frame = self.receiver.latest()
+        if frame is None:
+            return ControllerPairSample.empty(self.device)
+
+        reset_pressed = frame.left.buttons.primary
+        reset_edge = reset_pressed and not self._prev_reset
+        self._prev_reset = reset_pressed
+        if frame.hmd.tracked and (reset_edge or not self.workspace_set):
+            self.workspace = workspace_from_hmd(frame.hmd)
+            self.workspace_set = True
+            log.info("Workspace %s on HMD pose.", "reset" if reset_edge else "initialized")
+
+        left_controller = self.workspace.apply(
+            unity_pose_to_handumi(frame.left.position, frame.left.quaternion)
+        )
+        right_controller = self.workspace.apply(
+            unity_pose_to_handumi(frame.right.position, frame.right.quaternion)
+        )
+        left = pose_to_pose7(left_controller)
+        right = pose_to_pose7(right_controller)
+        left_tcp, right_tcp = apply_tcp_calibration_pose7(left, right, self.calibration)
+        return ControllerPairSample(
+            device=self.device,
+            left_controller_pose=left,
+            right_controller_pose=right,
+            left_tcp_pose=left_tcp,
+            right_tcp_pose=right_tcp,
+            left_tracked=bool(frame.left.tracked and frame.left.valid),
+            right_tracked=bool(frame.right.tracked and frame.right.valid),
+            device_time_ns=int(frame.device_time_ns),
+            pc_monotonic_ns=int(frame.pc_monotonic_ns),
+        )
 
 
 # ---------------------------------------------------------------------------

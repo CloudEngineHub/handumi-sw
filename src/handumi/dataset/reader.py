@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from handumi.dataset.writer import info_path, load_info
+
 
 def dataset_root_from_repo_id(repo_id: str) -> Path:
     """Default local cache directory for a Hugging Face dataset repo id."""
@@ -14,6 +17,7 @@ def dataset_root_from_repo_id(repo_id: str) -> Path:
     if not repo_name:
         raise ValueError(f"Cannot derive dataset root from repo id {repo_id!r}.")
     return Path("outputs/datasets") / repo_name
+
 
 @dataclass(frozen=True)
 class DatasetRef:
@@ -31,8 +35,11 @@ class DatasetRef:
         root: str | Path | None = None,
         revision: str = "main",
     ) -> DatasetRef:
-        resolved_root = Path(root) if root is not None else dataset_root_from_repo_id(repo_id)
+        resolved_root = (
+            Path(root) if root is not None else dataset_root_from_repo_id(repo_id)
+        )
         return cls(repo_id=repo_id, root=resolved_root, revision=revision)
+
 
 class DatasetDownloadResult:
     """Summary of a downloaded or loaded LeRobot dataset."""
@@ -43,6 +50,64 @@ class DatasetDownloadResult:
     num_frames: int
     fps: int
     features: tuple[str, ...]
+
+
+def handumi_metadata(info_or_root: dict[str, Any] | str | Path) -> dict[str, Any]:
+    """Return HandUMI-specific metadata from an ``info.json`` dict or dataset root."""
+    info = load_info(info_or_root) if not isinstance(info_or_root, dict) else info_or_root
+    meta = info.get("handumi", {})
+    return dict(meta) if isinstance(meta, dict) else {}
+
+
+def recording_device(info_or_root: dict[str, Any] | str | Path) -> str | None:
+    """Return the tracking device recorded in ``meta/info.json``, if available."""
+    value = handumi_metadata(info_or_root).get("recording_device")
+    return str(value) if value is not None else None
+
+
+def validate_raw_state_metadata(info_or_root: dict[str, Any] | str | Path) -> None:
+    """Raise if a dataset advertises processed TCP poses as its main state."""
+    meta = handumi_metadata(info_or_root)
+    semantics = str(meta.get("state_semantics", ""))
+    tracking_schema = str(meta.get("tracking_schema", ""))
+    if "tcp" in semantics.lower() or "tcp" in tracking_schema.lower():
+        raise ValueError(
+            "Expected raw controller state metadata, but dataset advertises "
+            f"state_semantics={semantics!r}, tracking_schema={tracking_schema!r}."
+        )
+
+
+def load_raw_episode_states(
+    ref: DatasetRef | None = None,
+    *,
+    repo_id: str | None = None,
+    root: str | Path | None = None,
+    episode: int,
+    source: str = "observation.state",
+    revision: str | None = None,
+) -> tuple[np.ndarray, float]:
+    """Load one raw 16D HandUMI episode column as ``(states, fps)``."""
+    dataset = open_dataset(
+        ref,
+        repo_id=repo_id,
+        root=root,
+        episode=episode,
+        revision=revision,
+    )
+    fps = float(getattr(dataset, "fps", 30) or 30)
+    states: list[np.ndarray] = []
+    for item in dataset:
+        if source not in item:
+            raise ValueError(f"Dataset item has no {source!r} feature.")
+        state = np.asarray(item[source], dtype=np.float32).reshape(-1)
+        if len(state) != 16:
+            raise ValueError(
+                f"Expected raw HandUMI state length 16 in {source!r}, got {len(state)}."
+            )
+        states.append(state)
+    if not states:
+        raise ValueError(f"Episode {episode} is empty.")
+    return np.stack(states, axis=0), fps
 
 
 def _parse_episodes(value: str | None) -> list[int] | None:
@@ -191,4 +256,3 @@ def download_dataset(
         fps=dataset.fps,
         features=tuple(dataset.features.keys()),
     )
-

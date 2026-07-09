@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Convert a PICO/HandUMI LeRobot dataset to robot-specific joint angles.
+"""Convert a raw HandUMI LeRobot dataset to robot-specific joint angles.
 
-The script loads a source LeRobot dataset that contains PICO body-joint poses
-(``observation.pico.body_joints_pose``), runs inverse kinematics for the chosen
-embodiment, and writes a new LeRobot v3.0 dataset whose ``observation.state``
-and ``action`` columns contain physical robot joint values. For Piper this is
-``[j1..j6 radians, gripper meters]`` per arm; SDK integer command units are
-derived later at replay/control time.
+The script loads raw HandUMI controller states (``observation.state``), applies
+the same optional controller->TCP calibration and local-relative retargeting
+used by ``replay_in_sim.py``, then writes a LeRobot v3.0 dataset whose
+``observation.state`` and ``action`` columns contain physical robot joint
+values.
 
 All video streams are preserved unchanged (the last frame of each episode is
 dropped from the parquet data to produce ``action = state[t+1]``, but the
@@ -38,7 +37,22 @@ from dotenv import load_dotenv
 
 import numpy as np
 
+from handumi.calibration.control_tcp import (
+    DEFAULT_DEVICE as DEFAULT_CONTROLLER_DEVICE,
+    apply_controller_tcp_calibration,
+    calibration_path_for_device,
+    load_controller_tcp_calibration,
+)
 from handumi.dataset.ref import dataset_root_from_repo_id
+from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
+from handumi.retargeting.handumi_to_robot import (
+    local_frame_adapter,
+    local_relative_robot_target_pose7,
+    raw_state_pose7_pair,
+    raw_state_robot_target_pose7,
+    retarget_anchors_from_raw_state,
+)
+from handumi.robots.registry import load_embodiment
 
 load_dotenv()
 
@@ -89,9 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Git revision of the source dataset.",
     )
     ds.add_argument(
+        "--source",
+        default="observation.state",
+        help="Raw 16D HandUMI feature column to convert.",
+    )
+    ds.add_argument(
         "--column",
-        default="observation.pico.body_joints_pose",
-        help="Feature column containing PICO body joint poses.",
+        default=None,
+        help="Deprecated alias for --source.",
     )
     ds.add_argument(
         "--episodes",
@@ -153,11 +172,46 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="Constant gripper value in [0, 1] written for every frame.",
     )
-    ik.add_argument("--pos-weight", type=float, default=50.0)
-    ik.add_argument("--ori-weight", type=float, default=0.0)
+    ik.add_argument("--pos-weight", type=float, default=None)
+    ik.add_argument("--ori-weight", type=float, default=None)
     ik.add_argument("--elbow-weight", type=float, default=5.0)
-    ik.add_argument("--max-joint-delta", type=float, default=0.35)
-    ik.add_argument("--max-reach", type=float, default=0.8)
+    ik.add_argument("--max-joint-delta", type=float, default=None)
+    ik.add_argument("--max-reach", type=float, default=None)
+    ik.add_argument(
+        "--retarget-mode",
+        choices=("local-relative", "anchored"),
+        default="local-relative",
+        help="Retargeting mode shared with replay_in_sim.py.",
+    )
+    ik.add_argument(
+        "--compose-source",
+        choices=("commanded", "achieved"),
+        default="commanded",
+        help="For local-relative mode, compose on previous target or achieved FK.",
+    )
+    ik.add_argument(
+        "--translation-scale",
+        type=float,
+        default=1.0,
+        help="Scale local-relative translation deltas after frame adaptation.",
+    )
+    ik.add_argument(
+        "--controller-device",
+        choices=("pico", "meta"),
+        default=DEFAULT_CONTROLLER_DEVICE,
+        help="Controller calibration device used to derive the default YAML path.",
+    )
+    ik.add_argument(
+        "--controller-tcp-calibration",
+        type=Path,
+        default=None,
+        help="Defaults to configs/calibration/{controller_device}_controller_tcp.yaml.",
+    )
+    ik.add_argument(
+        "--raw-controller-debug",
+        action="store_true",
+        help="Use raw controller poses directly, without controller->TCP calibration.",
+    )
 
     # ------------------------------------------------------------------
     # Axol-specific parameters
@@ -244,6 +298,165 @@ def _load_source_tasks(source_root: Path) -> dict[int, str]:
     return task_map
 
 
+def _apply_tcp_calibration_to_states(
+    states: np.ndarray,
+    calibration_path: Path,
+) -> tuple[np.ndarray, Path | None]:
+    """Return raw states whose left/right pose slots are calibrated TCP poses."""
+    raw_left: list[np.ndarray] = []
+    raw_right: list[np.ndarray] = []
+    for state in states:
+        left, right = raw_state_pose7_pair(state)
+        raw_left.append(left)
+        raw_right.append(right)
+
+    calibration = load_controller_tcp_calibration(calibration_path)
+    left_tcp, right_tcp = apply_controller_tcp_calibration(
+        np.asarray(raw_left, dtype=np.float32),
+        np.asarray(raw_right, dtype=np.float32),
+        calibration,
+    )
+    calibrated = np.asarray(states, dtype=np.float32).copy()
+    calibrated[:, LEFT_POSE_SLICE] = left_tcp
+    calibrated[:, RIGHT_POSE_SLICE] = right_tcp
+    return calibrated, calibration.source
+
+
+def _solver_config(runtime, args: argparse.Namespace):
+    base = runtime.config.ik_weights
+
+    def override(name: str, fallback):
+        value = getattr(args, name, None)
+        return fallback if value is None else float(value)
+
+    return runtime.config_cls(
+        pos_weight=override("pos_weight", base.pos_weight),
+        ori_weight=override("ori_weight", base.ori_weight),
+        rest_weight=override("rest_weight", base.rest_weight),
+        posture_weight=override("posture_weight", base.posture_weight),
+        manipulability_weight=override(
+            "manipulability_weight",
+            base.manipulability_weight,
+        ),
+        max_joint_delta=override("max_joint_delta", base.max_joint_delta)
+        if base.max_joint_delta is not None or args.max_joint_delta is not None
+        else None,
+        max_reach=override("max_reach", base.max_reach)
+        if base.max_reach is not None or args.max_reach is not None
+        else None,
+    )
+
+
+def solve_joint_trajectory_from_raw_states(
+    *,
+    args: argparse.Namespace,
+    states: np.ndarray,
+) -> tuple[np.ndarray, Path | None]:
+    """Solve joints with the same retargeting loop used by replay_in_sim.py."""
+    if args.raw_controller_debug:
+        states_for_retarget = np.asarray(states, dtype=np.float32)
+        calibration_source = None
+    else:
+        states_for_retarget, calibration_source = _apply_tcp_calibration_to_states(
+            states,
+            args.controller_tcp_calibration,
+        )
+
+    runtime = load_embodiment(args.embodiment)
+    cfg = _solver_config(runtime, args)
+    q = runtime.config.home_q.astype(np.float32).copy()
+    solver = runtime.solver_cls(config=cfg)
+    home_left_pose7, home_right_pose7 = solver.fk_pose7(q)
+    first_left_pose7, first_right_pose7 = raw_state_pose7_pair(states_for_retarget[0])
+
+    anchors = None
+    left_adapter = None
+    right_adapter = None
+    if args.retarget_mode == "anchored":
+        anchors = retarget_anchors_from_raw_state(
+            states_for_retarget[0],
+            left_robot_pose7=home_left_pose7,
+            right_robot_pose7=home_right_pose7,
+            max_reach=cfg.max_reach,
+        )
+    else:
+        left_adapter = local_frame_adapter(first_left_pose7, home_left_pose7)
+        right_adapter = local_frame_adapter(first_right_pose7, home_right_pose7)
+
+    qs: list[np.ndarray] = []
+    left_targets: list[np.ndarray] = []
+    right_targets: list[np.ndarray] = []
+    left_achieved: list[np.ndarray] = []
+    right_achieved: list[np.ndarray] = []
+
+    for i, state in enumerate(states_for_retarget):
+        raw_left, raw_right = raw_state_pose7_pair(state)
+        if args.retarget_mode == "anchored":
+            if anchors is None:
+                raise RuntimeError("Anchored retarget mode was not initialized.")
+            left_pose7, right_pose7 = raw_state_robot_target_pose7(state, anchors)
+            q = solver.ik(
+                q,
+                left_pose=(left_pose7[:3], left_pose7[3:7]),
+                right_pose=(right_pose7[:3], right_pose7[3:7]),
+            )
+            fk_left_pose7, fk_right_pose7 = solver.fk_pose7(q)
+        elif i == 0:
+            left_pose7 = home_left_pose7.copy()
+            right_pose7 = home_right_pose7.copy()
+            fk_left_pose7 = home_left_pose7.copy()
+            fk_right_pose7 = home_right_pose7.copy()
+        else:
+            if left_adapter is None or right_adapter is None:
+                raise RuntimeError("Local-relative retarget mode was not initialized.")
+            prev_left, prev_right = raw_state_pose7_pair(states_for_retarget[i - 1])
+            base_left = (
+                left_targets[-1]
+                if args.compose_source == "commanded"
+                else left_achieved[-1]
+            )
+            base_right = (
+                right_targets[-1]
+                if args.compose_source == "commanded"
+                else right_achieved[-1]
+            )
+            left_pose7 = local_relative_robot_target_pose7(
+                previous_source_pose7=prev_left,
+                current_source_pose7=raw_left,
+                base_robot_pose7=base_left,
+                adapter_rot=left_adapter,
+                home_robot_pose7=home_left_pose7,
+                translation_scale=args.translation_scale,
+                max_reach=cfg.max_reach,
+            )
+            right_pose7 = local_relative_robot_target_pose7(
+                previous_source_pose7=prev_right,
+                current_source_pose7=raw_right,
+                base_robot_pose7=base_right,
+                adapter_rot=right_adapter,
+                home_robot_pose7=home_right_pose7,
+                translation_scale=args.translation_scale,
+                max_reach=cfg.max_reach,
+            )
+            q = solver.ik(
+                q,
+                left_pose=(left_pose7[:3], left_pose7[3:7]),
+                right_pose=(right_pose7[:3], right_pose7[3:7]),
+            )
+            fk_left_pose7, fk_right_pose7 = solver.fk_pose7(q)
+
+        qs.append(q.copy())
+        left_targets.append(left_pose7)
+        right_targets.append(right_pose7)
+        left_achieved.append(fk_left_pose7)
+        right_achieved.append(fk_right_pose7)
+        if (i + 1) % 100 == 0 or (i + 1) == len(states_for_retarget):
+            print(f"    frame {i + 1}/{len(states_for_retarget)}", end="\r", flush=True)
+
+    print()
+    return np.asarray(qs, dtype=np.float32), calibration_source
+
+
 # ---------------------------------------------------------------------------
 # Per-episode IK processing
 # ---------------------------------------------------------------------------
@@ -252,22 +465,22 @@ def _load_source_tasks(source_root: Path) -> dict[int, str]:
 def process_episode(
     *,
     args: argparse.Namespace,
-    poses: np.ndarray,
+    states: np.ndarray,
     episode_index: int,
     source_episode_index: int,
     task: str,
 ) -> object:
     """Run IK retargeting on one episode and return an EpisodeResult.
 
-    A fresh retargeter is built for each episode so the calibration
-    is relative to that episode's first frame.
+    A fresh retargeter is built for each episode so the local-relative
+    calibration is relative to that episode's first frame.
 
     Parameters
     ----------
     args:
         Parsed CLI args.
-    poses:
-        PICO body poses of shape ``(T, 24, 7)``.
+    states:
+        Raw HandUMI states of shape ``(T, 16)``.
     episode_index:
         Index in the *output* dataset.
     source_episode_index:
@@ -280,27 +493,14 @@ def process_episode(
     EpisodeResult
     """
     from handumi.dataset import EpisodeResult
-    from handumi.robots.loader import build_embodiment
 
-    if len(poses) < 2:
+    if len(states) < 2:
         raise ValueError(
             f"Episode {source_episode_index} has fewer than 2 frames; "
             "cannot construct (state, action) pairs."
         )
 
-    bundle = build_embodiment(args.embodiment, args, poses[0])
-
-    q = bundle.initial_q.copy()
-    q_list: list[np.ndarray] = []
-    for i, body_pose in enumerate(poses):
-        q = bundle.retarget_frame(body_pose, q)
-        q_list.append(bundle.extract_joints(q))
-        if (i + 1) % 100 == 0 or (i + 1) == len(poses):
-            print(f"    frame {i + 1}/{len(poses)}", end="\r", flush=True)
-
-    print()  # newline after progress
-
-    joint_array = np.stack(q_list, axis=0)  # (T, N_joints)
+    joint_array, _ = solve_joint_trajectory_from_raw_states(args=args, states=states)
     states = joint_array[:-1]               # t = 0 … T-2
     actions = joint_array[1:]               # t = 1 … T-1
 
@@ -354,6 +554,12 @@ def main() -> None:
 
     if args.left_only and args.right_only:
         parser.error("Use only one of --left-only or --right-only.")
+    if args.column is not None:
+        args.source = args.column
+    if args.controller_tcp_calibration is None:
+        args.controller_tcp_calibration = calibration_path_for_device(
+            args.controller_device
+        )
 
     # ------------------------------------------------------------------
     # Resolve paths and names
@@ -372,13 +578,17 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Ensure source metadata is available, then read episode count
     # ------------------------------------------------------------------
-    from handumi.dataset import ensure_metadata
+    from handumi.dataset import ensure_metadata, validate_raw_state_metadata
 
     source_info = ensure_metadata(
         repo_id=source_repo_id,
         root=source_root,
         revision=args.revision,
     )
+    try:
+        validate_raw_state_metadata(source_info)
+    except ValueError as exc:
+        parser.error(str(exc))
     total_source_episodes = int(source_info.get("total_episodes", 0))
     dataset_fps = int(source_info.get("fps", 30))
 
@@ -414,17 +624,17 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Process each episode
     # ------------------------------------------------------------------
-    from handumi.dataset import load_pico_body_poses
+    from handumi.dataset import load_raw_episode_states
 
     results = []
     for out_idx, src_idx in enumerate(episode_indices):
         print(f"\nEpisode {out_idx + 1}/{len(episode_indices)}  (source ep {src_idx})")
         try:
-            poses, ep_fps = load_pico_body_poses(
+            raw_states, _ = load_raw_episode_states(
                 repo_id=source_repo_id,
                 root=source_root,
                 episode=src_idx,
-                column=args.column,
+                source=args.source,
                 revision=args.revision,
             )
         except Exception as exc:
@@ -435,7 +645,7 @@ def main() -> None:
         try:
             result = process_episode(
                 args=args,
-                poses=poses,
+                states=raw_states,
                 episode_index=out_idx,
                 source_episode_index=src_idx,
                 task=task,
@@ -457,12 +667,9 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Determine joint names and robot_type from the embodiment spec
     # ------------------------------------------------------------------
-    from handumi.robots.loader import build_embodiment
-
-    # Build a minimal dummy bundle just to read the spec (no compute)
-    dummy_pose = np.zeros((24, 7), dtype=np.float32)
-    dummy_bundle = build_embodiment(args.embodiment, args, dummy_pose)
-    spec = dummy_bundle.spec
+    runtime = load_embodiment(args.embodiment)
+    robot_type = runtime.config.kind
+    joint_names = [f"{name}.pos" for name in runtime.robot.joints.actuated_names]
 
     # ------------------------------------------------------------------
     # Write output dataset
@@ -474,9 +681,17 @@ def main() -> None:
         source_root=source_root,
         source_info=source_info,
         episodes=results,
-        robot_type=spec.robot_type,
-        joint_names=spec.joint_names,
+        robot_type=robot_type,
+        joint_names=joint_names,
         fps=dataset_fps,
+        handumi_metadata={
+            "conversion_source": args.source,
+            "retarget_mode": args.retarget_mode,
+            "compose_source": args.compose_source,
+            "translation_scale": float(args.translation_scale),
+            "controller_device": args.controller_device,
+            "raw_controller_debug": bool(args.raw_controller_debug),
+        },
     )
 
     # ------------------------------------------------------------------

@@ -77,6 +77,57 @@ def load_info(root: str | Path) -> dict[str, Any]:
         return json.load(fh)
 
 
+def update_handumi_metadata(root: str | Path, metadata: dict[str, Any]) -> dict[str, Any]:
+    """Merge HandUMI-specific metadata into ``meta/info.json``."""
+    path = info_path(root)
+    info = load_info(root)
+    current = info.get("handumi", {})
+    info["handumi"] = {
+        **(current if isinstance(current, dict) else {}),
+        **metadata,
+    }
+    with open(path, "w") as fh:
+        json.dump(info, fh, indent=4)
+        fh.write("\n")
+    return info
+
+
+def _derive_handumi_metadata(
+    *,
+    source_info: dict[str, Any],
+    explicit: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    source_meta = source_info.get("handumi", {})
+    if not isinstance(source_meta, dict):
+        source_meta = {}
+    merged = dict(source_meta)
+    if explicit:
+        merged.update(explicit)
+    merged = _raw_only_metadata(merged)
+    if not merged:
+        return None
+    source_semantics = source_meta.get("state_semantics")
+    if source_semantics is not None and "tcp" not in str(source_semantics).lower():
+        merged.setdefault("source_state_semantics", source_semantics)
+    merged["derived_dataset"] = True
+    return merged
+
+
+def _raw_only_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Drop legacy metadata that describes processed controller->TCP data."""
+    blocked_keys = {"controller_tcp_calibration"}
+    clean: dict[str, Any] = {}
+    for key, value in metadata.items():
+        key_l = str(key).lower()
+        value_l = str(value).lower()
+        if key in blocked_keys:
+            continue
+        if key_l in {"tracking_schema", "state_semantics"} and "tcp" in value_l:
+            continue
+        clean[key] = value
+    return clean
+
+
 # ---------------------------------------------------------------------------
 # Public data types
 # ---------------------------------------------------------------------------
@@ -192,6 +243,7 @@ def _build_info_json(
     fps: int,
     joint_names: list[str],
     video_features: dict[str, Any],
+    handumi_metadata: dict[str, Any] | None = None,
     chunks_size: int = CHUNKS_SIZE,
 ) -> dict[str, Any]:
     """Build the ``info.json`` dict for a new LeRobot dataset."""
@@ -214,7 +266,7 @@ def _build_info_json(
     features["index"] = {"dtype": "int64", "shape": [1], "names": None}
     features["task_index"] = {"dtype": "int64", "shape": [1], "names": None}
 
-    return {
+    info = {
         "codebase_version": "v3.0",
         "robot_type": robot_type,
         "total_episodes": total_episodes,
@@ -229,6 +281,9 @@ def _build_info_json(
         "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
         "features": features,
     }
+    if handumi_metadata:
+        info["handumi"] = handumi_metadata
+    return info
 
 
 def _build_stats_json(
@@ -403,6 +458,7 @@ def write_dataset(
     robot_type: str,
     joint_names: list[str],
     fps: int,
+    handumi_metadata: dict[str, Any] | None = None,
     chunks_size: int = CHUNKS_SIZE,
 ) -> None:
     """Write a complete LeRobot v3.0 dataset to ``output_root``.
@@ -442,6 +498,10 @@ def write_dataset(
         if v.get("dtype") == "video"
     }
     video_keys = list(video_features.keys())
+    output_handumi_metadata = _derive_handumi_metadata(
+        source_info=source_info,
+        explicit=handumi_metadata,
+    )
 
     # ------------------------------------------------------------------
     # 1. Write data parquet (one per episode)
@@ -559,6 +619,7 @@ def write_dataset(
         fps=fps,
         joint_names=joint_names,
         video_features=video_features,
+        handumi_metadata=output_handumi_metadata,
         chunks_size=chunks_size,
     )
     with open(meta_dir / "info.json", "w") as fh:

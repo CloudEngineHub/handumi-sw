@@ -6,7 +6,11 @@ from handumi.dataset.reader import (
     DatasetDownloadResult,
     download_dataset,
     ensure_metadata,
+    handumi_metadata,
+    load_raw_episode_states,
     open_dataset,
+    recording_device,
+    validate_raw_state_metadata,
 )
 from handumi.dataset.raw import (
     HANDUMI_RAW_IMAGE_KEYS,
@@ -30,6 +34,7 @@ def __getattr__(name: str) -> Any:
         "chunk_and_file",
         "info_path",
         "load_info",
+        "update_handumi_metadata",
         "write_dataset",
     }
     if name in writer_symbols:
@@ -39,15 +44,13 @@ def __getattr__(name: str) -> Any:
             chunk_and_file,
             info_path,
             load_info,
+            update_handumi_metadata,
             write_dataset,
         )
 
         return locals()[name]
-    if name == "load_pico_body_poses":
-        from handumi.devices.pico import load_pico_body_poses
-
-        return load_pico_body_poses
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "CHUNKS_SIZE",
@@ -65,11 +68,15 @@ __all__ = [
     "dataset_root_from_repo_id",
     "download_dataset",
     "ensure_metadata",
+    "handumi_metadata",
     "info_path",
     "load_info",
-    "load_pico_body_poses",
+    "load_raw_episode_states",
     "open_dataset",
     "raw_state_feature",
+    "recording_device",
+    "update_handumi_metadata",
+    "validate_raw_state_metadata",
     "validate_raw_state_shape",
     "write_dataset",
 ]

@@ -10,6 +10,13 @@ import time
 
 import numpy as np
 
+from handumi.calibration.control_tcp import ControllerTcpCalibration
+from handumi.tracking.base import (
+    ControllerPairSample,
+    apply_tcp_calibration_pose7,
+    as_pose7,
+)
+
 log = logging.getLogger("handumi.record")
 
 SERVICE_SCRIPT = "/opt/apps/roboticsservice/runService.sh"
@@ -425,3 +432,79 @@ def read_pico_frame(xrt, *, mode: str) -> dict:
     frame["observation.pico.motion_tracker_serial_hash"] = tracker_serial_hashes
 
     return frame
+
+
+class PicoTrackingProvider:
+    """PICO/XRoboToolkit provider normalized to the common controller schema."""
+
+    device = "pico"
+
+    def __init__(
+        self,
+        *,
+        calibration: ControllerTcpCalibration,
+        mode: str = "mandos",
+        transport: str = "adb",
+        skip_adb_check: bool = False,
+    ) -> None:
+        self.calibration = calibration
+        self.mode = mode
+        self.transport = transport
+        self.skip_adb_check = skip_adb_check
+        self.xrt = None
+
+    def start(self) -> None:
+        if self.transport == "adb" and not self.skip_adb_check:
+            log.info("Checking ADB connection ...")
+            if not verify_adb_connection(timeout_s=15.0):
+                raise SystemExit(
+                    "No ADB device found after 15 s. Connect the PICO via USB, "
+                    "enable USB debugging, or pass --pico-wifi/--skip-adb-check."
+                )
+            setup_adb_reverse()
+        elif self.transport == "wifi":
+            lan_ip = guess_lan_ip()
+            if lan_ip:
+                log.info(
+                    "PICO WiFi mode: set PC-service IP to %s and port %d.",
+                    lan_ip,
+                    PICO_SERVICE_PORT,
+                )
+            else:
+                log.info("PICO WiFi mode: set PC-service IP to this computer and port %d.", PICO_SERVICE_PORT)
+        else:
+            log.info("ADB check skipped. Assuming XRoboToolkit can reach the PC service.")
+
+        launch_xrt_service()
+        self.xrt = init_xrt()
+        if not wait_for_pico_data(self.xrt, mode=self.mode, timeout_s=15.0):
+            log.warning("PICO %r data not available after 15 s; poses may be zero-filled.", self.mode)
+
+    def stop(self) -> None:
+        if self.xrt is not None:
+            try:
+                self.xrt.close()
+            except Exception:
+                pass
+            self.xrt = None
+
+    def latest(self) -> ControllerPairSample:
+        if self.xrt is None:
+            return ControllerPairSample.empty(self.device)
+        frame = read_pico_frame(self.xrt, mode=self.mode)
+        left = as_pose7(frame["observation.pico.left_controller_pose"])
+        right = as_pose7(frame["observation.pico.right_controller_pose"])
+        left_tcp, right_tcp = apply_tcp_calibration_pose7(left, right, self.calibration)
+        device_time_ns = int(np.asarray(frame["observation.pico.timestamp_ns"]).reshape(-1)[0])
+        tracked = bool(np.any(left[:3]) or np.any(right[:3]))
+        return ControllerPairSample(
+            device=self.device,
+            left_controller_pose=left,
+            right_controller_pose=right,
+            left_tcp_pose=left_tcp,
+            right_tcp_pose=right_tcp,
+            left_tracked=tracked,
+            right_tracked=tracked,
+            device_time_ns=device_time_ns,
+            pc_monotonic_ns=time.monotonic_ns(),
+        )
