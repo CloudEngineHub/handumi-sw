@@ -6,11 +6,34 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from handumi.dataset.ref import DatasetRef
-from handumi.dataset.schema import info_path, load_info
+from handumi.dataset.writer import info_path, load_info
 
+def dataset_root_from_repo_id(repo_id: str) -> Path:
+    """Default local cache directory for a Hugging Face dataset repo id."""
+    repo_name = repo_id.rstrip("/").split("/")[-1]
+    if not repo_name:
+        raise ValueError(f"Cannot derive dataset root from repo id {repo_id!r}.")
+    return Path("outputs/datasets") / repo_name
 
 @dataclass(frozen=True)
+class DatasetRef:
+    """Pointer to a LeRobot dataset on disk and/or on the Hugging Face Hub."""
+
+    repo_id: str
+    root: Path
+    revision: str = "main"
+
+    @classmethod
+    def from_repo_id(
+        cls,
+        repo_id: str,
+        *,
+        root: str | Path | None = None,
+        revision: str = "main",
+    ) -> DatasetRef:
+        resolved_root = Path(root) if root is not None else dataset_root_from_repo_id(repo_id)
+        return cls(repo_id=repo_id, root=resolved_root, revision=revision)
+
 class DatasetDownloadResult:
     """Summary of a downloaded or loaded LeRobot dataset."""
 
@@ -168,3 +191,4 @@ def download_dataset(
         fps=dataset.fps,
         features=tuple(dataset.features.keys()),
     )
+

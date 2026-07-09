@@ -20,16 +20,30 @@ from handumi.dataset.raw import (
     raw_state_feature,
     validate_raw_state_shape,
 )
-from handumi.dataset.ref import DatasetRef, dataset_root_from_repo_id
-from handumi.dataset.schema import CHUNKS_SIZE, chunk_and_file, info_path, load_info
+from handumi.dataset.reader import DatasetRef, dataset_root_from_repo_id
 
 
 def __getattr__(name: str) -> Any:
-    """Lazily expose writer symbols without importing pandas on schema-only use."""
-    if name in {"EpisodeResult", "write_dataset"}:
-        from handumi.dataset.writer import EpisodeResult, write_dataset
+    """Lazily expose writer symbols without importing pandas at package import time."""
+    writer_symbols = {
+        "CHUNKS_SIZE",
+        "EpisodeResult",
+        "chunk_and_file",
+        "info_path",
+        "load_info",
+        "write_dataset",
+    }
+    if name in writer_symbols:
+        from handumi.dataset.writer import (
+            CHUNKS_SIZE,
+            EpisodeResult,
+            chunk_and_file,
+            info_path,
+            load_info,
+            write_dataset,
+        )
 
-        return {"EpisodeResult": EpisodeResult, "write_dataset": write_dataset}[name]
+        return locals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
