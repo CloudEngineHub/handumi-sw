@@ -1,7 +1,8 @@
 """Identify Feetech serial ports and USB cameras while plugging hardware.
 
-Polls ``/dev/ttyACM*`` / ``/dev/ttyUSB*`` for Feetech servo IDs and lists USB
-cameras via ``v4l2-ctl``. Use this to fill in ``configs/feetech.yaml`` and
+Watches udev for serial/camera changes, scans ``/dev/ttyACM*`` /
+``/dev/ttyUSB*`` for Feetech servo IDs, and lists USB cameras via
+``v4l2-ctl``. Use this to fill in ``configs/feetech.yaml`` and
 ``configs/cameras.yaml``.
 
 Usage
@@ -40,24 +41,94 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Show Feetech serial ports and USB camera devices while plugging/unplugging hardware."
     )
-    parser.add_argument("--interval-s", type=float, default=2.0)
+    parser.add_argument(
+        "--interval-s",
+        type=float,
+        default=2.0,
+        help="Polling interval used only when udevadm is unavailable or --poll is set.",
+    )
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--poll",
+        action="store_true",
+        help="Poll at --interval-s instead of waiting for udev change events.",
+    )
     parser.add_argument("--start-id", type=int, default=0)
     parser.add_argument("--end-id", type=int, default=20)
     args = parser.parse_args()
 
+    monitor = None if args.once or args.poll else _start_udev_monitor()
+    if not args.once and not args.poll and monitor is None:
+        print("udevadm monitor unavailable; falling back to polling.")
+        time.sleep(1.0)
+
+    scan_ids = range(args.start_id, args.end_id + 1)
     try:
         while True:
-            _clear()
-            print(f"=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
-            _print_serial_ports(range(args.start_id, args.end_id + 1))
-            _print_camera_ports()
-            print(f"\nEdit servo_id/port in: {PORTS_PATH} (Feetech), configs/cameras.yaml (cameras)")
+            _render_status(scan_ids)
             if args.once:
                 break
-            time.sleep(args.interval_s)
+            if monitor is None:
+                time.sleep(args.interval_s)
+                continue
+            if not _wait_for_udev_event(monitor):
+                monitor = None
+                time.sleep(args.interval_s)
     except KeyboardInterrupt:
         print("\nStopped.")
+    finally:
+        _stop_udev_monitor(monitor)
+
+
+def _render_status(scan_ids: range) -> None:
+    _clear()
+    print(f"=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+    _print_serial_ports(scan_ids)
+    _print_camera_ports()
+    print(f"\nEdit servo_id/port in: {PORTS_PATH} (Feetech), configs/cameras.yaml (cameras)")
+
+
+def _start_udev_monitor() -> subprocess.Popen[str] | None:
+    if shutil.which("udevadm") is None:
+        return None
+    try:
+        return subprocess.Popen(
+            [
+                "udevadm",
+                "monitor",
+                "--udev",
+                "--subsystem-match=usb",
+                "--subsystem-match=tty",
+                "--subsystem-match=video4linux",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except OSError:
+        return None
+
+
+def _wait_for_udev_event(monitor: subprocess.Popen[str]) -> bool:
+    if monitor.stdout is None:
+        return False
+    while True:
+        line = monitor.stdout.readline()
+        if line == "":
+            return monitor.poll() is None
+        if "/usb/" in line or "/tty/" in line or "/video4linux/" in line:
+            return True
+
+
+def _stop_udev_monitor(monitor: subprocess.Popen[str] | None) -> None:
+    if monitor is None or monitor.poll() is not None:
+        return
+    monitor.terminate()
+    try:
+        monitor.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        monitor.kill()
+        monitor.wait(timeout=1)
 
 
 def _clear() -> None:

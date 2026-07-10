@@ -14,9 +14,10 @@ is stored in the servo's EEPROM (persists across power cycles and laptops).
 handumi-setup-ports
 ```
 
-Leave the command running while you plug and unplug hardware. Connect or
-disconnect **one physical device at a time**, then note which line changed.
-`Ctrl+C` stops the command.
+Leave the command running while you plug and unplug hardware. It refreshes when
+Linux reports a USB, serial, or camera device change. Connect or disconnect
+**one physical device at a time**, then note which line changed. `Ctrl+C` stops
+the command.
 
 You are collecting two kinds of wiring information:
 
@@ -25,6 +26,9 @@ You are collecting two kinds of wiring information:
 
 If the output does not show the devices you expect, see
 [Troubleshooting](#troubleshooting).
+
+If udev event monitoring is unavailable, the command falls back to polling. You
+can force polling with `handumi-setup-ports --poll`.
 
 ### Feetech grippers
 
