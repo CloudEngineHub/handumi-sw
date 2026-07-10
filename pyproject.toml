@@ -23,6 +23,8 @@ dependencies = [
     "pyroki @ git+https://github.com/chungmin99/pyroki.git",
     # Viser utilities and pyroki transitive dependency, pinned direct.
     "viser>=1.0.0",
+    # Contact physics for handumi-live --scene (grasping in sim).
+    "mujoco>=3.9.0",
     "matplotlib>=3.11.0",
     "pyvista>=0.43.0",
     "scipy>=1.17.1",

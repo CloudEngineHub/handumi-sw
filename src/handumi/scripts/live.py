@@ -106,6 +106,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-rerun", action="store_true", help="Disable the Rerun view.")
     p.add_argument("--no-sounds", action="store_true", help="Disable spoken anchor/home feedback.")
     p.add_argument(
+        "--scene",
+        type=str,
+        default=None,
+        help="Render a task scene (assets/scenes/<name>/scene.xml) in Viser, "
+        "placed per configs/scene.yaml, e.g. cube_in_box. Static props only.",
+    )
+    p.add_argument(
         "--anchor-z",
         type=float,
         default=None,
@@ -178,6 +185,11 @@ def _side_joint_indices(runtime) -> dict[str, list[int]]:
         side: [i for i, name in enumerate(names) if name.startswith(f"{side}_")]
         for side in ("left", "right")
     }
+
+
+def _mjcf_name(urdf_joint_name: str) -> str:
+    """URDF joint -> Piper MJCF actuator/joint name (left_/right_ -> izq_/der_)."""
+    return urdf_joint_name.replace("left_", "izq_", 1).replace("right_", "der_", 1)
 
 
 def _anchor_buttons_pressed(tracker) -> dict[str, bool]:
@@ -364,6 +376,45 @@ def main() -> None:
     )
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     robot_view.update_cfg(q)
+
+    physics = None
+    scene_frames: dict[str, object] = {}
+    if args.scene is not None:
+        import yaml
+
+        from handumi.sim.scene import load_scene
+
+        scene_position = (0.0, 0.0, 0.0)
+        scene_config = Path("configs/scene.yaml")
+        if scene_config.exists():
+            data = yaml.safe_load(scene_config.read_text()) or {}
+            scene_position = tuple((data.get("scene") or {}).get("position", scene_position))
+        # Props render under per-body frames so physics can move them.
+        for body in load_scene(args.scene, position=scene_position):
+            frame = server.scene.add_frame(
+                f"/scene/{body.name}", position=tuple(body.rest_position), show_axes=False
+            )
+            scene_frames[body.name] = frame
+            for i, geom in enumerate(body.geoms):
+                server.scene.add_box(
+                    f"/scene/{body.name}/g{i}",
+                    dimensions=tuple(2.0 * s for s in geom.size),
+                    color=tuple(int(round(c * 255)) for c in geom.rgba[:3]),
+                    position=tuple(geom.local_position),
+                )
+        if runtime.config.mjcf is not None:
+            from handumi.sim.mujoco_sim import MujocoPhysics
+
+            physics = MujocoPhysics(
+                mjcf_path=runtime.config.mjcf,
+                actuator_names=[_mjcf_name(n) for n in runtime.robot.joints.actuated_names],
+                scene_name=args.scene,
+                scene_position=scene_position,
+            )
+            physics.start()
+            log.info("Scene %r with MuJoCo contact physics at %s.", args.scene, scene_position)
+        else:
+            log.info("Scene %r rendered statically (no MJCF for %s).", args.scene, args.robot)
     target_markers = {
         "left": server.scene.add_icosphere("/target/left", radius=0.018, color=LEFT_COLOR),
         "right": server.scene.add_icosphere("/target/right", radius=0.018, color=RIGHT_COLOR),
@@ -473,7 +524,29 @@ def main() -> None:
             runtime.set_finger_positions(
                 q, {"left": widths.left_normalized, "right": widths.right_normalized}
             )
-            robot_view.update_cfg(q)
+
+            if physics is not None:
+                # IK joints become actuator setpoints; MuJoCo steps contact
+                # physics toward them on its own thread. Viser then renders
+                # what physics actually settled on (grasps included), not
+                # the raw IK solution.
+                joint_names = list(runtime.robot.joints.actuated_names)
+                physics.set_ctrl(
+                    {_mjcf_name(name): float(q[i]) for i, name in enumerate(joint_names)}
+                )
+                settled = physics.joint_positions()
+                q_render = q.copy()
+                for i, name in enumerate(joint_names):
+                    q_render[i] = settled.get(_mjcf_name(name), q[i])
+                robot_view.update_cfg(q_render)
+                for body_name, frame in scene_frames.items():
+                    pose = physics.body_pose(body_name)
+                    if pose is not None:
+                        position, quat_wxyz = pose
+                        frame.position = tuple(position.tolist())
+                        frame.wxyz = tuple(quat_wxyz.tolist())
+            else:
+                robot_view.update_cfg(q)
 
             if rr is not None:
                 for side, tcp, raw, color in (
@@ -489,6 +562,8 @@ def main() -> None:
     except KeyboardInterrupt:
         log.info("Stopping.")
     finally:
+        if physics is not None:
+            physics.close()
         disconnect_cameras(cameras)
         if grippers is not None:
             grippers.close()

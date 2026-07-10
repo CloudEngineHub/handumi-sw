@@ -24,6 +24,7 @@ class RobotConfig:
     kind: str
     urdf: Path
     pkg_root: Path
+    mjcf: Path | None
     ee_links: dict[str, str]
     home_q: np.ndarray
     ik_weights: KinematicsConfig
@@ -131,11 +132,13 @@ def load_robot_config(name: str) -> RobotConfig:
     weights = data.get("ik_weights") or {}
     urdf = _resolve_path(data["urdf"])
     pkg_root = _resolve_path(data["pkg_root"])
+    mjcf = _resolve_path(data["mjcf"]) if data.get("mjcf") else None
     home_q = np.asarray(data.get("home_q") or [], dtype=np.float32)
     return RobotConfig(
         kind=str(data.get("kind") or name),
         urdf=urdf,
         pkg_root=pkg_root,
+        mjcf=mjcf,
         ee_links=dict(data["ee_links"]),
         home_q=home_q,
         ik_weights=KinematicsConfig(

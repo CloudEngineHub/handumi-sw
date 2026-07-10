@@ -1,5 +1,6 @@
 kind: piper
 urdf: assets/piper/piper.urdf
+mjcf: assets/piper/piper.xml  # contact physics for handumi-live --scene
 pkg_root: assets/piper
 ee_links:
   left: left_tcp
