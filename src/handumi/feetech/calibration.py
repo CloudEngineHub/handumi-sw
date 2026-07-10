@@ -98,10 +98,10 @@ def assert_calibrated(config: FeetechConfig, *, source: Path | None = None) -> N
     where = f" in {source}" if source else ""
     raise SystemExit(
         f"Feetech calibration is incomplete for {', '.join(missing)}{where}.\n"
-        "Calibrate this laptop first (see README_gripper.md):\n"
-        "  python scripts/setup/setup_ports.py           # set servo_id/port\n"
-        "  python scripts/setup/home_servos.py           # centre the encoder range\n"
-        "  python scripts/setup/calibrate_grippers.py calibrate\n"
+        "Calibrate this laptop first (see docs/README_gripper_width.md):\n"
+        "  handumi-setup-ports           # set servo_id/port\n"
+        "  handumi-home-servos           # centre the encoder range\n"
+        "  handumi-calibrate-grippers calibrate\n"
         "Or pass --skip-feetech to run without gripper widths."
     )
 

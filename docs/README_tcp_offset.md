@@ -1,27 +1,16 @@
-# Calibration
+# Controller → Gripper TCP Offset
 
-| What | Tool | Stored at | Redo when |
-|------|------|-----------|-----------|
-| Gripper widths (ticks → mm) | `handumi-calibrate-grippers` | `~/.cache/handumi/calibration.yaml` (per machine, never committed) | Gripper hardware changes |
-| Controller → gripper TCP (mount pose) | `handumi-calibrate-tcp-offset` | `configs/calibration/{meta,pico}_controller_tcp.yaml` (committed) | The 3D-printed mount changes |
-
-Widths are per-rig (cache, outside git); the mount transform is per-design
-(repo). Hardware prerequisites: [README_gripper.md](README_gripper.md).
-
-## 1. Gripper widths
-
-```bash
-handumi-calibrate-grippers calibrate            # both sides, or --side right
-```
-
-Per side: enter the max opening in mm, open fully (ENTER), close fully
-(ENTER). Verify with `handumi-calibrate-grippers monitor`.
-
-## 2. Controller → gripper TCP
-
+The fixed pose of the mounted controller relative to the gripper tip.
 Recordings store raw controller poses; this transform
 (`T_world_tcp = T_world_controller @ T_controller_tcp`) is applied
-post-hoc by replay/conversion.
+post-hoc by replay/conversion. Stored per device in
+`configs/calibration/{meta,pico}_controller_tcp.yaml` (committed — it is a
+property of the mount design). Redo only when the 3D-printed mount changes.
+
+Gripper-width calibration is separate:
+[README_gripper_width.md](README_gripper_width.md).
+
+## Calibrate
 
 **Translation** — pivot method: pin the gripper TIP on a fixed point and
 rotate the whole device in all directions for ~25s while recording:
@@ -72,6 +61,6 @@ Then confirm on a recording: `handumi-record` a short episode and
 - **Replay/live rotated or sheared** → rotation offset.
 - **Tip sweeps during wrist-only rotations** → translation offset.
 - **Widths stuck at 0 / not moving** → gripper calibration missing or
-  ports wrong ([README_gripper.md](README_gripper.md)).
+  ports wrong ([README_gripper_width.md](README_gripper_width.md)).
 - **`trk=0` / frozen poses** → controllers asleep or out of the headset
   cameras' view.

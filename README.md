@@ -42,11 +42,11 @@ Meta Quest.
 
 Before recording, configure and calibrate the hardware once:
 
-- [docs/README_gripper.md](docs/README_gripper.md) - Feetech ports, camera
-  ports, and servo homing.
-- [docs/README_tracking.md](docs/README_tracking.md) - Meta Quest / PICO setup.
-- [docs/README_calibration.md](docs/README_calibration.md) - all calibration:
-  gripper widths + controller to gripper TCP.
+- [docs/README_gripper_width.md](docs/README_gripper_width.md) - Feetech/camera
+  ports, servo homing, and gripper-width calibration.
+- [docs/README_quest.md](docs/README_quest.md) - Meta Quest setup.
+- [docs/README_pico.md](docs/README_pico.md) - PICO setup.
+- [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
 
 ## Live Preview (no recording)
 
@@ -199,7 +199,7 @@ widths in meters.
 
 - [docs/add_new_embodiment.md](docs/add_new_embodiment.md) - add a new robot
   embodiment.
-- [docs/README_gripper.md](docs/README_gripper.md) - gripper and camera setup.
-- [docs/README_tracking.md](docs/README_tracking.md) - Meta Quest / PICO setup.
-- [docs/README_calibration.md](docs/README_calibration.md) - all calibration
-  (gripper widths, controller to gripper TCP).
+- [docs/README_gripper_width.md](docs/README_gripper_width.md) - gripper and camera setup.
+- [docs/README_quest.md](docs/README_quest.md) - Meta Quest setup.
+- [docs/README_pico.md](docs/README_pico.md) - PICO setup.
+- [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.

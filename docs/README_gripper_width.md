@@ -2,7 +2,7 @@
 
 One-time **per-laptop** hardware setup before teleoperating or recording:
 serial ports, camera indices, servo homing. Width calibration lives in
-[README_calibration.md](README_calibration.md).
+[README_tcp_offset.md](README_tcp_offset.md).
 
 Ports (`servo_id`/`port`, camera `index_or_path`) are wiring — committed in
 `configs/feetech.yaml` / `configs/cameras.yaml`; edit them directly. Homing
@@ -82,4 +82,4 @@ For each side: enter the max opening in mm, open fully (ENTER), close fully
 
 Setup done — head back to [README.md](README.md) to record. The other
 calibration (controller → gripper TCP, once per mount design) is in
-[README_calibration.md](README_calibration.md).
+[README_tcp_offset.md](README_tcp_offset.md).

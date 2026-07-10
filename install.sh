@@ -178,7 +178,7 @@ echo ""
 # ── Runtime note: XRoboToolkit service ───────────────────────────────────────
 if [[ "$SKIP_XRT" -eq 1 ]]; then
   echo "NOTE: XRoboToolkit (PICO) was skipped (--skip-xrt). Using Meta Quest"
-  echo "      tracking needs no PC service — see docs/README_tracking.md."
+  echo "      tracking needs no PC service — see docs/README_quest.md."
 else
   SERVICE_SCRIPT="/opt/apps/roboticsservice/runService.sh"
   if [[ -f "$SERVICE_SCRIPT" ]]; then
