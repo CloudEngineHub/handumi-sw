@@ -4,7 +4,11 @@ pkg_root: assets/piper
 ee_links:
   left: left_tcp
   right: right_tcp
-home_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+# Lifted-forward rest pose: joint2 +0.8 / joint3 -0.8 per arm cancel out in
+# pitch, so the EE orientation matches the all-zeros pose but the TCP sits
+# raised and forward (z 0.23 -> 0.42, x 0.20 -> 0.31) — away from the base
+# singularity that caused violent base swings when teleop started low.
+home_q: [0.0, 0.8, -0.8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, -0.8, 0.0, 0.0, 0.0, 0.0, 0.0]
 ik_weights:
   pos: 100.0
   ori: 15.0
