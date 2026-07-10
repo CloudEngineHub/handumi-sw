@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import argparse
 import glob
+import grp
+import os
+from pathlib import Path
 import shutil
 import subprocess
 import time
@@ -23,6 +26,14 @@ from datetime import datetime
 
 from handumi.feetech.bus import FeetechBus
 from handumi.feetech.calibration import PORTS_PATH, default_config
+
+_USB_SERIAL_ADAPTERS = {
+    ("1a86", "55d3"): ("QinHeng CH34x / USB Single Serial", "ch341"),
+    ("1a86", "7523"): ("QinHeng CH340/CH341", "ch341"),
+    ("10c4", "ea60"): ("Silicon Labs CP210x", "cp210x"),
+    ("0403", "6001"): ("FTDI USB Serial", "ftdi_sio"),
+    ("067b", "2303"): ("Prolific PL2303", "pl2303"),
+}
 
 
 def main() -> None:
@@ -58,9 +69,13 @@ def _print_serial_ports(scan_ids: range) -> None:
     ports = sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
     if not ports:
         print("  none")
+        _print_missing_serial_port_diagnostics()
         return
     for port in ports:
         print(f"  {port}: ids={_scan_feetech_ids(port, scan_ids)}")
+        if hint := _serial_port_permission_hint(port):
+            for line in hint:
+                print(f"    {line}")
 
 
 def _scan_feetech_ids(port: str, scan_ids: range) -> list[int] | str:
@@ -74,6 +89,143 @@ def _scan_feetech_ids(port: str, scan_ids: range) -> list[int] | str:
             return bus.scan(scan_ids)
     except Exception as exc:
         return f"unavailable ({exc})"
+
+
+def _print_missing_serial_port_diagnostics() -> None:
+    adapters = _detect_usb_serial_adapters()
+    if not adapters:
+        print("  No /dev/ttyACM* or /dev/ttyUSB* devices are present.")
+        print("  If the Feetech adapter is plugged in, try another cable/port/hub.")
+        return
+
+    print(
+        "  USB serial adapters are connected, but no /dev/ttyUSB* "
+        "or /dev/ttyACM* exists."
+    )
+    print("  Detected adapters:")
+    for adapter in adapters:
+        label = f"{adapter['vendor']}:{adapter['product']} {adapter['name']}"
+        if usb_product := adapter.get("usb_product"):
+            if usb_product not in label:
+                label += f" ({usb_product})"
+        if serial := adapter.get("serial"):
+            label += f" serial={serial}"
+        print(f"    {label}")
+
+    driver_hints = sorted(
+        {str(adapter["driver"]) for adapter in adapters if adapter.get("driver")}
+    )
+    if driver_hints:
+        print(f"  Driver hint: {', '.join(driver_hints)}")
+        missing = [
+            driver for driver in driver_hints if not _kernel_module_available(driver)
+        ]
+        if missing:
+            print(f"  Missing module for the running kernel: {', '.join(missing)}")
+
+    if kernel_hint := _kernel_module_tree_hint():
+        print(f"  {kernel_hint}")
+
+    print("  Try:")
+    print("    uname -r")
+    print("    modinfo ch341")
+    print("    ls /usr/lib/modules/$(uname -r)")
+    print("    sudo reboot")
+
+
+def _detect_usb_serial_adapters(
+    sys_bus_usb: Path = Path("/sys/bus/usb/devices"),
+) -> list[dict[str, str]]:
+    adapters: list[dict[str, str]] = []
+    if not sys_bus_usb.exists():
+        return adapters
+
+    for device in sorted(sys_bus_usb.iterdir()):
+        vendor = _read_sysfs_value(device / "idVendor")
+        product = _read_sysfs_value(device / "idProduct")
+        if not vendor or not product:
+            continue
+        key = (vendor.lower(), product.lower())
+        if key not in _USB_SERIAL_ADAPTERS:
+            continue
+        name, driver = _USB_SERIAL_ADAPTERS[key]
+        adapters.append(
+            {
+                "vendor": key[0],
+                "product": key[1],
+                "name": name,
+                "usb_product": _read_sysfs_value(device / "product") or "",
+                "driver": driver,
+                "serial": _read_sysfs_value(device / "serial") or "",
+            }
+        )
+    return adapters
+
+
+def _read_sysfs_value(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _kernel_module_available(module: str) -> bool:
+    if shutil.which("modinfo") is None:
+        return True
+    result = subprocess.run(
+        ["modinfo", module],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def _kernel_module_tree_hint() -> str:
+    try:
+        result = subprocess.run(
+            ["uname", "-r"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return ""
+    kernel = result.stdout.strip()
+    if result.returncode != 0 or not kernel:
+        return ""
+    modules_path = Path("/usr/lib/modules") / kernel
+    if modules_path.exists():
+        return ""
+    return (
+        f"Kernel module tree is missing for running kernel {kernel}; "
+        "this usually means the system was updated and needs a reboot."
+    )
+
+
+def _serial_port_permission_hint(port: str) -> list[str]:
+    if os.access(port, os.R_OK | os.W_OK):
+        return []
+    try:
+        stat_result = os.stat(port)
+        group_name = grp.getgrgid(stat_result.st_gid).gr_name
+    except OSError:
+        return []
+    except KeyError:
+        group_name = str(stat_result.st_gid)
+
+    if stat_result.st_gid in os.getgroups():
+        return [
+            "Permission check failed even though your user is in the device group.",
+            "Check udev rules or another process holding the port.",
+        ]
+
+    return [
+        f"Permission hint: add your user to the serial device group `{group_name}`.",
+        f"Run: sudo usermod -aG {group_name} $USER",
+        "Then log out and back in.",
+    ]
 
 
 def _print_camera_ports() -> None:

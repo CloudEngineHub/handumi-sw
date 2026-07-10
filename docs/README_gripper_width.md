@@ -43,6 +43,63 @@ right_wrist:
   index_or_path: 2
 ```
 
+### Troubleshooting: Feetech serial ports shows `none`
+
+`Feetech serial ports -> none` means Linux did not create any `/dev/ttyACM*`
+or `/dev/ttyUSB*` serial device. This is different from camera devices, which
+show up as `/dev/video*`.
+
+First check whether the serial device node exists:
+
+```bash
+ls /dev/ttyACM* /dev/ttyUSB*
+```
+
+If no devices exist, check whether the USB adapter itself is visible:
+
+```bash
+lsusb
+journalctl -k -f
+```
+
+Common Feetech USB serial adapters show up as QinHeng/CH34x devices such as
+`1a86:55d3` or `1a86:7523`. If `lsusb` shows the adapter but there is still no
+`/dev/ttyUSB*`, the USB cable and hub are probably fine, but the serial driver
+did not bind.
+
+On Arch Linux, this often happens right after a system update: the running
+kernel and installed module tree no longer match. Check:
+
+```bash
+uname -r
+modinfo ch341
+ls /usr/lib/modules/$(uname -r)
+```
+
+If `modinfo ch341` fails or `/usr/lib/modules/$(uname -r)` is missing, reboot:
+
+```bash
+sudo reboot
+```
+
+After rebooting, reconnect the Feetech adapter and check again:
+
+```bash
+ls /dev/ttyACM* /dev/ttyUSB*
+handumi-setup-ports
+```
+
+If `/dev/ttyUSB0` exists but `handumi-setup-ports` reports it as unavailable
+or permission denied, add your user to the serial device group shown by the
+script. On Arch this is usually `uucp`; on Debian/Ubuntu it is usually
+`dialout`:
+
+```bash
+sudo usermod -aG uucp $USER
+```
+
+Then log out and back in.
+
 ## 2. Check Feetech Ticks
 
 ```bash
