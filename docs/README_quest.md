@@ -2,11 +2,19 @@
 
 Streams controller/HMD poses over TCP/JSON + UDP time-sync using the
 prebuilt **YubiQuestApp** from [yubi-sw](https://github.com/airoa-org/yubi-sw).
-For tabletop capture, rigidly mount the Quest with both controllers inside its
-camera coverage. For portable capture, secure it rigidly to the chest; do not
-leave it free to swing from the neck. One controller is mounted on each
-gripper. No XRoboToolkit needed; install the repo with
+The current app supports the legacy bimanual workflow only. For tabletop
+capture, rigidly mount the Quest with both controllers inside its camera
+coverage. For portable legacy capture, secure it rigidly to the chest; do not
+leave it free to swing from the neck. One controller is mounted on each gripper.
+No XRoboToolkit needed; install the repo with
 `bash install.sh --skip-xrt`.
+
+Full-body qualification is a separate head-worn mode. Meta body tracking must
+be tested with the headset worn normally and a floor-level acquisition space;
+chest/neck-mounted data is not evidence that the platform body model works.
+Quest HMD, controller, hand, and body poses are platform-provided estimates,
+not direct physical measurements. Anatomical center of mass is not measured by
+the Quest runtime.
 
 ## Install (one-time)
 
@@ -44,6 +52,29 @@ python -m handumi.tracking.meta_quest --config configs/tracking_meta_quest.yaml
 Good = steady `fps` (~120) and both `trk=1` with positions that move.
 No Quest at hand? Fake one: `python -m handumi.tracking.mock_quest_sender`
 (+ receiver with `--quest-ip 127.0.0.1`).
+
+## Full-body platform probe
+
+The workstation probe records each sender packet unchanged and adds PC receive
+time plus the current UDP clock offset and RTT. It is intended for qualifying a
+diagnostic Quest build that reports OpenXR body extension, calibration,
+fidelity, joint flag, and source-time evidence. It does not add body tracking to
+the legacy APK.
+
+```bash
+handumi-quest-probe capture \
+  --config configs/tracking_meta_quest.yaml \
+  --duration-s 300 \
+  --output artifacts/quest-probe/neutral-head-worn
+
+handumi-quest-probe analyze \
+  artifacts/quest-probe/neutral-head-worn/quest_packets.jsonl
+```
+
+The output directory contains `quest_packets.jsonl`, `capture_context.json`,
+and `summary.json`. A mock-sender run validates the workstation transport and
+analysis only. It cannot establish runtime extension support, body accuracy, or
+a zero-loss Quest session unless the sender includes a real monotonic `seq`.
 
 ## Troubleshooting
 

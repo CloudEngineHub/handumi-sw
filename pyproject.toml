@@ -46,6 +46,7 @@ handumi-calibrate-grippers = "handumi.scripts.setup.calibrate_grippers:main"
 handumi-print-controller-pose = "handumi.scripts.setup.print_controller_pose:main"
 handumi-calibrate-tcp-offset = "handumi.scripts.setup.calibrate_tcp_offset:main"
 handumi-replay-in-sim = "handumi.scripts.replay.replay_in_sim:main"
+handumi-quest-probe = "handumi.tracking.quest_probe:main"
 
 [dependency-groups]
 dev = [
