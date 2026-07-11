@@ -1,25 +1,46 @@
-# HandUMI calibration runbook
+# HandUMI portable calibration runbook
 
-Status: **pending physical calibration**. The committed Meta TCP translation
-has an 8.4 cm norm, while the current gripper is expected to place the tip
-roughly 24 cm from the controller. Treat 24 cm only as a sanity check: the
-pivot solve estimates the offset from the Quest controller tracking origin.
+Status: **not ready for production collection**. TCP pivot calibration and the
+Quest-to-table ChArUco path must pass the checks below first.
 
-Keep this file as the calibration record. After calibration, add the date,
-mount revision, results, and dataset paths.
+The first collection mode is portable: secure the Quest rigidly to the chest.
+Do not leave it hanging freely from the neck. Moving the HMD is valid because
+Quest tracks the HMD and controllers in one world frame; the table origin must
+come from ChArUco, not from the current per-episode HMD recenter.
 
-## 1. Setup
+## 1. Print the table reference
 
-- Rigidly mount the HMD on the stationary rig. Do not leave it hanging.
-- Confirm both controllers remain `tracked=1` and `valid=1`.
-- Fix a dimple or cradle to the table so the gripper tip cannot slide.
-- Keep the mount unchanged throughout all trials.
+Use one canonical board for every station and session:
 
-## 2. Record pivot trials
+- ChArUco: **7 x 5 squares**.
+- Dictionary: **OpenCV `DICT_5X5_1000`**.
+- Square length: **30.00 mm**.
+- ArUco marker length: **22.00 mm**.
+- Page: A4 landscape, black and white, with at least 20 mm white margin.
+- Print at **100% / Actual size**. Disable Fit, Shrink and borderless scaling.
 
-Record three 25-second episodes per side. Keep the tip fixed while rotating
-through roll, pitch, and yaw. Feetech is not required; cameras remain enabled
-because the recorder currently has no `--skip-cameras` option.
+Do not use an arbitrary ChArUco image from the internet. Generate and keep a
+versioned PDF with these exact parameters. After printing, measure at least
+three squares in X and Y with calipers. Their mean must be 30.00 mm within
+0.20 mm. Reject and reprint if the scale differs or X/Y scale is unequal.
+
+Glue the sheet flat to a rigid matte plate; avoid wrinkles, glossy lamination
+and bent foam board. Mark the operator-facing edge. The HandUMI table frame is:
+
+- origin: center of the printed board on its top surface;
+- +X: operator's right;
+- +Y: away from the operator;
+- +Z: upward from the table.
+
+Place the board flat at a repeatable location near the center of the workspace.
+It may be removed after session calibration without moving the table or Quest
+tracking environment.
+
+## 2. Calibrate controller to TCP once per mount
+
+Rigidly attach each Quest controller and wrist camera to its HandUMI. Fix a
+dimple or cradle to the table so the gripper tip cannot slide. Record three
+25-second pivot episodes per side while rotating through roll, pitch and yaw:
 
 ```bash
 handumi-record --device meta --skip-feetech \
@@ -27,80 +48,95 @@ handumi-record --device meta --skip-feetech \
   --task "tcp pivot left" --num-episodes 3 --episode-time-s 25
 ```
 
-Repeat for the right side. Validate both datasets before solving:
+Repeat for the right side, validate, and solve each accepted episode:
 
 ```bash
 handumi-validate --repo-id local/tcp_pivot_left \
   --root outputs/datasets/tcp_pivot_left --fail-on-reject
-```
 
-## 3. Solve without touching production
-
-Run each accepted episode into a temporary output and compare the three
-translations. Example for left episode 0:
-
-```bash
 handumi-calibrate-tcp-offset pivot --device meta --side left \
   --parquet outputs/datasets/tcp_pivot_left/data/chunk-000/file-000.parquet \
   -e 0 --output outputs/calibration/meta_left_trial_0.yaml
 ```
 
-Acceptance criteria per side:
+Acceptance per side:
 
-- RMS residual **<= 2 mm** and maximum residual **<= 5 mm**.
+- RMS residual <= 2 mm and maximum residual <= 5 mm.
 - No weak-rotation-diversity warning.
-- Translation estimates across the three trials agree within **2 mm**.
-- Offset direction and scale are physically plausible; left/right symmetry is
-  a sanity check, not a hard requirement.
+- The three translations agree within 2 mm.
+- Offset direction and scale are physically plausible.
 
-Re-run the selected left and right trials into the same candidate file, then
-inspect it. Do not overwrite the committed calibration until verification.
+Only after verification replace
+`configs/calibration/meta_controller_tcp.yaml`.
 
-```bash
-handumi-calibrate-tcp-offset inspect \
-  outputs/calibration/meta_controller_tcp_candidate.yaml
-```
+## 3. Calibrate controller to wrist camera once per mount
 
-## 4. Rotation and table frame
+This extrinsic is required because the wrist camera observes ChArUco while
+Quest reports the controller pose. It is separate from controller-to-TCP.
 
-Do not estimate rotation from an orientation described only relative to the
-table: the current recording workspace is initialized from the HMD. Keep the
-existing rotation only if the controller mount orientation is unchanged.
+For each side, hold the board fixed and capture at least 20 synchronized views
+covering different distances and roll/pitch/yaw angles. Each view must contain
+at least 12 detected ChArUco corners. Solve the rigid
+`T_controller_wrist_camera` transform from controller poses and board poses.
 
-Before production data collection, implement the YUBI-style Quest-to-table
-extrinsic calibration:
+Save one calibration per side with board parameters, camera intrinsics,
+reprojection error, timestamp and mount revision. Recalibrate after moving a
+controller or wrist camera mount.
 
-- Place a ChArUco board at a repeatable table pose.
-- Observe it with the rigid wrist cameras and fixed workspace camera.
-- Estimate and save `T_table_quest` with board geometry, reprojection error,
-  timestamp, and rig identifier.
-- Express recorded controller/TCP poses in that table frame.
+Acceptance:
 
-This software path is **not implemented yet**. Rotation calibration against
-the table must wait for it or use a rigid orientation fixture whose pose is
-known in the current Quest workspace.
+- Mean reprojection error <= 0.5 px; maximum <= 1.5 px.
+- Reconstructed fixed-board positions agree within 2 mm RMS.
+- Left- and right-camera estimates of the same board agree within 3 mm and 1 deg.
 
-## 5. Verify and release
+**This solver and its persisted calibration are not implemented yet.**
 
-```bash
-handumi-live --device meta --anchor-z 0.0
-```
+## 4. Set the table origin at the start of each session
 
-- Hold the tip in one pivot and rotate the wrist: simulated TCP motion should
-  remain within 2 mm.
-- After one anchor, touch several table points using different wrist
-  orientations; simulated height should remain within 2 mm of the table.
-- Record and replay a pick-and-place episode and confirm the same behavior.
+1. Wear the Quest rigidly on the chest and start YubiQuestApp.
+2. Place the canonical board flat in its marked table location.
+3. Observe it from 8-12 varied poses with either wrist camera; using both is a
+   stronger cross-check.
+4. For each view compute:
 
-After passing, replace `configs/calibration/meta_controller_tcp.yaml`, run
-`handumi-calibrate-tcp-offset inspect --device meta`, commit the calibration,
-and record the measured RMS/max/condition values below.
+   `T_quest_board = T_quest_controller * T_controller_camera * T_camera_board`
+
+5. Reject outliers and average the accepted transforms.
+6. Convert the board frame to the defined table frame and save
+   `T_table_quest` with residuals, board ID, rig/session ID and timestamp.
+7. Touch three known points and the table plane with both TCPs. Require <= 2 mm
+   height error and <= 3 mm 3D disagreement before recording.
+
+Quest may move with the operator after this calibration. Recalibrate the
+session if Quest loses/relocalizes tracking, the chest mount slips, the table
+moves, or validation fails.
+
+The recorder must use the saved `T_table_quest` for every episode in the
+session and must not replace it with the current HMD-based reset when the start
+gesture is detected. Raw controller and HMD poses remain stored unchanged;
+table-frame TCP poses are derived reproducibly from the recorded transforms.
+
+**This session-calibration and recorder path are not implemented yet.**
+
+## 5. Pilot before production
+
+After Sections 2-4 are implemented and accepted:
+
+1. Record 10 bimanual episodes using double-clap start/stop.
+2. Run `handumi-validate --fail-on-reject`.
+3. Replay and convert with the recorded calibration metadata.
+4. Verify both wrist videos, Feetech widths, tracking health and table-frame
+   TCP trajectories.
+5. Start production only if all 10 episodes pass without manual correction.
 
 ## Calibration record
 
-- Date:
-- Mount revision:
-- Left offset / RMS / max / condition:
-- Right offset / RMS / max / condition:
-- Quest-to-table calibration:
-- Source datasets:
+- Date / operator:
+- Quest and mount revision:
+- Printed board ID / measured square size X/Y:
+- Camera intrinsics:
+- Left TCP offset / RMS / max:
+- Right TCP offset / RMS / max:
+- Left/right controller-to-camera residuals:
+- Quest-to-table residual / verification points:
+- Source datasets and software commit:
