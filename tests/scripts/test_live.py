@@ -5,7 +5,10 @@ from pathlib import Path
 import numpy as np
 
 from handumi.calibration.control_tcp import ControllerTcpCalibration
-from handumi.scripts.live import _load_calibration, _sample_state
+from handumi.retargeting.handumi_to_robot import VR_TO_ROBOT
+from handumi.robots.kinematics import limit_joint_delta
+from handumi.robots.registry import load_robot_config
+from handumi.scripts.live import _load_calibration, _sample_state, _tracking_world_map
 from handumi.tracking.base import ControllerPairSample
 
 
@@ -48,6 +51,33 @@ class LoadCalibrationTest(unittest.TestCase):
         calibration = _load_calibration(self._args(Path("/nonexistent/calib.yaml")))
         self.assertTrue(np.allclose(calibration.left[:3], 0.0))
         self.assertTrue(np.allclose(calibration.left[3:7], [0, 0, 0, 1]))
+
+
+class PiperLiveConfigTest(unittest.TestCase):
+    def test_home_matches_physical_piper_start(self):
+        config = load_robot_config("piper")
+
+        np.testing.assert_allclose(
+            config.home_q[[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13]],
+            [0, 0, 0, 0, np.deg2rad(25), 0] * 2,
+            atol=1e-7,
+        )
+
+    def test_joint_delta_is_limited_per_joint(self):
+        current = np.array([0.0, 0.5, -0.5], dtype=np.float32)
+        target = np.array([0.2, 0.48, -0.8], dtype=np.float32)
+
+        limited = limit_joint_delta(current, target, np.deg2rad(4))
+
+        np.testing.assert_allclose(
+            limited,
+            [np.deg2rad(4), 0.48, -0.5 - np.deg2rad(4)],
+            atol=1e-7,
+        )
+
+    def test_live_world_map_matches_tracking_provider_axes(self):
+        np.testing.assert_allclose(_tracking_world_map("pico"), VR_TO_ROBOT)
+        np.testing.assert_allclose(_tracking_world_map("meta"), np.eye(3))
 
 
 if __name__ == "__main__":

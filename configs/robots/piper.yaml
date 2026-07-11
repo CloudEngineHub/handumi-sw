@@ -5,13 +5,14 @@ pkg_root: assets/piper
 ee_links:
   left: left_tcp
   right: right_tcp
-# Work-ready rest pose per arm: joint2 +1.2, joint3 -0.8, joint5 +0.4 —
-# elbow arched high with the gripper tilted ~41 deg down toward the table,
-# TCP at (x 0.36, z 0.19). Matches the natural HandUMI pick-and-place stance
-# while staying clear of the base-axis singularity.
-home_q: [0.0, 1.2, -0.8, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 1.2, -0.8, 0.0, 0.4, 0.0, 0.0, 0.0]
+# Physical Piper start pose used by handumi-IK: joint5 +25 deg per arm.
+# Keeping simulation, conversion, and real-arm startup on the same home avoids
+# an artificial offset when the controller pose is anchored.
+home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0]
 ik_weights:
   pos: 100.0
   ori: 15.0
   rest: 2.0
+  # 4 deg per IK frame, matching the validated handumi-IK teleop command.
+  max_joint_delta: 0.06981317
   max_reach: 0.45

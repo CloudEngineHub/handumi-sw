@@ -67,8 +67,10 @@ from handumi.cameras import (
 from handumi.dataset.raw import pose_to_state_vector
 from handumi.feetech import PORTS_PATH, zero_gripper_widths
 from handumi.retargeting.handumi_to_robot import (
-    raw_state_robot_target_pose7,
-    retarget_anchors_from_raw_state,
+    VR_TO_ROBOT,
+    local_frame_adapter,
+    local_relative_robot_target_pose7,
+    raw_state_pose7_pair,
 )
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
 from handumi.robots.utils import IDENTITY_POSE7
@@ -102,6 +104,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--robot", choices=EMBODIMENT_NAMES, default="piper")
     p.add_argument("--port", type=int, default=8003, help="Viser port.")
     p.add_argument("--fps", type=int, default=30)
+    p.add_argument(
+        "--translation-scale",
+        type=float,
+        default=1.0,
+        help="Scale HandUMI translation deltas before applying them to the robot TCP.",
+    )
     p.add_argument("--no-browser", action="store_true", help="Don't auto-open Viser.")
     p.add_argument("--no-rerun", action="store_true", help="Disable the Rerun view.")
     p.add_argument("--no-sounds", action="store_true", help="Disable spoken anchor/home feedback.")
@@ -222,6 +230,13 @@ def _sample_state(sample, widths=None) -> np.ndarray:
     left_w = 0.0 if widths is None else widths.left
     right_w = 0.0 if widths is None else widths.right
     return pose_to_state_vector(left, right, left_w, right_w)
+
+
+def _tracking_world_map(device: str) -> np.ndarray:
+    """Map the provider's TCP world axes into robot-world axes."""
+    # Meta poses are converted from Unity to HandUMI/robot axes at the tracking
+    # boundary. PICO/XRT poses remain in their native VR world here.
+    return VR_TO_ROBOT if device == "pico" else np.eye(3, dtype=np.float32)
 
 
 def _init_rerun(enabled: bool, cam_names: list[str]):
@@ -451,9 +466,9 @@ def main() -> None:
             anchor_ref[side][2] = args.anchor_z
         log.info("Table-anchor mode: anchor with the tip ON the table "
                  "(maps to z=%.3f in robot world).", args.anchor_z)
-    # Per-arm anchors: None = disengaged (arm holds home). X/A engage a side
-    # by snapshotting the current state; a per-side double clap disengages it.
-    anchors: dict[str, object] = {"left": None, "right": None}
+    # Per-arm anchors: None = disengaged (arm holds home). Each active anchor
+    # stores the calibrated source TCP and its local-frame SE(3) adapter.
+    anchors: dict[str, dict[str, np.ndarray] | None] = {"left": None, "right": None}
     prev_button = {"left": False, "right": False}
     clap = {"left": DoubleClapDetector(), "right": DoubleClapDetector()}
     interval = 1.0 / args.fps
@@ -477,6 +492,7 @@ def main() -> None:
                 rr.log("observation.feetech.right_width_mm", rr.Scalars(float(widths.right_mm)))
 
             state = _sample_state(sample, widths)
+            source_poses = dict(zip(("left", "right"), raw_state_pose7_pair(state), strict=True))
 
             # (Re-)anchor a side on either gesture — X/A rising edge (hands
             # free, during setup) or that side's double clap (hands inside
@@ -496,12 +512,15 @@ def main() -> None:
                 if not side_tracked[side]:
                     log.warning("%s anchor ignored — that controller is not tracked.", side)
                     continue
-                anchors[side] = retarget_anchors_from_raw_state(
-                    state,
-                    left_robot_pose7=anchor_ref["left"],
-                    right_robot_pose7=anchor_ref["right"],
-                    max_reach=max_reach,
-                )
+                source_pose = source_poses[side]
+                anchors[side] = {
+                    "source": source_pose.copy(),
+                    "adapter": local_frame_adapter(
+                        source_pose,
+                        anchor_ref[side],
+                        source_world_to_robot_world=_tracking_world_map(args.device),
+                    ),
+                }
                 log.info("%s arm anchored — follows from home.", side)
                 log_say(f"{side} anchored", play_sounds=play_sounds)
                 if physics is not None:
@@ -516,10 +535,19 @@ def main() -> None:
             # home_q every tick (no IK target — chasing the home pose through
             # IK left the arm in a jittery tug-of-war of costs).
             ik_targets: dict[str, tuple | None] = {"left": None, "right": None}
-            for index, side in enumerate(("left", "right")):
-                if anchors[side] is None or not side_tracked[side]:
+            for side in ("left", "right"):
+                anchor = anchors[side]
+                if anchor is None or not side_tracked[side]:
                     continue
-                pose7 = raw_state_robot_target_pose7(state, anchors[side])[index]
+                pose7 = local_relative_robot_target_pose7(
+                    previous_source_pose7=anchor["source"],
+                    current_source_pose7=source_poses[side],
+                    base_robot_pose7=anchor_ref[side],
+                    adapter_rot=anchor["adapter"],
+                    home_robot_pose7=anchor_ref[side],
+                    translation_scale=args.translation_scale,
+                    max_reach=max_reach,
+                )
                 ik_targets[side] = (pose7[:3], pose7[3:7])
                 target_markers[side].position = tuple(pose7[:3])
             q = solver.ik(q, left_pose=ik_targets["left"], right_pose=ik_targets["right"])
