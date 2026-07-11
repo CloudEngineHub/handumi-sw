@@ -38,6 +38,7 @@ from handumi.cameras import (
     read_camera_samples,
     resolve_camera_ids,
 )
+from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset.raw import (
     camera_health_features,
     capture_timing_features,
@@ -47,7 +48,6 @@ from handumi.dataset.raw import (
     raw_tracking_features,
 )
 from handumi.feetech import (
-    PORTS_PATH,
     FeetechGripperPair,
     FeetechGripperSampler,
     GripperWidths,
@@ -375,8 +375,13 @@ def record_episode(
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Record HandUMI data with PICO or Meta Quest.")
     p.add_argument("--device", choices=("pico", "meta"), required=True)
+    p.add_argument(
+        "--rig-config",
+        type=Path,
+        default=DEFAULT_RIG_CONFIG,
+        help="Machine-local cameras, Feetech, and Meta Quest configuration.",
+    )
     p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
-    p.add_argument("--camera-config", type=Path, default=Path("configs/cameras.yaml"))
     p.add_argument(
         "--wrist-cameras",
         action="store_true",
@@ -403,7 +408,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
-    p.add_argument("--feetech-config", type=Path, default=PORTS_PATH)
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
     p.add_argument("--repo-id", type=str, default="local/handumi_dataset")
@@ -466,7 +470,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
-    p.add_argument("--tracking-config", type=Path, default=Path("configs/tracking_meta_quest.yaml"))
     p.add_argument("--quest-ip", type=str, default=None)
     p.add_argument("--tcp-port", type=int, default=None)
     p.add_argument("--sync-port", type=int, default=None)
@@ -545,7 +548,7 @@ def main() -> None:
     log.info("--- Camera setup ---")
     cam_ids = resolve_camera_ids(
         args.cam_ids,
-        args.camera_config,
+        args.rig_config,
         camera_names=camera_names,
     )
     _validate_unique_camera_ids(camera_names, cam_ids)
@@ -731,11 +734,7 @@ def build_tracker(
             skip_adb_check=args.skip_adb_check,
         )
 
-    base = (
-        MetaQuestConfig.from_yaml(args.tracking_config)
-        if args.tracking_config.exists()
-        else MetaQuestConfig(quest_ip="")
-    )
+    base = MetaQuestConfig.from_yaml(args.rig_config)
     config = MetaQuestConfig(
         quest_ip=args.quest_ip if args.quest_ip is not None else base.quest_ip,
         tcp_port=args.tcp_port if args.tcp_port is not None else base.tcp_port,
@@ -752,7 +751,7 @@ def connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:
     if args.skip_feetech:
         log.info("Feetech disabled: gripper widths will be zero-filled.")
         return None
-    feetech_config = load_config(args.feetech_config)
+    feetech_config = load_config(args.rig_config)
     if args.feetech_port is not None:
         feetech_config = type(feetech_config)(
             port=args.feetech_port,
@@ -859,7 +858,7 @@ def _validate_unique_camera_ids(
         )
         raise SystemExit(
             f"Selected cameras must use distinct devices ({mappings}). "
-            "Fix configs/cameras.yaml or pass matching --cam-ids."
+            "Fix the cameras section in configs/rig.yaml or pass matching --cam-ids."
         )
 
 

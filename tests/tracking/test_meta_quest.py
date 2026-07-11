@@ -1,7 +1,9 @@
 import socket
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -46,6 +48,28 @@ def _identity_calibration() -> ControllerTcpCalibration:
         right=IDENTITY_POSE7.copy(),
         source=None,
     )
+
+
+class MetaQuestConfigTest(unittest.TestCase):
+    def test_loads_meta_quest_section_from_rig(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rig.yaml"
+            path.write_text(
+                "meta_quest:\n"
+                "  connection:\n"
+                "    quest_ip: 192.168.1.42\n"
+                "    tcp_port: 60000\n"
+                "    sync_port: 41000\n"
+                "  health:\n"
+                "    frame_stale_timeout_s: 0.5\n",
+                encoding="utf-8",
+            )
+            config = MetaQuestConfig.from_yaml(path)
+
+        self.assertEqual(config.quest_ip, "192.168.1.42")
+        self.assertEqual(config.tcp_port, 60000)
+        self.assertEqual(config.sync_port, 41000)
+        self.assertEqual(config.frame_stale_timeout_s, 0.5)
 
 
 class ParseFrameTest(unittest.TestCase):

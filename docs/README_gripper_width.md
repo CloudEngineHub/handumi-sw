@@ -1,12 +1,12 @@
 # Gripper Setup (Feetech + Cameras)
 
 One-time **per-laptop** hardware setup before teleoperating or recording:
-serial ports, camera indices, servo homing. Width calibration lives in
-[README_tcp_offset.md](README_tcp_offset.md).
+serial ports, camera indices, servo homing, and width calibration.
 
-Ports (`servo_id`/`port`, camera `index_or_path`) are wiring — committed in
-`configs/feetech.yaml` / `configs/cameras.yaml`; edit them directly. Homing
-is stored in the servo's EEPROM (persists across power cycles and laptops).
+Ports (`servo_id`/`port`, camera `index_or_path`) are machine-local wiring in
+the ignored `configs/rig.yaml`; `install.sh` creates it from
+`configs/rig.example.yaml`. Homing is stored in the servo's EEPROM and
+persists across power cycles and laptops.
 
 ## 1. Identify Ports
 
@@ -45,28 +45,30 @@ For each physical gripper, write down:
 - the serial port: `/dev/ttyACM0`, `/dev/ttyUSB0`, etc.
 - the detected servo ID from `ids=[...]`
 
-Then edit `configs/feetech.yaml`. Put the detected serial port in `port` and
-the detected ID in `servo_id`:
+Then edit the `feetech` section in `configs/rig.yaml`. Put the detected serial
+port in `port` and the detected ID in `servo_id`:
 
 ```yaml
-left:
-  servo_id: 0
-  port: /dev/ttyACM0
-right:
-  servo_id: 1
-  port: /dev/ttyACM1
+feetech:
+  left:
+    servo_id: 0
+    port: /dev/ttyACM0
+  right:
+    servo_id: 1
+    port: /dev/ttyACM1
 ```
 
 If both grippers are connected through the same Feetech bus adapter, they may
 use the same `port` and different `servo_id` values:
 
 ```yaml
-left:
-  servo_id: 0
-  port: /dev/ttyUSB0
-right:
-  servo_id: 1
-  port: /dev/ttyUSB0
+feetech:
+  left:
+    servo_id: 0
+    port: /dev/ttyUSB0
+  right:
+    servo_id: 1
+    port: /dev/ttyUSB0
 ```
 
 If each gripper has its own USB adapter, they usually use different `port`
@@ -89,13 +91,14 @@ USB Camera: USB Camera (...):
 Use the first `/dev/video*` node for each physical camera unless testing shows
 the second one is the usable stream. In the example above, if `/dev/video2` is
 the left wrist camera and `/dev/video4` is the right wrist camera, edit
-`configs/cameras.yaml` like this:
+the `cameras` section in `configs/rig.yaml` like this:
 
 ```yaml
-left_wrist:
-  index_or_path: /dev/video2
-right_wrist:
-  index_or_path: /dev/video4
+cameras:
+  left_wrist:
+    index_or_path: /dev/video2
+  right_wrist:
+    index_or_path: /dev/video4
 ```
 
 `index_or_path` can be either a numeric OpenCV index such as `0` or an explicit
@@ -221,13 +224,14 @@ handumi-setup-ports --start-id 0 --end-id 253
 ### Gripper side is swapped
 
 If the right gripper changes when you move the left gripper, swap the `left`
-and `right` entries in `configs/feetech.yaml`. Keep the `servo_id` and `port`
-together as a pair.
+and `right` entries under `feetech` in `configs/rig.yaml`. Keep the `servo_id`
+and `port` together as a pair.
 
 ### Camera side is swapped
 
 If the right camera preview shows the left wrist, swap the `index_or_path`
-values for `left_wrist` and `right_wrist` in `configs/cameras.yaml`.
+values for `left_wrist` and `right_wrist` under `cameras` in
+`configs/rig.yaml`.
 
 ### Camera appears twice
 
@@ -238,9 +242,9 @@ node from the same camera block.
 ### Ticks do not change
 
 If `handumi-calibrate-grippers monitor` connects but `ticks` stay constant while
-you move the gripper, confirm that `configs/feetech.yaml` points to the servo
-for the gripper you are moving. If the correct servo is selected, re-home the
-servo and recalibrate width.
+you move the gripper, confirm that the `feetech` section in `configs/rig.yaml`
+points to the servo for that gripper. If the correct servo is selected,
+re-home the servo and recalibrate width.
 
 ### Width flips or saturates near open/close
 

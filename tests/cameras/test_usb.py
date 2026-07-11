@@ -76,9 +76,11 @@ class UsbCameraConfigTest(unittest.TestCase):
             with path.open("w", encoding="utf-8") as fh:
                 yaml.safe_dump(
                     {
-                        "left_wrist": {"index_or_path": 3},
-                        "right_wrist": {"index_or_path": 5},
-                        "workspace": {"index_or_path": 7},
+                        "cameras": {
+                            "left_wrist": {"index_or_path": 3},
+                            "right_wrist": {"index_or_path": 5},
+                            "workspace": {"index_or_path": 7},
+                        }
                     },
                     fh,
                 )

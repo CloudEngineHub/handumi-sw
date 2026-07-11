@@ -73,6 +73,7 @@ packages = ["src/handumi"]
 [tool.hatch.build.targets.wheel.force-include]
 "assets/axol" = "handumi/assets/axol"
 "assets/piper" = "handumi/assets/piper"
+"configs/rig.example.yaml" = "handumi/configs/rig.example.yaml"
 "configs/robots" = "handumi/configs/robots"
 
 [tool.hatch.build.targets.sdist]

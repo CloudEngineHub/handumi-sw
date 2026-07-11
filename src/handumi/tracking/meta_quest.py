@@ -37,9 +37,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-import yaml
 
 from handumi.calibration.control_tcp import ControllerTcpCalibration
+from handumi.config import load_rig_section
 from handumi.tracking.base import ControllerPairSample, apply_tcp_calibration_pose7
 from handumi.tracking.transforms import (
     Pose,
@@ -243,8 +243,7 @@ class MetaQuestConfig:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "MetaQuestConfig":
-        with Path(path).open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
+        data = load_rig_section(Path(path), "meta_quest")
         conn = data.get("connection", {}) or {}
         health = data.get("health", {}) or {}
         return cls(
@@ -684,7 +683,7 @@ def _main() -> None:
     parser.add_argument("--tcp-port", type=int, default=65432)
     parser.add_argument("--sync-port", type=int, default=42000)
     parser.add_argument("--config", type=Path, default=None,
-                        help="Optional configs/tracking_meta_quest.yaml override.")
+                        help="Optional configs/rig.yaml override.")
     parser.add_argument("--print-raw", action="store_true",
                         help="Dump the first received raw JSON frame (verify wire format).")
     args = parser.parse_args()

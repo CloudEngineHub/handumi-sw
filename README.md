@@ -64,7 +64,8 @@ handumi-record --help
 
 `install.sh` creates the virtual environment, runs `uv sync`, and builds the
 XRoboToolkit SDK needed for PICO. Use `--skip-xrt` when the setup only uses
-Meta Quest.
+Meta Quest. It also creates the ignored machine-local `configs/rig.yaml` from
+`configs/rig.example.yaml` without overwriting an existing rig configuration.
 
 ## Setup
 
@@ -148,6 +149,8 @@ handumi-record \
 
 Useful options:
 
+- `--rig-config` selects the local camera, Feetech, and Meta Quest settings
+  (default: `configs/rig.yaml`).
 - No camera-selection flag records both wrist cameras. Use
   `--wrist-cameras --workspace-camera` for all three, `--workspace-camera`
   for only the workspace view, or `--only-left-camera` /

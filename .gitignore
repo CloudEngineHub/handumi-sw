@@ -68,6 +68,7 @@ Thumbs.db
 external_dependencies/
 outputs/
 datasets/
+configs/rig.yaml
 
 # Editor config
 .zed/

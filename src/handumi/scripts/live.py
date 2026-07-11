@@ -64,8 +64,9 @@ from handumi.cameras import (
     read_camera_frames,
     resolve_camera_ids,
 )
+from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset.raw import pose_to_state_vector
-from handumi.feetech import PORTS_PATH, zero_gripper_widths
+from handumi.feetech import zero_gripper_widths
 from handumi.retargeting.handumi_to_robot import (
     VR_TO_ROBOT,
     local_frame_adapter,
@@ -138,19 +139,23 @@ def parse_args() -> argparse.Namespace:
         help="Override configs/calibration/<device>_controller_tcp.yaml.",
     )
 
+    p.add_argument(
+        "--rig-config",
+        type=Path,
+        default=DEFAULT_RIG_CONFIG,
+        help="Machine-local cameras, Feetech, and Meta Quest configuration.",
+    )
+
     # Camera + Feetech flags, same names as handumi-record.
     p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
-    p.add_argument("--camera-config", type=Path, default=Path("configs/cameras.yaml"))
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
     p.add_argument("--skip-cameras", action="store_true")
-    p.add_argument("--feetech-config", type=Path, default=PORTS_PATH)
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
 
     # Tracking flags, same names as handumi-record (shared build_tracker).
-    p.add_argument("--tracking-config", type=Path, default=Path("configs/tracking_meta_quest.yaml"))
     p.add_argument("--quest-ip", type=str, default=None)
     p.add_argument("--tcp-port", type=int, default=None)
     p.add_argument("--sync-port", type=int, default=None)
@@ -358,7 +363,7 @@ def main() -> None:
     cameras: list = []
     cam_names: list[str] = []
     if not args.skip_cameras:
-        cam_ids = resolve_camera_ids(args.cam_ids, args.camera_config)
+        cam_ids = resolve_camera_ids(args.cam_ids, args.rig_config)
         camera_specs, _ = build_camera_specs(
             cam_ids, laptop_camera=False, laptop_cam_id=0, laptop_cam_name="laptop"
         )

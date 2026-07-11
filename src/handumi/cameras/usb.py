@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
-import yaml
 
 from handumi.cameras.base import CameraDevice, CameraSample
 from handumi.cameras.opencv import OpenCVCameraDevice
+from handumi.config import load_rig_section
 
 log = logging.getLogger("handumi.record")
 
@@ -54,7 +54,7 @@ def build_camera_specs(
 
 def resolve_camera_ids(
     cam_ids: list[int | str] | None,
-    camera_config: Path,
+    rig_config: Path,
     *,
     camera_names: Sequence[str] | None = None,
 ) -> list[int | str]:
@@ -66,10 +66,7 @@ def resolve_camera_ids(
             )
         return cam_ids
     defaults = {"left_wrist": 0, "right_wrist": 2, "workspace": 4}
-    if not camera_config.exists():
-        return [defaults.get(name, 0) for name in names]
-    with camera_config.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
+    data = load_rig_section(rig_config, "cameras")
     return [
         _read_camera_value(data, name, defaults.get(name, 0))
         for name in names

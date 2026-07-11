@@ -25,7 +25,7 @@ gripper. No XRoboToolkit needed; install the repo with
 ## Connect (per network change)
 
 Streaming is over Wi-Fi (USB only installs; unplug after). Both on the same
-network, then pin the Quest IP in `configs/tracking_meta_quest.yaml`:
+network, then set `meta_quest.connection.quest_ip` in `configs/rig.yaml`:
 
 ```bash
 adb shell ip route     # prints ... src <quest-ip>
@@ -38,7 +38,7 @@ the proximity sensor must remain active while the Quest is mounted. Wake both
 controllers and keep them in view of the headset cameras.
 
 ```bash
-python -m handumi.tracking.meta_quest --config configs/tracking_meta_quest.yaml
+python -m handumi.tracking.meta_quest --config configs/rig.yaml
 ```
 
 Good = steady `fps` (~120) and both `trk=1` with positions that move.
