@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import yaml
@@ -20,11 +20,20 @@ CameraSpec = dict[str, Any]
 def build_camera_specs(
     cam_ids: list[int | str],
     *,
+    camera_names: Sequence[str] | None = None,
     laptop_camera: bool,
     laptop_cam_id: int,
     laptop_cam_name: str,
 ) -> tuple[list[CameraSpec], str | None]:
-    names = ["left_wrist", "right_wrist"]
+    if camera_names is None:
+        names = ["left_wrist", "right_wrist"]
+        names.extend(f"cam_{i}" for i in range(2, len(cam_ids)))
+    else:
+        names = list(camera_names)
+    if len(names) != len(cam_ids):
+        raise ValueError(
+            f"Expected {len(names)} camera IDs for {names}, got {len(cam_ids)}."
+        )
     specs = []
     for i, cam_id in enumerate(cam_ids):
         name = names[i] if i < len(names) else f"cam_{i}"
@@ -46,16 +55,24 @@ def build_camera_specs(
 def resolve_camera_ids(
     cam_ids: list[int | str] | None,
     camera_config: Path,
+    *,
+    camera_names: Sequence[str] | None = None,
 ) -> list[int | str]:
+    names = list(camera_names or ("left_wrist", "right_wrist"))
     if cam_ids is not None:
+        if camera_names is not None and len(cam_ids) != len(names):
+            raise ValueError(
+                f"Expected {len(names)} --cam-ids values for {names}, got {len(cam_ids)}."
+            )
         return cam_ids
+    defaults = {"left_wrist": 0, "right_wrist": 2, "workspace": 4}
     if not camera_config.exists():
-        return [0, 2]
+        return [defaults.get(name, 0) for name in names]
     with camera_config.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     return [
-        _read_camera_value(data, "left_wrist", 0),
-        _read_camera_value(data, "right_wrist", 2),
+        _read_camera_value(data, name, defaults.get(name, 0))
+        for name in names
     ]
 
 

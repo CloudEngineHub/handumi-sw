@@ -11,6 +11,7 @@ trajectories represent the useful gripper point.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -232,6 +233,25 @@ def load_controller_tcp_calibration(path: Path) -> ControllerTcpCalibration:
     left = _side_pose_from_mapping(mapping, "left")
     right = _side_pose_from_mapping(mapping, "right")
     return ControllerTcpCalibration(left=left, right=right, source=path)
+
+
+def controller_tcp_calibration_metadata(
+    path: Path,
+    *,
+    applied_to_state: bool,
+) -> dict[str, Any]:
+    """Return a self-contained, fingerprinted calibration record."""
+    calibration = load_controller_tcp_calibration(path)
+    payload = calibration_to_dict(
+        left=calibration.left,
+        right=calibration.right,
+    )["calibration"]
+    return {
+        "source_path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "applied_to_state": applied_to_state,
+        **payload,
+    }
 
 
 def write_controller_tcp_calibration(

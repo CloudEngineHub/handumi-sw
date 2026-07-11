@@ -56,6 +56,20 @@ class UsbCameraConfigTest(unittest.TestCase):
             ],
         )
 
+    def test_build_named_workspace_camera_spec(self):
+        specs, _ = build_camera_specs(
+            [3, 5, 7],
+            camera_names=["left_wrist", "right_wrist", "workspace"],
+            laptop_camera=False,
+            laptop_cam_id=9,
+            laptop_cam_name="laptop",
+        )
+
+        self.assertEqual(
+            [spec["name"] for spec in specs],
+            ["left_wrist", "right_wrist", "workspace"],
+        )
+
     def test_resolve_camera_ids_from_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "cameras.yaml"
@@ -64,11 +78,20 @@ class UsbCameraConfigTest(unittest.TestCase):
                     {
                         "left_wrist": {"index_or_path": 3},
                         "right_wrist": {"index_or_path": 5},
+                        "workspace": {"index_or_path": 7},
                     },
                     fh,
                 )
 
             self.assertEqual(resolve_camera_ids(None, path), [3, 5])
+            self.assertEqual(
+                resolve_camera_ids(
+                    None,
+                    path,
+                    camera_names=["left_wrist", "right_wrist", "workspace"],
+                ),
+                [3, 5, 7],
+            )
 
     def test_explicit_camera_ids_override_config(self):
         with tempfile.TemporaryDirectory() as tmp:

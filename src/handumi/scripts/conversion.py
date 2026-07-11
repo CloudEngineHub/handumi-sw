@@ -42,6 +42,7 @@ from handumi.calibration.control_tcp import (
     DEFAULT_DEVICE as DEFAULT_CONTROLLER_DEVICE,
     apply_controller_tcp_calibration,
     calibration_path_for_device,
+    controller_tcp_calibration_metadata,
     load_controller_tcp_calibration,
 )
 from handumi.dataset.reader import dataset_root_from_repo_id
@@ -776,6 +777,14 @@ def main() -> None:
             "translation_scale": float(args.translation_scale),
             "controller_device": args.controller_device,
             "raw_controller_debug": bool(args.raw_controller_debug),
+            "controller_tcp_calibration": (
+                controller_tcp_calibration_metadata(
+                    args.controller_tcp_calibration,
+                    applied_to_state=True,
+                )
+                if not args.raw_controller_debug
+                else None
+            ),
             "quality_filter_enabled": not args.skip_quality_filter,
             "quality_source_accepted": sum(
                 report.accepted for report in quality_reports

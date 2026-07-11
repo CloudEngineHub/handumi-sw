@@ -2,9 +2,8 @@
 """Unified HandUMI recorder for PICO and Meta Quest tracking backends.
 
 Episode control: timed by default (--episode-time-s), PICO buttons with
---manual-control, or hands-free with --clap-control (a double clap — close
-both grippers twice within ~1.2s — starts and stops each episode; works
-with either device since it reads the Feetech widths).
+--manual-control, or hands-free with --clap-control (squeeze either the left
+or right gripper twice within 1.6s to start or stop an episode).
 
 Spoken status announcements ("Recording episode 3", "Episode 3 saved, 812
 frames", ...) are on by default — pass --no-sounds to disable them. Without
@@ -15,6 +14,7 @@ frames", ...) are on by default — pass --no-sounds to disable them. Without
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import signal
@@ -24,8 +24,13 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import yaml
 
-from handumi.calibration.control_tcp import ControllerTcpCalibration
+from handumi.calibration.control_tcp import (
+    ControllerTcpCalibration,
+    calibration_path_for_device,
+    controller_tcp_calibration_metadata,
+)
 from handumi.cameras import (
     build_camera_specs,
     connect_cameras,
@@ -79,6 +84,8 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("handumi.record")
+
+ROBOT_CONFIG_DIR = Path("configs/robots")
 
 
 def build_features(
@@ -370,6 +377,29 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", choices=("pico", "meta"), required=True)
     p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
     p.add_argument("--camera-config", type=Path, default=Path("configs/cameras.yaml"))
+    p.add_argument(
+        "--wrist-cameras",
+        action="store_true",
+        help="Record both wrist cameras. This is the default when no camera-selection flag is used.",
+    )
+    p.add_argument(
+        "--workspace-camera",
+        action="store_true",
+        help="Record the workspace camera; combine with --wrist-cameras for all three.",
+    )
+    only_camera = p.add_mutually_exclusive_group()
+    only_camera.add_argument(
+        "--only-left-camera",
+        "--only-left-cameras",
+        dest="only_left_camera",
+        action="store_true",
+    )
+    only_camera.add_argument(
+        "--only-right-camera",
+        "--only-right-cameras",
+        dest="only_right_camera",
+        action="store_true",
+    )
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
@@ -422,7 +452,18 @@ def parse_args() -> argparse.Namespace:
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help=argparse.SUPPRESS,
+        help=(
+            "Controller-to-HandUMI-TCP calibration to snapshot in dataset metadata. "
+            "Raw controller poses remain unchanged."
+        ),
+    )
+    p.add_argument(
+        "--robot",
+        default="piper",
+        help=(
+            "Intended robot embodiment. Snapshots configs/robots/<robot>.yaml in "
+            "metadata; raw recordings remain robot-agnostic."
+        ),
     )
 
     p.add_argument("--tracking-config", type=Path, default=Path("configs/tracking_meta_quest.yaml"))
@@ -443,8 +484,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--clap-control",
         action="store_true",
-        help="Hands-free: a double clap (close both grippers twice within "
-        "~1.2s) starts and stops each episode. Needs real Feetech widths.",
+        help="Hands-free: squeeze either gripper twice within 1.6s to start "
+        "or stop an episode. Needs real Feetech widths.",
     )
     p.add_argument(
         "--no-sounds",
@@ -481,6 +522,17 @@ def main() -> None:
         args.output_dir = _default_output_dir()
     play_sounds = not args.no_sounds
 
+    camera_names = _selected_camera_names(args)
+    calibration_path = (
+        args.controller_tcp_calibration
+        or calibration_path_for_device(args.device)
+    )
+    calibration_metadata = controller_tcp_calibration_metadata(
+        calibration_path,
+        applied_to_state=False,
+    )
+    robot_metadata = _robot_metadata(args.robot)
+
     log.info("--- Tracking setup ---")
     calibration = ControllerTcpCalibration(
         left=IDENTITY_POSE7.astype(np.float32).copy(),
@@ -491,9 +543,18 @@ def main() -> None:
     tracker.start()
 
     log.info("--- Camera setup ---")
-    cam_ids = resolve_camera_ids(args.cam_ids, args.camera_config)
+    cam_ids = resolve_camera_ids(
+        args.cam_ids,
+        args.camera_config,
+        camera_names=camera_names,
+    )
+    _validate_unique_camera_ids(camera_names, cam_ids)
     camera_specs, _ = build_camera_specs(
-        cam_ids, laptop_camera=False, laptop_cam_id=0, laptop_cam_name="laptop"
+        cam_ids,
+        camera_names=camera_names,
+        laptop_camera=False,
+        laptop_cam_id=0,
+        laptop_cam_name="laptop",
     )
     cam_names = [spec["name"] for spec in camera_specs]
     cameras = connect_cameras(
@@ -549,7 +610,7 @@ def main() -> None:
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
             log.info("--- Episode %d/%s ---", ep_num, ep_total)
             if args.clap_control:
-                log.info("  Double-clap both grippers to start episode %d ...", ep_num)
+                log.info("  Double-squeeze either gripper to start episode %d ...", ep_num)
                 assert clap_detector is not None
                 if not _wait_for_clap(grippers, clap_detector, stop_event):
                     break
@@ -638,6 +699,12 @@ def main() -> None:
                 "max_sync_skew_s": args.max_sync_skew_s,
                 "camera_stale_timeout_s": args.camera_stale_timeout_s,
                 "gripper_stale_timeout_s": args.gripper_stale_timeout_s,
+                "cameras": [
+                    {"name": spec["name"], "index_or_path": spec["id"]}
+                    for spec in camera_specs
+                ],
+                "controller_tcp_calibration": calibration_metadata,
+                "target_robot": robot_metadata,
             },
         )
         if args.push_to_hub:
@@ -734,6 +801,66 @@ def _default_output_dir() -> Path:
     ``outputs/`` is gitignored — datasets never get committed by accident.
     """
     return Path("outputs") / datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _selected_camera_names(args: argparse.Namespace) -> list[str]:
+    only_left = bool(getattr(args, "only_left_camera", False))
+    only_right = bool(getattr(args, "only_right_camera", False))
+    wrist = bool(getattr(args, "wrist_cameras", False))
+    workspace = bool(getattr(args, "workspace_camera", False))
+    if (only_left or only_right) and (wrist or workspace):
+        raise SystemExit(
+            "--only-left-camera/--only-right-camera cannot be combined with "
+            "--wrist-cameras or --workspace-camera."
+        )
+    if only_left:
+        return ["left_wrist"]
+    if only_right:
+        return ["right_wrist"]
+    if not wrist and not workspace:
+        return ["left_wrist", "right_wrist"]
+    names = []
+    if wrist:
+        names.extend(("left_wrist", "right_wrist"))
+    if workspace:
+        names.append("workspace")
+    return names
+
+
+def _robot_metadata(name: str, config_dir: Path = ROBOT_CONFIG_DIR) -> dict[str, object]:
+    path = config_dir / f"{name}.yaml"
+    if not path.exists():
+        available = ", ".join(sorted(item.stem for item in config_dir.glob("*.yaml")))
+        raise SystemExit(
+            f"Unknown robot {name!r}; expected {path}. Available: {available or 'none'}."
+        )
+    raw = path.read_bytes()
+    config = yaml.safe_load(raw) or {}
+    return {
+        "name": name,
+        "config_path": str(path),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "configuration": config,
+    }
+
+
+def _validate_unique_camera_ids(
+    camera_names: list[str],
+    camera_ids: list[int | str],
+) -> None:
+    duplicates = {
+        camera_id
+        for camera_id in camera_ids
+        if camera_ids.count(camera_id) > 1
+    }
+    if duplicates:
+        mappings = ", ".join(
+            f"{name}={camera_id}" for name, camera_id in zip(camera_names, camera_ids)
+        )
+        raise SystemExit(
+            f"Selected cameras must use distinct devices ({mappings}). "
+            "Fix configs/cameras.yaml or pass matching --cam-ids."
+        )
 
 
 def _update_info_json(root: Path, handumi: dict[str, object]) -> None:

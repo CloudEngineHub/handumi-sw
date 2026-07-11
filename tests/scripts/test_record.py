@@ -1,4 +1,6 @@
 import threading
+import argparse
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +12,9 @@ from handumi.cameras.base import CameraSample
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
     _default_output_dir,
+    _robot_metadata,
+    _selected_camera_names,
+    _validate_unique_camera_ids,
     _wait_for_clap,
     _wait_for_tracking,
     build_observation,
@@ -121,6 +126,60 @@ class DefaultOutputDirTest(unittest.TestCase):
         out = _default_output_dir()
         self.assertEqual(out.parent, Path("outputs"))
         self.assertRegex(out.name, r"^\d{8}_\d{6}$")
+
+
+class CameraSelectionTest(unittest.TestCase):
+    @staticmethod
+    def _args(**overrides):
+        values = {
+            "wrist_cameras": False,
+            "workspace_camera": False,
+            "only_left_camera": False,
+            "only_right_camera": False,
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_defaults_to_both_wrist_cameras(self):
+        self.assertEqual(
+            _selected_camera_names(self._args()),
+            ["left_wrist", "right_wrist"],
+        )
+
+    def test_all_three_cameras_can_be_selected(self):
+        self.assertEqual(
+            _selected_camera_names(
+                self._args(wrist_cameras=True, workspace_camera=True)
+            ),
+            ["left_wrist", "right_wrist", "workspace"],
+        )
+
+    def test_only_right_camera(self):
+        self.assertEqual(
+            _selected_camera_names(self._args(only_right_camera=True)),
+            ["right_wrist"],
+        )
+
+    def test_duplicate_camera_devices_are_rejected(self):
+        with self.assertRaises(SystemExit):
+            _validate_unique_camera_ids(
+                ["right_wrist", "workspace"],
+                [4, 4],
+            )
+
+
+class RobotMetadataTest(unittest.TestCase):
+    def test_snapshots_robot_config_and_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            path = config_dir / "piper.yaml"
+            path.write_text("kind: piper\nhome_q: [0.0]\n")
+
+            metadata = _robot_metadata("piper", config_dir)
+
+        self.assertEqual(metadata["name"], "piper")
+        self.assertEqual(metadata["configuration"]["kind"], "piper")
+        self.assertEqual(len(metadata["sha256"]), 64)
 
 
 class WaitForClapTest(unittest.TestCase):

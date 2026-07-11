@@ -64,12 +64,13 @@ class RawSchemaTest(unittest.TestCase):
             },
         )
 
-    def test_raw_image_keys_are_left_and_right_wrist(self):
+    def test_raw_image_keys_include_workspace(self):
         self.assertEqual(
             HANDUMI_RAW_IMAGE_KEYS,
             (
                 "observation.images.left_wrist",
                 "observation.images.right_wrist",
+                "observation.images.workspace",
             ),
         )
 

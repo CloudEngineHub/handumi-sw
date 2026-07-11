@@ -43,6 +43,7 @@ RIGHT_GRIPPER_INDEX = 15
 HANDUMI_RAW_IMAGE_KEYS: tuple[str, ...] = (
     "observation.images.left_wrist",
     "observation.images.right_wrist",
+    "observation.images.workspace",
 )
 
 
