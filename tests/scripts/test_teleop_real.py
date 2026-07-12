@@ -1,6 +1,11 @@
 import unittest
 
-from handumi.scripts.teleop_real import _validate_args, parse_args
+from handumi.scripts.teleop_real import (
+    _clear_enabled_anchors,
+    _enabled_tracking_ok,
+    _validate_args,
+    parse_args,
+)
 from handumi.scripts.teleop_sim import _start_sides
 from handumi.tracking.gestures import DoubleClapDetector
 
@@ -50,6 +55,19 @@ class TeleopRealArgsTest(unittest.TestCase):
         start_sides = enabled_sides if triggered else ()
 
         self.assertEqual(start_sides, enabled_sides)
+
+    def test_tracking_loss_policy_clears_enabled_anchors(self):
+        anchors = {"left": {"source": object()}, "right": {"source": object()}}
+
+        self.assertFalse(_enabled_tracking_ok({"left": True, "right": False}, ("left", "right")))
+        _clear_enabled_anchors(anchors, ("left", "right"))
+
+        self.assertIsNone(anchors["left"])
+        self.assertIsNone(anchors["right"])
+
+    def test_single_side_mode_only_requires_that_side_tracked(self):
+        self.assertTrue(_enabled_tracking_ok({"left": True, "right": False}, ("left",)))
+        self.assertFalse(_enabled_tracking_ok({"left": True, "right": False}, ("right",)))
 
 
 if __name__ == "__main__":

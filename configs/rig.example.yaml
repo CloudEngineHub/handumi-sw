@@ -23,6 +23,7 @@ robots:
   piper:
     can:
       bitrate: 1000000
+      restart_ms: 100
       left_port: can0
       right_port: can1
 

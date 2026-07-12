@@ -49,6 +49,7 @@ class PiperCanSettings:
     left_port: str
     right_port: str
     bitrate: int = 1_000_000
+    restart_ms: int = 100
     command_rate_hz: float = 100.0
     max_joint_speed_deg_s: float = 180.0
     home_max_joint_speed_deg_s: float = 20.0
@@ -85,6 +86,7 @@ def load_piper_can_settings(
         left_port=str(can["left_port"]),
         right_port=str(can["right_port"]),
         bitrate=int(can.get("bitrate", 1_000_000)),
+        restart_ms=int(can.get("restart_ms", 100)),
         command_rate_hz=defaults.command_rate_hz,
         max_joint_speed_deg_s=defaults.max_joint_speed_deg_s,
         home_max_joint_speed_deg_s=defaults.home_max_joint_speed_deg_s,

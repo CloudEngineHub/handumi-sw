@@ -1,6 +1,6 @@
 # HandUMI Software
 
-Ultima modificacion: 2026-07-11 21:02:22 -05 -0500
+Ultima modificacion: 2026-07-11 22:09:49 -05 -0500
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
@@ -123,8 +123,17 @@ robots:
   piper:
     can:
       bitrate: 1000000
+      restart_ms: 100
       left_port: can0
       right_port: can1
+```
+
+For a guided first-time setup that maps right/left CAN and Feetech by
+reconnecting one adapter at a time, repairs CAN with explicit sudo, writes
+`configs/rig.yaml`, and prepares PICO USB/ADB:
+
+```bash
+handumi-setup-hardware --robot piper --device pico
 ```
 
 Then run:

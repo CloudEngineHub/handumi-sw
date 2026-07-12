@@ -37,6 +37,7 @@ from handumi.calibration.control_tcp import (
 )
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech import zero_gripper_widths
+from handumi.real.can_setup import ensure_can_interfaces_ready
 from handumi.real.piper_can import (
     PiperCanEnvironment,
     format_mdeg,
@@ -118,6 +119,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     pico_transport.add_argument("--pico-adb", action="store_true")
     pico_transport.add_argument("--pico-wifi", action="store_true")
     parser.add_argument("--skip-adb-check", action="store_true")
+    parser.add_argument(
+        "--skip-can-repair",
+        action="store_true",
+        help="Do not auto-repair CAN with sudo before connecting Piper.",
+    )
     return parser.parse_args(argv)
 
 
@@ -155,6 +161,21 @@ def _ik_home_target(pose7: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return pose7[:3], pose7[3:7]
 
 
+def _enabled_tracking_ok(
+    side_tracked: dict[str, bool],
+    enabled_sides: tuple[str, ...],
+) -> bool:
+    return all(side_tracked[side] for side in enabled_sides)
+
+
+def _clear_enabled_anchors(
+    anchors: dict[str, dict[str, np.ndarray] | None],
+    enabled_sides: tuple[str, ...],
+) -> None:
+    for side in enabled_sides:
+        anchors[side] = None
+
+
 def main() -> None:
     args = parse_args()
     _validate_args(args)
@@ -190,6 +211,12 @@ def main() -> None:
         format_mdeg(home_targets_mdeg["left"]),
         format_mdeg(home_targets_mdeg["right"]),
     )
+    if not args.skip_can_repair:
+        ensure_can_interfaces_ready(
+            [settings.left_port, settings.right_port],
+            bitrate=settings.bitrate,
+            restart_ms=settings.restart_ms,
+        )
 
     calibration = _load_required_calibration(args)
     tracker = build_tracker(args, calibration, reset_workspace_on_x=False)
@@ -206,6 +233,8 @@ def main() -> None:
     interval = 1.0 / args.fps
     episode_start: float | None = None
     frame = 0
+    tracking_lost_since: float | None = None
+    last_recovery_attempt = 0.0
 
     try:
         log.info("Starting tracking before moving real arms.")
@@ -237,6 +266,30 @@ def main() -> None:
 
             sample = tracker.latest()
             side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
+            tracking_ok = _enabled_tracking_ok(side_tracked, enabled_sides)
+            if not tracking_ok:
+                if tracking_lost_since is None:
+                    tracking_lost_since = loop_start
+                    _clear_enabled_anchors(anchors, enabled_sides)
+                    log.warning(
+                        "Tracking lost; holding current Piper q. Re-anchor after recovery."
+                    )
+                    log_say("tracking lost", play_sounds=play_sounds)
+                real_env.set_q(q, actuated_names)
+                recover = getattr(tracker, "recover", None)
+                if callable(recover) and loop_start - last_recovery_attempt >= 3.0:
+                    last_recovery_attempt = loop_start
+                    if recover():
+                        log.info("Tracking recovered; double clap or Space to re-anchor.")
+                        log_say("tracking recovered", play_sounds=play_sounds)
+                dt = time.perf_counter() - loop_start
+                if (sleep := interval - dt) > 0:
+                    time.sleep(sleep)
+                continue
+            if tracking_lost_since is not None:
+                tracking_lost_since = None
+                log.info("Tracking stream is valid again; waiting for a fresh anchor.")
+
             widths = _latest_widths(grippers)
             state = _sample_state(sample, widths)
             source_poses = dict(zip(("left", "right"), raw_state_pose7_pair(state), strict=True))

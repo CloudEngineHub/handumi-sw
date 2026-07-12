@@ -63,6 +63,7 @@ class PiperCanConfigTest(unittest.TestCase):
                 "  piper:\n"
                 "    can:\n"
                 "      bitrate: 1000000\n"
+                "      restart_ms: 100\n"
                 "      left_port: can0\n"
                 "      right_port: can1\n",
                 encoding="utf-8",
@@ -75,6 +76,7 @@ class PiperCanConfigTest(unittest.TestCase):
         self.assertEqual(settings.left_port, "can0")
         self.assertEqual(settings.right_port, "can1")
         self.assertEqual(settings.bitrate, 1_000_000)
+        self.assertEqual(settings.restart_ms, 100)
         self.assertEqual(settings.command_rate_hz, 123)
         self.assertEqual(settings.max_joint_speed_deg_s, 45)
 
