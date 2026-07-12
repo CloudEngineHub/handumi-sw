@@ -5,6 +5,7 @@ from handumi.tracking.pico import (
     keep_pico_awake,
     prepare_pico_adb_session,
     setup_adb_reverse,
+    stop_xrt_service,
     verify_adb_connection,
 )
 
@@ -37,7 +38,10 @@ class PicoAdbTest(unittest.TestCase):
         self.assertTrue(setup_adb_reverse(runner=runner))
         self.assertEqual(
             calls,
-            [["adb", "reverse", "tcp:63901", "tcp:63901"]],
+            [
+                ["adb", "reverse", "--remove", "tcp:63901"],
+                ["adb", "reverse", "tcp:63901", "tcp:63901"],
+            ],
         )
 
     def test_keep_pico_awake_runs_stayon_and_wakeup(self):
@@ -67,6 +71,7 @@ class PicoAdbTest(unittest.TestCase):
 
         self.assertTrue(prepare_pico_adb_session(runner=runner))
         self.assertIn(["adb", "devices"], calls)
+        self.assertIn(["adb", "reverse", "--remove", "tcp:63901"], calls)
         self.assertIn(["adb", "reverse", "tcp:63901", "tcp:63901"], calls)
         self.assertIn(["adb", "shell", "svc", "power", "stayon", "usb"], calls)
         self.assertIn(["adb", "shell", "input", "keyevent", "WAKEUP"], calls)
@@ -77,6 +82,17 @@ class PicoAdbTest(unittest.TestCase):
 
         with self.assertRaises(SystemExit):
             prepare_pico_adb_session(timeout_s=0.0, runner=runner)
+
+    def test_stop_xrt_service_kills_stale_processes(self):
+        calls = []
+
+        def runner(cmd, **kwargs):
+            calls.append(cmd)
+            return _completed(cmd, returncode=1)
+
+        stop_xrt_service(runner=runner)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][:3], ["pkill", "-f", "/opt/apps/roboticsservice/runService.sh"])
 
 
 if __name__ == "__main__":

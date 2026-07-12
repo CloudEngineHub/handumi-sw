@@ -179,12 +179,12 @@ class CanWizardTest(unittest.TestCase):
 
             def input_fn(prompt):
                 prompts.append(prompt)
-                if "Conecta" in prompt:
+                if "Plug in" in prompt:
                     (sysfs / "can1").mkdir()
                 return ""
 
             ref = identify_can_by_replug(
-                "derecho",
+                "right",
                 sys_class_net=sysfs,
                 input_fn=input_fn,
                 poll_s=0.001,
@@ -204,7 +204,7 @@ class CanWizardTest(unittest.TestCase):
 
             def input_fn(prompt):
                 nonlocal connect_count
-                if "Conecta" in prompt:
+                if "Plug in" in prompt:
                     name = "can1" if connect_count == 0 else "can0"
                     (sysfs / name).mkdir()
                     connect_count += 1

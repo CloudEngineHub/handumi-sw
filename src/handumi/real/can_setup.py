@@ -143,11 +143,11 @@ def ensure_can_interfaces_ready(
         f"{port}: {can_status_reason(status, bitrate=bitrate)}"
         for port, status in statuses.items()
     )
-    print_fn(f"CAN necesita reparacion ({details}).")
-    print_fn("Necesito sudo para activar CAN. Escribe tu password si aceptas.")
+    print_fn(f"CAN needs setup or repair ({details}).")
+    print_fn("Sudo is required to bring up CAN. Enter your password if you approve.")
     sudo = runner(["sudo", "-v"], check=False)
     if sudo.returncode != 0:
-        raise SystemExit("No se pudo obtener sudo; no se movera el robot.")
+        raise SystemExit("Could not obtain sudo; the robot will not move.")
 
     for port, status in statuses.items():
         if can_ready(status, bitrate=bitrate):
@@ -173,7 +173,7 @@ def ensure_can_interfaces_ready(
             f"{port}: {can_status_reason(status, bitrate=bitrate)}"
             for port, status in not_ready.items()
         )
-        raise SystemExit(f"CAN no quedo listo ({details}); no se movera el robot.")
+        raise SystemExit(f"CAN is still not ready ({details}); the robot will not move.")
     return final
 
 
@@ -222,7 +222,7 @@ def repair_can_interface(
             result = runner(fallback, capture_output=True, text=True, check=False)
         if result.returncode != 0 and command[-1] != "down":
             stderr = (result.stderr or "").strip()
-            raise SystemExit(f"Fallo reparando {port}: {' '.join(command)}\n{stderr}")
+            raise SystemExit(f"Failed to repair {port}: {' '.join(command)}\n{stderr}")
 
 
 def _restart_ms_unsupported(stderr: str) -> bool:
@@ -279,22 +279,22 @@ def identify_can_by_replug(
     input_fn: Callable[[str], str] = input,
     print_fn: Callable[[str], None] = print,
 ) -> CanInterfaceRef:
-    print_fn(f"\nIdentificando CAN del brazo {side_label}.")
-    input_fn(f"Desconecta el CAN del brazo {side_label} y presiona Enter.")
+    print_fn(f"\nIdentifying {side_label} arm CAN.")
+    input_fn(f"Unplug the {side_label} arm CAN adapter, then press Enter.")
     disconnected = list_can_interfaces(sys_class_net)
-    input_fn(f"Conecta SOLO el CAN del brazo {side_label} y presiona Enter.")
+    input_fn(f"Plug in ONLY the {side_label} arm CAN adapter, then press Enter.")
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         current = list_can_interfaces(sys_class_net)
         added = [ref for name, ref in current.items() if name not in disconnected]
         if len(added) == 1:
-            print_fn(f"  {side_label}: detectado {added[0].name}")
+            print_fn(f"  {side_label}: detected {added[0].name}")
             return added[0]
         if len(added) > 1:
             names = ", ".join(ref.name for ref in added)
-            raise SystemExit(f"Se detectaron multiples CAN nuevos: {names}")
+            raise SystemExit(f"Multiple new CAN interfaces were detected: {names}")
         time.sleep(poll_s)
-    raise SystemExit(f"No se detecto el CAN del brazo {side_label} en {timeout_s:.0f}s.")
+    raise SystemExit(f"Could not detect the {side_label} arm CAN within {timeout_s:.0f}s.")
 
 
 def run_piper_can_wizard(
@@ -308,9 +308,9 @@ def run_piper_can_wizard(
     input_fn: Callable[[str], str] = input,
     print_fn: Callable[[str], None] = print,
 ) -> tuple[str, str]:
-    print_fn("Wizard CAN Piper: se mapeara derecha primero, luego izquierda.")
+    print_fn("Piper CAN wizard: RIGHT arm first, then LEFT arm.")
     right = identify_can_by_replug(
-        "derecho",
+        "right",
         sys_class_net=sys_class_net,
         timeout_s=timeout_s,
         poll_s=poll_s,
@@ -318,7 +318,7 @@ def run_piper_can_wizard(
         print_fn=print_fn,
     )
     left = identify_can_by_replug(
-        "izquierdo",
+        "left",
         sys_class_net=sys_class_net,
         timeout_s=timeout_s,
         poll_s=poll_s,
@@ -334,7 +334,7 @@ def run_piper_can_wizard(
         left_usb_path=left.sysfs_path,
         right_usb_path=right.sysfs_path,
     )
-    print_fn(f"Guardado en {rig_config}: left={left.name}, right={right.name}")
+    print_fn(f"Saved to {rig_config}: left={left.name}, right={right.name}")
     return left.name, right.name
 
 

@@ -37,6 +37,7 @@ class PiperArm(Protocol):
     def read_mdeg(self) -> np.ndarray: ...
     def send_mdeg(self, cmd: np.ndarray) -> None: ...
     def send_gripper_microm(self, opening_microm: int, effort: int) -> None: ...
+    def set_speed_percent(self, speed_percent: int) -> None: ...
     def disconnect(self) -> None: ...
 
 
@@ -56,7 +57,8 @@ class PiperCanSettings:
     home_max_joint_speed_deg_s: float = 20.0
     home_timeout_s: float = 30.0
     home_tolerance_deg: float = 3.0
-    speed_percent: int = 80
+    home_speed_percent: int = 10
+    speed_percent: int = 100
     enable_timeout_s: float = 10.0
     gripper_effort: int = 1000
 
@@ -94,6 +96,7 @@ def load_piper_can_settings(
         home_max_joint_speed_deg_s=defaults.home_max_joint_speed_deg_s,
         home_timeout_s=defaults.home_timeout_s,
         home_tolerance_deg=defaults.home_tolerance_deg,
+        home_speed_percent=defaults.home_speed_percent,
         speed_percent=defaults.speed_percent,
         gripper_effort=defaults.gripper_effort,
     )
@@ -196,6 +199,10 @@ class PiperSdkArm:
             if time.time() > deadline:
                 raise TimeoutError(f"{self.port}: timed out enabling Piper")
             time.sleep(0.02)
+        self.set_speed_percent(self.speed_percent)
+
+    def set_speed_percent(self, speed_percent: int) -> None:
+        self.speed_percent = int(np.clip(int(speed_percent), 1, 100))
         self.set_joint_mode()
 
     def set_joint_mode(self) -> None:
@@ -418,7 +425,7 @@ class PiperCanEnvironment:
             log.info("Connecting Piper %s on %s.", side, port)
             self.arms[side] = self.arm_factory(
                 port,
-                self.settings.speed_percent,
+                self.settings.home_speed_percent,
                 self.settings.enable_timeout_s,
                 self.settings.gripper_effort,
             )
@@ -434,7 +441,8 @@ class PiperCanEnvironment:
         )
         self.streamer.start()
         log.info(
-            "Homing Piper to XHUMAN pose: left=%s right=%s",
+            "Homing Piper to XHUMAN pose at %d%%: left=%s right=%s",
+            self.settings.home_speed_percent,
             format_mdeg(home_targets_mdeg["left"]),
             format_mdeg(home_targets_mdeg["right"]),
         )
@@ -444,6 +452,9 @@ class PiperCanEnvironment:
             tolerance_mdeg=self.settings.home_tolerance_deg * 1000.0,
         )
         log.info("Piper home reached.")
+        for arm in self.arms.values():
+            arm.set_speed_percent(self.settings.speed_percent)
+        log.info("Piper teleop speed set to %d%%.", self.settings.speed_percent)
         self.streamer.set_max_joint_speed_deg_s(self.settings.max_joint_speed_deg_s)
 
     def set_q(self, q: np.ndarray, actuated_names: list[str] | tuple[str, ...]) -> None:

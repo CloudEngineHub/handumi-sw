@@ -98,7 +98,7 @@ class TeleopRealArgsTest(unittest.TestCase):
                 "handumi.scripts.teleop_real.list_feetech_serial_ports",
                 return_value={"/dev/ttyACM0"},
             ),
-            self.assertRaisesRegex(SystemExit, "Remapea Feetech"),
+            self.assertRaisesRegex(SystemExit, "Remap Feetech"),
         ):
             _validate_feetech_ports_exist(config)
 

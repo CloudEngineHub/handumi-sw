@@ -4,7 +4,9 @@ import unittest
 import numpy as np
 
 from handumi.real.piper_can import (
+    PiperCanEnvironment,
     PiperJointStreamer,
+    PiperCanSettings,
     load_piper_can_settings,
     piper_mdeg_to_q,
     q_to_piper_mdeg,
@@ -34,8 +36,11 @@ JOINT_NAMES = [
 
 
 class FakeArm:
-    def __init__(self, start=None):
-        self.port = "fake"
+    def __init__(self, port="fake", speed_percent=80, enable_timeout_s=10.0, gripper_effort=1000, start=None):
+        del enable_timeout_s, gripper_effort
+        self.port = port
+        self.speed_percent = int(speed_percent)
+        self.speed_history = [self.speed_percent]
         self.current = np.zeros(6, dtype=np.int64) if start is None else np.asarray(start)
         self.sent: list[np.ndarray] = []
         self.grippers: list[tuple[int, int]] = []
@@ -50,6 +55,10 @@ class FakeArm:
 
     def send_gripper_microm(self, opening_microm, effort):
         self.grippers.append((int(opening_microm), int(effort)))
+
+    def set_speed_percent(self, speed_percent):
+        self.speed_percent = int(speed_percent)
+        self.speed_history.append(self.speed_percent)
 
     def disconnect(self):
         self.closed = True
@@ -93,7 +102,8 @@ class PiperCanConfigTest(unittest.TestCase):
         self.assertEqual(config.real.home_max_joint_speed_deg_s, 20.0)
         self.assertEqual(config.real.home_timeout_s, 30.0)
         self.assertEqual(config.real.home_tolerance_deg, 3.0)
-        self.assertEqual(config.real.speed_percent, 80)
+        self.assertEqual(config.real.home_speed_percent, 10)
+        self.assertEqual(config.real.speed_percent, 100)
         self.assertEqual(config.real.gripper_effort, 1000)
 
 
@@ -189,6 +199,45 @@ class PiperJointStreamerTest(unittest.TestCase):
 
         self.assertIn((42000, 1234), left.grippers)
         self.assertIn((17000, 1234), right.grippers)
+
+
+class PiperCanEnvironmentTest(unittest.TestCase):
+    def test_home_uses_low_speed_then_restores_teleop_speed(self):
+        settings = PiperCanSettings(
+            left_port="can0",
+            right_port="can1",
+            command_rate_hz=500.0,
+            home_max_joint_speed_deg_s=500.0,
+            max_joint_speed_deg_s=500.0,
+            home_speed_percent=15,
+            speed_percent=80,
+            home_timeout_s=1.0,
+            home_tolerance_deg=0.0,
+        )
+        created: dict[str, FakeArm] = {}
+
+        def factory(port, speed_percent, enable_timeout_s, gripper_effort):
+            arm = FakeArm(
+                port=port,
+                speed_percent=speed_percent,
+                enable_timeout_s=enable_timeout_s,
+                gripper_effort=gripper_effort,
+            )
+            created[port] = arm
+            return arm
+
+        env = PiperCanEnvironment(settings, arm_factory=factory)
+        env.connect()
+        env.home(
+            {
+                "left": np.array([0, 0, 0, 0, 1000, 0], dtype=np.int64),
+                "right": np.array([0, 0, 0, 0, 1000, 0], dtype=np.int64),
+            }
+        )
+        env.close()
+
+        self.assertEqual(created["can0"].speed_history, [15, 80])
+        self.assertEqual(created["can1"].speed_history, [15, 80])
 
 
 if __name__ == "__main__":

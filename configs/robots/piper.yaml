@@ -22,5 +22,6 @@ real:
   home_max_joint_speed_deg_s: 20
   home_timeout_s: 30
   home_tolerance_deg: 3
-  speed_percent: 80
+  home_speed_percent: 10
+  speed_percent: 100
   gripper_effort: 1000

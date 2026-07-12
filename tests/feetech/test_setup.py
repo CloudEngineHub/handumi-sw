@@ -49,7 +49,7 @@ class FeetechWizardTest(unittest.TestCase):
             mock.patch("handumi.feetech.setup.os.stat", return_value=fake_stat),
             mock.patch("handumi.feetech.setup.grp.getgrgid", return_value=fake_group),
             mock.patch("handumi.feetech.setup.os.getgroups", return_value=[]),
-            self.assertRaisesRegex(SystemExit, "Permisos seriales actualizados"),
+            self.assertRaisesRegex(SystemExit, "Serial permissions were updated"),
         ):
             ensure_feetech_serial_permissions(
                 list_ports_fn=lambda: {"/dev/ttyACM0"},
@@ -76,13 +76,13 @@ class FeetechWizardTest(unittest.TestCase):
 
         def input_fn(prompt: str) -> str:
             prompts.append(prompt)
-            if "Conecta" in prompt:
+            if "Plug in" in prompt:
                 ports.add("/dev/ttyUSB0")
             return ""
 
         with mock.patch("handumi.feetech.setup.os.access", return_value=True):
             ref = identify_feetech_by_replug(
-                "derecho",
+                "right",
                 start_id=0,
                 end_id=20,
                 baudrate=1_000_000,
@@ -101,16 +101,16 @@ class FeetechWizardTest(unittest.TestCase):
         ports: set[str] = set()
 
         def input_fn(prompt: str) -> str:
-            if "Conecta" in prompt:
+            if "Plug in" in prompt:
                 ports.add("/dev/ttyUSB0")
             return ""
 
         with (
             mock.patch("handumi.feetech.setup.os.access", return_value=True),
-            self.assertRaisesRegex(SystemExit, "multiples Feetech IDs"),
+            self.assertRaisesRegex(SystemExit, "multiple Feetech IDs"),
         ):
             identify_feetech_by_replug(
-                "izquierdo",
+                "left",
                 start_id=0,
                 end_id=20,
                 baudrate=1_000_000,
@@ -127,7 +127,7 @@ class FeetechWizardTest(unittest.TestCase):
         fake_group = SimpleNamespace(gr_name="dialout")
 
         def input_fn(prompt: str) -> str:
-            if "Conecta" in prompt:
+            if "Plug in" in prompt:
                 ports.add("/dev/ttyACM0")
             return ""
 
@@ -139,7 +139,7 @@ class FeetechWizardTest(unittest.TestCase):
             self.assertRaisesRegex(SystemExit, "sudo usermod -aG dialout"),
         ):
             identify_feetech_by_replug(
-                "derecho",
+                "right",
                 start_id=0,
                 end_id=20,
                 baudrate=1_000_000,
@@ -151,9 +151,9 @@ class FeetechWizardTest(unittest.TestCase):
             )
 
     def test_timeout_reports_ports_before_and_after(self):
-        with self.assertRaisesRegex(SystemExit, "Puertos antes: /dev/ttyACM0"):
+        with self.assertRaisesRegex(SystemExit, "Ports before: /dev/ttyACM0"):
             identify_feetech_by_replug(
-                "izquierdo",
+                "left",
                 start_id=0,
                 end_id=20,
                 baudrate=1_000_000,
@@ -170,7 +170,7 @@ class FeetechWizardTest(unittest.TestCase):
 
         with mock.patch("handumi.feetech.setup.os.access", return_value=True):
             ref = identify_feetech_by_replug(
-                "izquierdo",
+                "left",
                 start_id=0,
                 end_id=20,
                 baudrate=1_000_000,
@@ -194,7 +194,7 @@ class FeetechWizardTest(unittest.TestCase):
 
             def input_fn(prompt: str) -> str:
                 nonlocal connect_count
-                if "Conecta" in prompt:
+                if "Plug in" in prompt:
                     port = "/dev/ttyUSB1" if connect_count == 0 else "/dev/ttyUSB0"
                     ports.add(port)
                     connect_count += 1

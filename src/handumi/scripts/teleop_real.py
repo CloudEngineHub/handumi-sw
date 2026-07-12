@@ -171,13 +171,13 @@ def _validate_feetech_ports_exist(feetech_config) -> None:
         missing_text = ", ".join(
             f"{side}={port or '<unset>'}" for side, port in missing.items()
         )
-        current_text = ", ".join(current) if current else "ninguno"
+        current_text = ", ".join(current) if current else "none"
         raise SystemExit(
             "Feetech port configured in rig.yaml is missing: "
             f"{missing_text}.\n"
-            f"Puertos Feetech actuales: {current_text}\n"
-            "Remapea Feetech sin tocar CAN/PICO:\n"
-            "  uv run handumi-setup-hardware --robot piper --device pico "
+            f"Current Feetech ports: {current_text}\n"
+            "Remap Feetech without touching CAN/PICO:\n"
+            "  uv run handumi-setup --robot piper --device pico "
             "--skip-can-map --skip-can-repair --skip-pico "
             "--force-feetech-calibration"
         )
@@ -186,9 +186,9 @@ def _validate_feetech_ports_exist(feetech_config) -> None:
     if denied:
         denied_text = ", ".join(f"{side}={port}" for side, port in denied.items())
         raise SystemExit(
-            f"No tengo permisos para abrir Feetech: {denied_text}.\n"
-            "Corre primero:\n"
-            "  uv run handumi-setup-hardware --robot piper --device pico "
+            f"No permission to open Feetech ports: {denied_text}.\n"
+            "Run first:\n"
+            "  uv run handumi-setup --robot piper --device pico "
             "--skip-can-map --skip-can-repair --skip-feetech-map --skip-pico"
         )
 

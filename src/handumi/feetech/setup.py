@@ -77,11 +77,11 @@ def identify_feetech_by_replug(
 ) -> FeetechServoRef:
     """Identify one Feetech adapter by disconnect/reconnect and scan its ID."""
     used_ports = set(used_ports or set())
-    print_fn(f"\nIdentificando Feetech del HandUMI {side_label}.")
-    input_fn(f"Desconecta el Feetech {side_label} y presiona Enter.")
+    print_fn(f"\nIdentifying {side_label} HandUMI Feetech.")
+    input_fn(f"Unplug the {side_label} Feetech adapter, then press Enter.")
     disconnected = list_ports_fn()
-    input_fn(f"Conecta SOLO el Feetech {side_label} y presiona Enter.")
-    print_fn("  Esperando que aparezca un puerto serial nuevo...")
+    input_fn(f"Plug in ONLY the {side_label} Feetech adapter, then press Enter.")
+    print_fn("  Waiting for a new serial port...")
 
     deadline = time.time() + timeout_s
     next_status_s = time.time() + 3.0
@@ -103,15 +103,15 @@ def identify_feetech_by_replug(
             )
         if len(added) > 1:
             raise SystemExit(
-                "Se detectaron multiples puertos serial nuevos: "
-                f"{', '.join(added)}. Conecta solo uno por paso."
+                "Multiple new serial ports were detected: "
+                f"{', '.join(added)}. Connect only one device per step."
             )
         if used_ports:
             existing_unused = sorted(current - used_ports)
             if len(existing_unused) == 1:
                 print_fn(
-                    "  No aparecio un puerto nuevo, pero hay un puerto Feetech "
-                    "sin asignar; lo usare."
+                    "  No new port appeared, but one Feetech port is still unassigned; "
+                    "using it."
                 )
                 return _scan_identified_feetech(
                     side_label,
@@ -126,17 +126,17 @@ def identify_feetech_by_replug(
         now = time.time()
         if now >= next_status_s:
             print_fn(
-                "  Aun no veo un puerto nuevo. "
-                f"Puertos actuales: {_format_ports(current)}"
+                "  Still waiting for a new port. "
+                f"Current ports: {_format_ports(current)}"
             )
             next_status_s = now + 3.0
         time.sleep(poll_s)
     raise SystemExit(
-        f"No se detecto el Feetech {side_label} en {timeout_s:.0f}s.\n"
-        f"Puertos antes: {_format_ports(disconnected)}\n"
-        f"Puertos ahora: {_format_ports(last_seen)}\n"
-        "Revisa que el adaptador haya enumerado como /dev/ttyACM* o /dev/ttyUSB*, "
-        "que el cable sea de datos, y que conectaste solo ese Feetech despues de Enter."
+        f"Could not detect the {side_label} Feetech within {timeout_s:.0f}s.\n"
+        f"Ports before: {_format_ports(disconnected)}\n"
+        f"Ports now: {_format_ports(last_seen)}\n"
+        "Check that the adapter appears as /dev/ttyACM* or /dev/ttyUSB*, "
+        "that the USB cable carries data, and that only this Feetech was plugged in."
     )
 
 
@@ -164,21 +164,21 @@ def _scan_identified_feetech(
     ids = scanner(port)
     if len(ids) == 1:
         ref = FeetechServoRef(side=side_label, port=port, servo_id=int(ids[0]))
-        print_fn(f"  {side_label}: detectado port={ref.port}, servo_id={ref.servo_id}")
+        print_fn(f"  {side_label}: detected port={ref.port}, servo_id={ref.servo_id}")
         return ref
     if not ids:
         raise SystemExit(
-            f"{port} aparecio para {side_label}, pero ningun servo respondio. "
-            "Revisa power, cableado, baudrate y rango de IDs."
+            f"{port} appeared for {side_label}, but no servo replied. "
+            "Check power, wiring, baudrate, and the scanned ID range."
         )
     raise SystemExit(
-        f"{port} tiene multiples Feetech IDs {ids}. "
-        "Conecta solo un servo o cambia IDs con handumi-set-servo-id."
+        f"{port} has multiple Feetech IDs {ids}. "
+        "Connect only one servo or change IDs with handumi-set-servo-id."
     )
 
 
 def _format_ports(ports: set[str]) -> str:
-    return ", ".join(sorted(ports)) if ports else "ninguno"
+    return ", ".join(sorted(ports)) if ports else "none"
 
 
 def ensure_feetech_serial_permissions(
@@ -210,11 +210,11 @@ def ensure_feetech_serial_permissions(
             f"{group}: {', '.join(group_ports)}"
             for group, group_ports in sorted(missing_groups.items())
         )
-        print_fn(f"Feetech necesita permisos seriales ({details}).")
-        print_fn("Necesito sudo para agregar tu usuario al grupo del puerto.")
+        print_fn(f"Feetech needs serial permissions ({details}).")
+        print_fn("Sudo is required to add your user to the serial device group.")
         sudo = runner(["sudo", "-v"], check=False)
         if sudo.returncode != 0:
-            raise SystemExit("No se pudo obtener sudo; no se cambiaron permisos seriales.")
+            raise SystemExit("Could not obtain sudo; serial permissions were not changed.")
         for group in sorted(missing_groups):
             result = runner(
                 ["sudo", "usermod", "-aG", group, target_user],
@@ -224,19 +224,19 @@ def ensure_feetech_serial_permissions(
             )
             if result.returncode != 0:
                 stderr = (result.stderr or "").strip()
-                raise SystemExit(f"No se pudo agregar {target_user} a {group}.\n{stderr}")
+                raise SystemExit(f"Could not add {target_user} to {group}.\n{stderr}")
         raise SystemExit(
-            "Permisos seriales actualizados.\n"
-            "Cierra sesion y vuelve a entrar, o reinicia la maquina, y corre de nuevo:\n"
-            "  uv run handumi-setup-hardware --robot piper --device pico"
+            "Serial permissions were updated.\n"
+            "Log out and back in, or reboot, then run again:\n"
+            "  uv run handumi-setup --robot piper --device pico"
         )
 
     if blocked_ports:
         raise SystemExit(
-            "No tengo permisos para abrir estos puertos Feetech: "
+            "No permission to open these Feetech ports: "
             f"{', '.join(blocked_ports)}.\n"
-            "Tu usuario parece estar en el grupo correcto; revisa reglas udev "
-            "o si otro proceso tiene abierto el puerto."
+            "Your user appears to be in the right group; check udev rules "
+            "or whether another process is holding the port."
         )
 
 
@@ -246,10 +246,10 @@ def _assert_serial_port_access(port: str) -> None:
     hint = _serial_port_permission_hint(port)
     if hint:
         raise SystemExit(
-            f"No tengo permisos para abrir {port}.\n"
+            f"No permission to open {port}.\n"
             + "\n".join(hint)
         )
-    raise SystemExit(f"No tengo permisos para abrir {port}.")
+    raise SystemExit(f"No permission to open {port}.")
 
 
 def _serial_port_permission_hint(port: str) -> list[str]:
@@ -261,14 +261,14 @@ def _serial_port_permission_hint(port: str) -> list[str]:
 
     if stat_result.st_gid in os.getgroups():
         return [
-            "Tu usuario ya esta en el grupo del puerto, pero el acceso fallo.",
-            "Revisa reglas udev o si otro proceso tiene abierto el puerto.",
+            "Your user is already in the port group, but access still failed.",
+            "Check udev rules or whether another process is holding the port.",
         ]
 
     return [
-        f"Agrega tu usuario al grupo `{group_name}`:",
+        f"Add your user to the `{group_name}` group:",
         f"  sudo usermod -aG {group_name} $USER",
-        "Luego cierra sesion y vuelve a entrar, o reinicia la maquina.",
+        "Then log out and back in, or reboot.",
     ]
 
 
@@ -337,9 +337,9 @@ def run_feetech_wizard(
         protocol_version if protocol_version is not None else defaults.protocol_version
     )
 
-    print_fn("Wizard Feetech: se mapeara derecha primero, luego izquierda.")
+    print_fn("Feetech wizard: RIGHT gripper first, then LEFT gripper.")
     right = identify_feetech_by_replug(
-        "derecho",
+        "right",
         start_id=start_id,
         end_id=end_id,
         baudrate=baudrate,
@@ -352,7 +352,7 @@ def run_feetech_wizard(
         scan_ids_fn=scan_ids_fn,
     )
     left = identify_feetech_by_replug(
-        "izquierdo",
+        "left",
         start_id=start_id,
         end_id=end_id,
         baudrate=baudrate,
@@ -366,7 +366,7 @@ def run_feetech_wizard(
         used_ports={right.port},
     )
     if left.port == right.port:
-        raise SystemExit(f"Feetech izquierdo y derecho usan el mismo puerto: {left.port}")
+        raise SystemExit(f"Left and right Feetech are using the same port: {left.port}")
 
     save_feetech_mapping(
         rig_config=rig_config,
@@ -376,7 +376,7 @@ def run_feetech_wizard(
         protocol_version=protocol_version,
     )
     print_fn(
-        f"Guardado en {rig_config}: "
+        f"Saved to {rig_config}: "
         f"left={left.port}/id{left.servo_id}, right={right.port}/id{right.servo_id}"
     )
     return left, right

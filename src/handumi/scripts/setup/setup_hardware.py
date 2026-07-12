@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive hardware setup for novice HandUMI + real robot users."""
+"""Interactive setup and calibration for real HandUMI robot teleop."""
 
 from __future__ import annotations
 
@@ -22,11 +22,17 @@ from handumi.real.can_setup import (
 )
 from handumi.real.piper_can import load_piper_can_settings
 from handumi.scripts.setup import calibrate_grippers, home_servos
+from handumi.scripts.setup.setup_ui import info, section, show_banner, success
 from handumi.tracking.pico import prepare_pico_adb_session
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Guided setup for real teleop: CAN, Feetech grippers, gripper "
+            "calibration, and PICO USB."
+        )
+    )
     parser.add_argument("--robot", choices=("piper",), default="piper")
     parser.add_argument("--device", choices=("pico", "meta"), default="pico")
     parser.add_argument("--rig-config", type=Path, default=DEFAULT_RIG_CONFIG)
@@ -80,13 +86,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    show_banner()
     ensure_rig_config(args.rig_config)
 
     if not args.skip_feetech_map:
+        section(1, 6, "Checking Feetech serial permissions")
         ensure_feetech_serial_permissions()
+        success("Serial permissions look good.")
 
     if args.robot == "piper":
         if not args.skip_can_map:
+            section(2, 6, "Mapping Piper CAN adapters")
+            info("You will map the RIGHT arm first, then the LEFT arm.")
             run_piper_can_wizard(
                 rig_config=args.rig_config,
                 bitrate=args.bitrate,
@@ -94,29 +105,34 @@ def main() -> None:
             )
         settings = load_piper_can_settings(args.rig_config)
         if not args.skip_can_repair:
+            section(3, 6, "Preparing CAN interfaces")
             ensure_can_interfaces_ready(
                 [settings.left_port, settings.right_port],
                 bitrate=settings.bitrate,
                 restart_ms=settings.restart_ms,
             )
-            print("CAN listo.")
+            success("CAN is ready.")
 
     if not args.skip_feetech_map:
+        section(4, 6, "Mapping HandUMI Feetech grippers")
+        info("You will map the RIGHT gripper first, then the LEFT gripper.")
         run_feetech_wizard(
             rig_config=args.rig_config,
             start_id=args.feetech_start_id,
             end_id=args.feetech_end_id,
         )
-        print("Feetech listo.")
+        success("Feetech mapping is saved.")
 
     if not args.skip_feetech_calibration:
+        section(5, 6, "Calibrating gripper openings")
         ensure_feetech_calibration(args)
 
     if args.device == "pico" and not args.skip_pico:
+        section(6, 6, "Preparing PICO USB tracking")
         prepare_pico_adb_session(skip_adb_check=args.skip_adb_check)
-        print("PICO listo por USB/ADB.")
+        success("PICO USB tracking is ready.")
 
-    print("\nSetup listo. Prueba:")
+    print("\nSetup complete. Start real teleop with:")
     print(f"  uv run handumi-teleop-real --device {args.device} --robot {args.robot}")
 
 
@@ -125,17 +141,18 @@ def ensure_feetech_calibration(args: argparse.Namespace) -> None:
     current = load_config(args.rig_config, calibration_path)
     sides = _calibration_sides(current, force=args.force_feetech_calibration)
     if not sides:
-        print(f"Feetech calibration listo: {calibration_path}")
+        success(f"Feetech calibration already exists: {calibration_path}")
         return
 
-    print("\nFeetech calibration falta o fue forzada.")
-    print(f"Cache: {calibration_path}")
-    print("Este paso guiado hara homing de servos y calibrara ancho open/closed.")
-    answer = input("Continuar ahora? [Y/n]: ").strip().lower()
-    if answer not in ("", "y", "yes", "s", "si"):
+    print("")
+    info("Gripper calibration is missing or was forced.")
+    info(f"Calibration file: {calibration_path}")
+    info("The wizard will home each servo, then capture fully-open and fully-closed ticks.")
+    answer = input("Continue now? [Y/n]: ").strip().lower()
+    if answer not in ("", "y", "yes"):
         raise SystemExit(
-            "Feetech calibration pendiente. Puedes correr despues:\n"
-            "  uv run handumi-setup-hardware --robot piper --device pico --skip-can-map"
+            "Gripper calibration is still pending. Run later with:\n"
+            "  uv run handumi-setup --robot piper --device pico --skip-can-map"
         )
 
     results = {"left": current.left, "right": current.right}
@@ -147,9 +164,9 @@ def ensure_feetech_calibration(args: argparse.Namespace) -> None:
         calibration = getattr(current, side)
         port = _side_port(current, calibration, side)
         if not args.skip_feetech_home:
-            print(
-                f"\nHoming {side}: coloca el gripper a mitad de recorrido. "
-                "El script capturara ENTER y centrara el encoder."
+            info(
+                f"{side}: place the gripper at the middle of its travel. "
+                "Press Enter when it is centered."
             )
             home_servos._home_side(
                 side=side,
@@ -182,7 +199,7 @@ def ensure_feetech_calibration(args: argparse.Namespace) -> None:
         ),
         calibration_path,
     )
-    print(f"Feetech calibration guardada: {saved}")
+    success(f"Feetech calibration saved: {saved}")
 
 
 def _calibration_sides(config: FeetechConfig, *, force: bool) -> list[str]:
