@@ -58,6 +58,8 @@ Meta Quest. It also creates the ignored machine-local `configs/rig.yaml` from
 
 Before recording, configure and calibrate the hardware once:
 
+- [docs/README_hardware_setup.md](docs/README_hardware_setup.md) - guided
+  machine-local Piper CAN, Feetech, and PICO hardware setup.
 - [docs/README_gripper_width.md](docs/README_gripper_width.md) - Feetech/camera
   ports, servo homing, and gripper-width calibration.
 - [docs/README_quest.md](docs/README_quest.md) - Meta Quest setup.
@@ -102,48 +104,22 @@ scene runs under MuJoCo contact physics; otherwise it renders statically.
 Optional `--anchor-z <m>`: anchor with the tip resting on the table to pin
 absolute heights to the sim table (see `handumi-teleop-sim --help`).
 
-## Real Piper Teleop
+## Real Robot Teleop
 
-Real teleop uses the same tracking, TCP calibration, retargeting, and Pyroki
-IK as `handumi-teleop-sim`, but streams the resulting Piper joint targets over
-CAN. Install the optional Piper dependency and set your local CAN ports in
-`configs/rig.yaml` first:
+Real hardware teleoperation is currently implemented for AgileX Piper. It uses
+the same tracking, TCP calibration, retargeting, and PyRoki IK path as
+`handumi-teleop-sim`, then streams Piper arm joint targets over CAN.
 
-```bash
-uv sync --extra piper
-cp configs/rig.example.yaml configs/rig.yaml  # if you do not have one yet
-```
-
-Edit:
-
-```yaml
-robots:
-  piper:
-    can:
-      bitrate: 1000000
-      restart_ms: 100
-      left_port: can0
-      right_port: can1
-```
-
-For a guided first-time setup that maps right/left CAN and Feetech by
-reconnecting one adapter at a time, repairs CAN with explicit sudo, writes
-`configs/rig.yaml`, and prepares PICO USB/ADB:
-
-```bash
-handumi-setup-hardware --robot piper --device pico
-```
-
-Then run:
+Set up the hardware with
+[docs/README_piper_real_teleop.md](docs/README_piper_real_teleop.md), then run:
 
 ```bash
 handumi-teleop-real --device pico --robot piper
 ```
 
-The real Piper homes slowly to the configured XHUMAN start pose first. A
-double clap anchors or re-anchors the enabled arms. Add `--space-start` only
-when you want keyboard Space to start idle arms; it does not replace double
-clap and does not re-anchor arms already active.
+The real Piper homes slowly first. A double clap anchors or re-anchors the
+enabled arms. Add `--space-start` when you want keyboard Space to start idle
+arms.
 
 ## Record Data
 
@@ -351,9 +327,13 @@ widths in meters. Camera, Feetech, and tracking diagnostics also include
 - [docs/add_new_embodiment.md](docs/add_new_embodiment.md) - add a new robot
   embodiment.
 - [docs/README_gripper_width.md](docs/README_gripper_width.md) - gripper and camera setup.
+- [docs/README_hardware_setup.md](docs/README_hardware_setup.md) - guided
+  machine-local hardware setup.
 - [docs/README_quest.md](docs/README_quest.md) - Meta Quest setup.
 - [docs/README_pico.md](docs/README_pico.md) - PICO setup.
 - [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
+- [docs/README_piper_real_teleop.md](docs/README_piper_real_teleop.md) -
+  Piper real-hardware setup and teleop.
 - [docs/README_quality.md](docs/README_quality.md) - synchronization, sensor health,
   and offline episode filtering.
 - [docs/calibration_plan.md](docs/calibration_plan.md) - portable Quest/table
