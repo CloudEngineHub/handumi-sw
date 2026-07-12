@@ -15,16 +15,13 @@ tracking health and TCP calibration before a session.
 Rerun (on by default, --no-rerun to disable) shows the calibrated TCP
 trails in the workspace frame — tracking-side truth, before retargeting/IK.
 
-Per-arm anchoring (each arm fully independent). Two gestures, SAME action —
-(re-)anchor that arm: your hand pose at that instant maps to the arm's home
-TCP and the arm follows relative motion from there. Only fires while that
-side is tracked.
+Teleop anchoring maps your current HandUMI pose to the robot home TCP and the
+robot follows relative motion from there. The double-clap gesture (close/open
+one gripper twice) re-anchors all enabled, tracked arms. Keyboard Space can
+also start idle arms when explicitly enabled with ``--space-start``.
 
   Space                 start both arms that are not anchored yet (--space-start)
-  X (left controller)   anchor the LEFT arm   (hands free, during setup)
-  A (right controller)  anchor the RIGHT arm
-  double clap LEFT      anchor the LEFT arm   (hands inside the HandUMIs)
-  double clap RIGHT     anchor the RIGHT arm
+  double clap           re-anchor enabled arms (hands inside the HandUMIs)
 
 Both arms start parked at home until their first anchor. Spoken feedback
 ("left anchored", ...) — --no-sounds to mute.
@@ -83,7 +80,6 @@ from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.scripts.record import build_tracker, connect_feetech
 from handumi.tracking.gestures import DoubleClapDetector
-from handumi.tracking.pico import read_start_button_value
 from handumi.tracking.transforms import Pose
 from handumi.utils.speech import log_say
 from handumi.utils.trajectory import TrajectoryTrail
@@ -241,7 +237,7 @@ def _start_sides(
     anchors: dict[str, dict[str, np.ndarray] | None],
     enabled_sides: tuple[str, ...],
 ) -> tuple[str, ...]:
-    """Space/autostart only starts inactive arms; it does not re-anchor."""
+    """Space only starts inactive arms; it does not re-anchor."""
     return tuple(side for side in enabled_sides if anchors[side] is None)
 
 
@@ -277,29 +273,6 @@ def _side_joint_indices(runtime) -> dict[str, list[int]]:
 def _mjcf_name(urdf_joint_name: str) -> str:
     """URDF joint -> Piper MJCF actuator/joint name (left_/right_ -> izq_/der_)."""
     return urdf_joint_name.replace("left_", "izq_", 1).replace("right_", "der_", 1)
-
-
-def _anchor_buttons_pressed(tracker) -> dict[str, bool]:
-    """Raw pressed-state of the per-arm anchor buttons: X (left), A (right).
-
-    Meta: read from the receiver's latest frame. PICO: read via the XRT SDK.
-    Missing data reads as not-pressed.
-    """
-    if tracker.device == "meta":
-        frame = tracker.receiver.latest()
-        if frame is None:
-            return {"left": False, "right": False}
-        return {
-            "left": bool(frame.left.buttons.primary),
-            "right": bool(frame.right.buttons.primary),
-        }
-    xrt = getattr(tracker, "xrt", None)
-    if xrt is None:
-        return {"left": False, "right": False}
-    return {
-        "left": read_start_button_value(xrt, "X") >= 0.75,
-        "right": read_start_button_value(xrt, "A") >= 0.75,
-    }
 
 
 def _sample_state(sample, widths=None) -> np.ndarray:
@@ -429,8 +402,8 @@ def main() -> None:
     args = parse_args()
 
     calibration = _load_calibration(args)
-    # X is the left-arm anchor button here, so the provider must not consume
-    # it as a workspace reset (per-arm anchors absorb any workspace shift).
+    # Keep controller buttons from changing the tracking workspace during sim
+    # teleop. Gripper double-clap and optional Space are the only start inputs.
     tracker = build_tracker(args, calibration, reset_workspace_on_x=False)
     tracker.start()
 
@@ -549,8 +522,7 @@ def main() -> None:
     # stores the calibrated source TCP and its local-frame SE(3) adapter.
     anchors: dict[str, dict[str, np.ndarray] | None] = {"left": None, "right": None}
     enabled_sides = _enabled_sides(args.side)
-    prev_button = {"left": False, "right": False}
-    clap = {"left": DoubleClapDetector(), "right": DoubleClapDetector()}
+    clap = DoubleClapDetector()
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     space_listener.start()
     episode_start: float | None = None
@@ -558,13 +530,12 @@ def main() -> None:
     interval = 1.0 / args.fps
     if args.space_start:
         log.info(
-            "Arms idle at home. Start with Space, anchor with X (left) / A (right), "
-            "or double clap that side."
+            "Arms idle at home. Start with Space, or double clap a gripper "
+            "to re-anchor enabled arms."
         )
     else:
         log.info(
-            "Arms idle at home. Anchor with X (left) / A (right), "
-            "or double clap that side."
+            "Arms idle at home. Double clap a gripper to anchor/re-anchor enabled arms."
         )
     try:
         while True:
@@ -589,30 +560,23 @@ def main() -> None:
             state = _sample_state(sample, widths)
             source_poses = dict(zip(("left", "right"), raw_state_pose7_pair(state), strict=True))
 
-            # (Re-)anchor a side on either gesture — X/A rising edge (hands
-            # free, during setup) or that side's double clap (hands inside
-            # the HandUMIs, mid-operation). Both do exactly the same thing:
-            # snapshot that hand's current pose <-> the arm's home TCP, and
-            # the arm follows relative motion from there.
-            pressed = _anchor_buttons_pressed(tracker)
-            side_width_mm = {"left": widths.left_mm, "right": widths.right_mm}
+            # (Re-)anchor on hands-free double clap (close/open one gripper
+            # twice). Space is only an optional setup shortcut: it starts idle
+            # arms but does not re-anchor arms that are already active.
             start_sides: tuple[str, ...] = ()
             if args.space_start and space_listener.consume_space():
                 start_sides = _start_sides(anchors, enabled_sides)
                 if start_sides:
                     log.info("Space pressed; starting %s.", "/".join(start_sides))
+            if clap.update(widths.left_mm, widths.right_mm, loop_start):
+                start_sides = enabled_sides
+                log.info("Double clap detected; re-anchoring %s.", "/".join(start_sides))
 
             anchored_this_frame = False
             for side in ("left", "right"):
                 if side not in enabled_sides:
-                    prev_button[side] = pressed[side]
                     continue
-                rise = pressed[side] and not prev_button[side]
-                prev_button[side] = pressed[side]
-                # Feeding the same width to both detector channels makes the
-                # clap side-local.
-                clapped = clap[side].update(side_width_mm[side], side_width_mm[side], loop_start)
-                if not (rise or clapped or side in start_sides):
+                if side not in start_sides:
                     continue
                 if not side_tracked[side]:
                     log.warning("%s anchor ignored — that controller is not tracked.", side)
