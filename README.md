@@ -1,6 +1,6 @@
 # HandUMI Software
 
-Ultima modificacion: 2026-07-11 20:03:25 -05 -0500
+Ultima modificacion: 2026-07-11 20:30:08 -05 -0500
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
@@ -80,12 +80,13 @@ handumi-teleop-sim --device meta            # or --device pico
 
 Per-arm controls — two gestures, same action: **(re-)anchor** that arm so
 your current hand pose maps to the arm's home and it follows from there.
-**Space** starts both arms that are still idle, **X** anchors the left arm,
-**A** the right (hands free, during setup); a **double clap on one gripper**
-anchors that same arm hands-free once your fingers are inside the HandUMIs.
-Arms stay parked at home until their first anchor. Spoken feedback;
-`--no-sounds` to mute. In the recorder below, the double clap re-centers the
-workspace and starts/stops episodes.
+**X** anchors the left arm, **A** the right (hands free, during setup); a
+**double clap on one gripper** anchors that same arm hands-free once your
+fingers are inside the HandUMIs. Pass `--space-start` if you also want the
+keyboard Space key to start both idle arms at once. Arms stay parked at home
+until their first anchor. Spoken feedback; `--no-sounds` to mute. In the
+recorder below, the double clap re-centers the workspace and starts/stops
+episodes.
 
 For a full pick-and-place rehearsal with a task scene and real contact
 physics (MuJoCo: the cube is graspable, driven by your Feetech opening):

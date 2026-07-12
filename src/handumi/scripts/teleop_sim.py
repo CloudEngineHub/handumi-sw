@@ -20,7 +20,7 @@ Per-arm anchoring (each arm fully independent). Two gestures, SAME action —
 TCP and the arm follows relative motion from there. Only fires while that
 side is tracked.
 
-  Space                 start both arms that are not anchored yet
+  Space                 start both arms that are not anchored yet (--space-start)
   X (left controller)   anchor the LEFT arm   (hands free, during setup)
   A (right controller)  anchor the RIGHT arm
   double clap LEFT      anchor the LEFT arm   (hands inside the HandUMIs)
@@ -114,7 +114,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--port", type=int, default=8003, help="Viser port.")
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C.")
-    p.add_argument("--max-frames", type=int, default=0, help="0 means use --duration-s.")
     p.add_argument(
         "--translation-scale",
         type=float,
@@ -126,15 +125,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-sounds", action="store_true", help="Disable spoken anchor/home feedback.")
     p.add_argument(
         "--space-start",
-        action=argparse.BooleanOptionalAction,
-        default=True,
+        action="store_true",
         help="Allow keyboard Space to start any unanchored enabled arms.",
-    )
-    p.add_argument(
-        "--start-delay-s",
-        type=float,
-        default=0.0,
-        help="Auto-start unanchored enabled arms after this many seconds.",
     )
     p.add_argument(
         "--scene",
@@ -561,28 +553,24 @@ def main() -> None:
     clap = {"left": DoubleClapDetector(), "right": DoubleClapDetector()}
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     space_listener.start()
-    ready_time = time.perf_counter()
-    auto_start_time = ready_time + float(args.start_delay_s)
-    auto_start_done = args.start_delay_s <= 0.0
     episode_start: float | None = None
     frame = 0
     interval = 1.0 / args.fps
-    log.info(
-        "Arms idle at home. Start with Space%s, anchor with X (left) / A (right), "
-        "or double clap that side.",
-        f" or auto-start in {args.start_delay_s:.1f}s" if args.start_delay_s > 0.0 else "",
-    )
+    if args.space_start:
+        log.info(
+            "Arms idle at home. Start with Space, anchor with X (left) / A (right), "
+            "or double clap that side."
+        )
+    else:
+        log.info(
+            "Arms idle at home. Anchor with X (left) / A (right), "
+            "or double clap that side."
+        )
     try:
         while True:
             loop_start = time.perf_counter()
             if episode_start is not None:
-                if args.max_frames > 0 and frame >= args.max_frames:
-                    break
-                if (
-                    args.max_frames <= 0
-                    and args.duration_s > 0.0
-                    and loop_start - episode_start >= args.duration_s
-                ):
+                if args.duration_s > 0.0 and loop_start - episode_start >= args.duration_s:
                     break
             sample = tracker.latest()
             side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
@@ -609,12 +597,7 @@ def main() -> None:
             pressed = _anchor_buttons_pressed(tracker)
             side_width_mm = {"left": widths.left_mm, "right": widths.right_mm}
             start_sides: tuple[str, ...] = ()
-            if not auto_start_done and loop_start >= auto_start_time:
-                auto_start_done = True
-                start_sides = _start_sides(anchors, enabled_sides)
-                if start_sides:
-                    log.info("Auto-start elapsed; starting %s.", "/".join(start_sides))
-            elif args.space_start and space_listener.consume_space():
+            if args.space_start and space_listener.consume_space():
                 start_sides = _start_sides(anchors, enabled_sides)
                 if start_sides:
                     log.info("Space pressed; starting %s.", "/".join(start_sides))
