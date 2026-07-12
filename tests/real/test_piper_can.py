@@ -1,9 +1,12 @@
 import time
 import unittest
+from unittest import mock
 
 import numpy as np
 
 from handumi.real.piper_can import (
+    PiperCanEnvironment,
+    PiperCanSettings,
     PiperJointStreamer,
     load_piper_can_settings,
     piper_mdeg_to_q,
@@ -170,6 +173,34 @@ class PiperJointStreamerTest(unittest.TestCase):
         time.sleep(0.02)
         streamer.stop()
 
+    def test_hold_current_commands_cancels_pending_motion(self):
+        left = FakeArm()
+        right = FakeArm()
+        streamer = PiperJointStreamer(
+            {"left": left, "right": right},
+            command_rate_hz=500.0,
+            max_joint_speed_deg_s=500.0,
+            gripper_effort=1000,
+        )
+        streamer.set_targets(
+            {
+                "left": np.full(6, 10_000, dtype=np.int64),
+                "right": np.full(6, -10_000, dtype=np.int64),
+            }
+        )
+
+        held = streamer.hold_current_commands()
+        streamer.start()
+        try:
+            time.sleep(0.02)
+        finally:
+            streamer.stop()
+
+        np.testing.assert_array_equal(held["left"], np.zeros(6, dtype=np.int64))
+        np.testing.assert_array_equal(held["right"], np.zeros(6, dtype=np.int64))
+        np.testing.assert_array_equal(left.read_mdeg(), held["left"])
+        np.testing.assert_array_equal(right.read_mdeg(), held["right"])
+
     def test_streamer_sends_gripper_targets_to_fake_arms(self):
         left = FakeArm()
         right = FakeArm()
@@ -189,6 +220,36 @@ class PiperJointStreamerTest(unittest.TestCase):
 
         self.assertIn((42000, 1234), left.grippers)
         self.assertIn((17000, 1234), right.grippers)
+
+
+class PiperCanEnvironmentTest(unittest.TestCase):
+    def test_move_home_temporarily_uses_slow_joint_limit(self):
+        settings = PiperCanSettings(
+            left_port="can0",
+            right_port="can1",
+            max_joint_speed_deg_s=180.0,
+            home_max_joint_speed_deg_s=20.0,
+            home_timeout_s=12.0,
+            home_tolerance_deg=2.0,
+        )
+        environment = PiperCanEnvironment(settings)
+        environment.streamer = mock.Mock()
+        targets = {
+            "left": np.zeros(6, dtype=np.int64),
+            "right": np.zeros(6, dtype=np.int64),
+        }
+
+        environment.move_home(targets)
+
+        self.assertEqual(
+            environment.streamer.set_max_joint_speed_deg_s.call_args_list,
+            [mock.call(20.0), mock.call(180.0)],
+        )
+        environment.streamer.set_targets.assert_called_once_with(targets)
+        environment.streamer.wait_until_targets.assert_called_once_with(
+            timeout_s=12.0,
+            tolerance_mdeg=2000.0,
+        )
 
 
 if __name__ == "__main__":

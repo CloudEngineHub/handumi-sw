@@ -3,8 +3,11 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
+
 from handumi.feetech.calibration import FeetechConfig, GripperCalibration
 from handumi.scripts.teleop_real import (
+    _apply_inactive_side_policy,
     _clear_enabled_anchors,
     _enabled_tracking_ok,
     _has_enabled_anchors,
@@ -79,6 +82,25 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         self.assertIsNone(anchors["left"])
         self.assertIsNone(anchors["right"])
+
+    def test_tracking_recovery_holds_command_until_reanchored(self):
+        previous_q = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+        solved_q = np.zeros(4, dtype=np.float32)
+        home_q = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32)
+        anchors = {"left": None, "right": None}
+        side_indices = {"left": [0, 1], "right": [2, 3]}
+
+        _apply_inactive_side_policy(
+            solved_q,
+            previous_q,
+            home_q,
+            anchors,
+            side_indices,
+            {"left"},
+        )
+
+        np.testing.assert_array_equal(solved_q[:2], previous_q[:2])
+        np.testing.assert_array_equal(solved_q[2:], home_q[2:])
 
     def test_single_side_mode_only_requires_that_side_tracked(self):
         self.assertTrue(_enabled_tracking_ok({"left": True, "right": False}, ("left",)))

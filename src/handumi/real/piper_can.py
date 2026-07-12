@@ -275,10 +275,11 @@ class PiperJointStreamer:
     def set_max_joint_speed_deg_s(self, max_joint_speed_deg_s: float) -> None:
         if max_joint_speed_deg_s <= 0.0:
             raise ValueError("max_joint_speed_deg_s must be > 0")
-        self.max_step_mdeg = max(
-            1.0,
-            max_joint_speed_deg_s * 1000.0 / self.command_rate_hz,
-        )
+        with self._lock:
+            self.max_step_mdeg = max(
+                1.0,
+                max_joint_speed_deg_s * 1000.0 / self.command_rate_hz,
+            )
         log.info("Piper stream max step: %.3f deg/tick", self.max_step_mdeg / 1000.0)
 
     def set_targets(self, targets: dict[str, np.ndarray]) -> None:
@@ -300,6 +301,14 @@ class PiperJointStreamer:
     def latest_commands(self) -> dict[str, np.ndarray]:
         with self._lock:
             return {side: cmd.copy() for side, cmd in self._commanded.items()}
+
+    def hold_current_commands(self) -> dict[str, np.ndarray]:
+        """Cancel pending motion and hold the latest scheduled joint commands."""
+        self.raise_if_failed()
+        with self._lock:
+            held = {side: cmd.copy() for side, cmd in self._commanded.items()}
+            self._targets = {side: cmd.copy() for side, cmd in held.items()}
+        return held
 
     def feedback_mdeg(self) -> dict[str, np.ndarray]:
         return {side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()}
@@ -368,24 +377,27 @@ class PiperJointStreamer:
         try:
             while not self._stop.is_set():
                 with self._lock:
-                    targets = {side: target.copy() for side, target in self._targets.items()}
                     gripper_targets = self._gripper_targets.copy()
-
-                next_commands: dict[str, np.ndarray] = {}
-                for side, arm in self.arms.items():
-                    cmd = step_mdeg_toward(
-                        self._commanded[side],
-                        targets[side],
-                        self.max_step_mdeg,
+                    next_commands = {
+                        side: step_mdeg_toward(
+                            self._commanded[side],
+                            self._targets[side],
+                            self.max_step_mdeg,
+                        )
+                        for side in self.arms
+                    }
+                    # Publish the scheduled command before sending. A concurrent
+                    # hold then captures this exact tick and prevents later motion.
+                    self._commanded.update(
+                        {side: cmd.copy() for side, cmd in next_commands.items()}
                     )
+
+                for side, arm in self.arms.items():
+                    cmd = next_commands[side]
                     arm.send_mdeg(cmd)
                     gripper = gripper_targets.get(side)
                     if gripper is not None:
                         arm.send_gripper_microm(gripper, self.gripper_effort)
-                    next_commands[side] = cmd
-
-                with self._lock:
-                    self._commanded.update(next_commands)
 
                 next_time += period
                 remaining = next_time - time.perf_counter()
@@ -433,18 +445,31 @@ class PiperCanEnvironment:
             gripper_effort=self.settings.gripper_effort,
         )
         self.streamer.start()
+        self.move_home(home_targets_mdeg)
+
+    def move_home(self, home_targets_mdeg: dict[str, np.ndarray]) -> None:
+        """Move to home at the configured slow limit, then restore teleop speed."""
+        if self.streamer is None:
+            raise RuntimeError("home() before move_home()")
         log.info(
             "Homing Piper to XHUMAN pose: left=%s right=%s",
             format_mdeg(home_targets_mdeg["left"]),
             format_mdeg(home_targets_mdeg["right"]),
         )
-        self.streamer.set_targets(home_targets_mdeg)
-        self.streamer.wait_until_targets(
-            timeout_s=self.settings.home_timeout_s,
-            tolerance_mdeg=self.settings.home_tolerance_deg * 1000.0,
+        self.streamer.set_max_joint_speed_deg_s(
+            self.settings.home_max_joint_speed_deg_s
         )
-        log.info("Piper home reached.")
-        self.streamer.set_max_joint_speed_deg_s(self.settings.max_joint_speed_deg_s)
+        try:
+            self.streamer.set_targets(home_targets_mdeg)
+            self.streamer.wait_until_targets(
+                timeout_s=self.settings.home_timeout_s,
+                tolerance_mdeg=self.settings.home_tolerance_deg * 1000.0,
+            )
+            log.info("Piper home reached.")
+        finally:
+            self.streamer.set_max_joint_speed_deg_s(
+                self.settings.max_joint_speed_deg_s
+            )
 
     def set_q(self, q: np.ndarray, actuated_names: list[str] | tuple[str, ...]) -> None:
         self.set_targets(q_to_piper_mdeg(q, actuated_names))
@@ -467,6 +492,11 @@ class PiperCanEnvironment:
         if self.streamer is None:
             return {}
         return self.streamer.latest_commands()
+
+    def hold_current_commands_mdeg(self) -> dict[str, np.ndarray]:
+        if self.streamer is None:
+            raise RuntimeError("home() before hold_current_commands_mdeg()")
+        return self.streamer.hold_current_commands()
 
     def feedback_mdeg(self) -> dict[str, np.ndarray]:
         return {side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()}

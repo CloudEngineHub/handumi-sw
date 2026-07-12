@@ -163,6 +163,25 @@ def prepare_pico_adb_session(
     return reverse_ok and awake_ok
 
 
+def stop_xrt_service(*, runner=subprocess.run) -> None:
+    """Best-effort cleanup of XRoboToolkit services before a relaunch."""
+    for pattern in (SERVICE_SCRIPT, "/opt/apps/roboticsservice"):
+        try:
+            runner(
+                ["pkill", "-f", pattern],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except FileNotFoundError:
+            return
+        except subprocess.TimeoutExpired:
+            log.warning("Timed out while stopping XRoboToolkit service.")
+            return
+    time.sleep(0.3)
+
+
 def launch_xrt_service() -> None:
     """Start the XRoboToolkit PC service."""
     log.info(f"Launching XRoboToolkit PC service: {SERVICE_SCRIPT}")
@@ -531,6 +550,7 @@ class PicoTrackingProvider:
         else:
             log.info("ADB check skipped. Assuming XRoboToolkit can reach the PC service.")
 
+        stop_xrt_service()
         launch_xrt_service()
         self.xrt = init_xrt()
         if not wait_for_pico_data(self.xrt, mode=self.mode, timeout_s=15.0):
@@ -547,6 +567,7 @@ class PicoTrackingProvider:
                 lan_ip = guess_lan_ip()
                 if lan_ip:
                     log.info("PICO WiFi mode: PC-service IP should be %s:%d.", lan_ip, PICO_SERVICE_PORT)
+            stop_xrt_service()
             launch_xrt_service()
             self.xrt = init_xrt()
             return wait_for_pico_data(self.xrt, mode=self.mode, timeout_s=5.0)

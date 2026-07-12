@@ -149,9 +149,10 @@ Runtime behavior:
 - The Piper arms home slowly to the configured start pose.
 - Arms remain idle at home until a double clap starts them.
 - A double clap while teleop is active clears anchors and returns enabled arms
-  home; double clap again to start teleop from a fresh reference.
-- If tracking is lost, anchors are cleared and the current joint target is
-  held until tracking recovers.
+  home at the configured homing speed; double clap again to start teleop from
+  a fresh reference.
+- If tracking is lost, pending motion is cancelled and the latest command is
+  held through recovery until a fresh double clap or Space anchor.
 
 ## Troubleshooting
 

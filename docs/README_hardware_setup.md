@@ -8,11 +8,11 @@ Current scope:
 
 - Piper CAN mapping and CAN interface repair.
 - Feetech gripper serial-port and servo-ID mapping.
+- Guided Feetech servo homing and gripper-width calibration.
 - PICO USB/ADB session preparation.
 
-It does not calibrate gripper width, configure cameras, or compute the
-controller-to-TCP offset. Those steps remain in the dedicated calibration
-READMEs.
+It does not configure cameras or compute the controller-to-TCP offset. Those
+steps remain in the dedicated calibration READMEs.
 
 ## Typical First-Time Flow
 
@@ -25,7 +25,7 @@ READMEs.
    handumi-setup-hardware --robot piper --device pico
    ```
 
-4. Configure cameras and calibrate gripper width:
+4. Configure cameras and review the gripper calibration details:
    [README_gripper_width.md](README_gripper_width.md).
 5. Finish tracking setup:
    [README_pico.md](README_pico.md) or [README_quest.md](README_quest.md).

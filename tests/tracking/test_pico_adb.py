@@ -5,6 +5,7 @@ from handumi.tracking.pico import (
     keep_pico_awake,
     prepare_pico_adb_session,
     setup_adb_reverse,
+    stop_xrt_service,
     verify_adb_connection,
 )
 
@@ -77,6 +78,23 @@ class PicoAdbTest(unittest.TestCase):
 
         with self.assertRaises(SystemExit):
             prepare_pico_adb_session(timeout_s=0.0, runner=runner)
+
+    def test_stop_xrt_service_cleans_known_process_patterns(self):
+        calls = []
+
+        def runner(cmd, **kwargs):
+            calls.append(cmd)
+            return _completed(cmd, returncode=1)
+
+        stop_xrt_service(runner=runner)
+
+        self.assertEqual(
+            calls,
+            [
+                ["pkill", "-f", "/opt/apps/roboticsservice/runService.sh"],
+                ["pkill", "-f", "/opt/apps/roboticsservice"],
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -119,7 +119,8 @@ handumi-teleop-real --device pico --robot piper
 
 The real Piper homes slowly first. A double clap starts enabled arms from home;
 while teleop is active, another double clap clears anchors and sends the Piper
-back home. Add `--space-start` when you want keyboard Space to start idle arms.
+back home at the configured homing speed. Add `--space-start` when you want
+keyboard Space to start idle arms.
 
 ## Record Data
 

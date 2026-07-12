@@ -46,6 +46,7 @@ from handumi.real.piper_can import (
     PiperCanEnvironment,
     format_mdeg,
     load_piper_can_settings,
+    piper_mdeg_to_q,
     q_to_piper_mdeg,
 )
 from handumi.retargeting.handumi_to_robot import (
@@ -236,6 +237,22 @@ def _has_enabled_anchors(
     return any(anchors[side] is not None for side in enabled_sides)
 
 
+def _apply_inactive_side_policy(
+    q: np.ndarray,
+    previous_q: np.ndarray,
+    home_q: np.ndarray,
+    anchors: dict[str, dict[str, np.ndarray] | None],
+    side_indices: dict[str, list[int]],
+    tracking_hold_sides: set[str],
+) -> None:
+    """Keep recovery-held arms still; park other inactive arms at home."""
+    for side in ("left", "right"):
+        if anchors[side] is not None:
+            continue
+        source = previous_q if side in tracking_hold_sides else home_q
+        q[side_indices[side]] = source[side_indices[side]]
+
+
 def main() -> None:
     args = parse_args()
     _validate_args(args)
@@ -295,6 +312,7 @@ def main() -> None:
     episode_start: float | None = None
     frame = 0
     tracking_lost_since: float | None = None
+    tracking_hold_sides: set[str] = set()
     last_recovery_attempt = 0.0
 
     try:
@@ -331,11 +349,19 @@ def main() -> None:
                 if tracking_lost_since is None:
                     tracking_lost_since = loop_start
                     _clear_enabled_anchors(anchors, enabled_sides)
+                    held = real_env.hold_current_commands_mdeg()
+                    q = piper_mdeg_to_q(
+                        left_mdeg=held["left"],
+                        right_mdeg=held["right"],
+                        actuated_names=actuated_names,
+                        base_q=q,
+                    )
+                    tracking_hold_sides.update(enabled_sides)
                     log.warning(
-                        "Tracking lost; holding current Piper q. Re-anchor after recovery."
+                        "Tracking lost; pending motion cancelled at the current Piper "
+                        "command. Re-anchor after recovery."
                     )
                     log_say("tracking lost", play_sounds=play_sounds)
-                real_env.set_q(q, actuated_names)
                 recover = getattr(tracker, "recover", None)
                 if callable(recover) and loop_start - last_recovery_attempt >= 3.0:
                     last_recovery_attempt = loop_start
@@ -366,16 +392,16 @@ def main() -> None:
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
                 if _has_enabled_anchors(anchors, enabled_sides):
                     _clear_enabled_anchors(anchors, enabled_sides)
+                    tracking_hold_sides.difference_update(enabled_sides)
                     q = home_q.copy()
-                    real_env.set_q(q, actuated_names)
-                    real_env.raise_if_failed()
                     episode_start = None
                     frame = 0
-                    log.info("Double clap detected; teleop reset, Piper returning home.")
+                    log.info(
+                        "Double clap detected; teleop reset, Piper returning home slowly."
+                    )
+                    log_say("returning home", play_sounds=play_sounds)
+                    real_env.move_home(home_targets_mdeg)
                     log_say("teleop reset", play_sounds=play_sounds)
-                    dt = time.perf_counter() - loop_start
-                    if (sleep := interval - dt) > 0:
-                        time.sleep(sleep)
                     continue
                 start_sides = enabled_sides
                 log.info("Double clap detected; starting %s.", "/".join(start_sides))
@@ -396,6 +422,7 @@ def main() -> None:
                         source_world_to_robot_world=_tracking_world_map(args.device),
                     ),
                 }
+                tracking_hold_sides.discard(side)
                 anchored_this_frame = True
                 log.info("%s arm anchored; real Piper follows from home.", side)
                 log_say(f"{side} anchored", play_sounds=play_sounds)
@@ -424,10 +451,16 @@ def main() -> None:
                 )
                 ik_targets[side] = (pose7[:3], pose7[3:7])
 
+            previous_q = q.copy()
             q = solver.ik(q, left_pose=ik_targets["left"], right_pose=ik_targets["right"])
-            for side in ("left", "right"):
-                if anchors[side] is None:
-                    q[side_indices[side]] = home_q[side_indices[side]]
+            _apply_inactive_side_policy(
+                q,
+                previous_q,
+                home_q,
+                anchors,
+                side_indices,
+                tracking_hold_sides,
+            )
             runtime.set_finger_positions(
                 q, {"left": widths.left_normalized, "right": widths.right_normalized}
             )
