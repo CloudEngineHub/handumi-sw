@@ -55,20 +55,42 @@ table, cameras or Quest. Repeat after relocalization or tracking reset.
 
 ## 5. Record a pilot
 
+Authenticate once and confirm which Hugging Face account is active:
+
+```bash
+hf auth login
+hf auth whoami
+```
+
 ```bash
 handumi-record \
   --device meta \
   --robot piper \
+  --task "pick and place the blue cube in the white box" \
+  --repo-id NONHUMAN-RESEARCH/test_handumi_pickandplace \
   --controller-tcp-calibration configs/calibration/meta_controller_tcp.yaml \
   --session-calibration outputs/calibration/session.yaml \
   --wrist-cameras --workspace-camera \
   --clap-control \
   --num-episodes 20 \
-  --episode-time-s 60
+  --episode-time-s 60 \
+  --push-to-hub
 ```
 
-A double clap starts. Another double clap stops and saves the episode.
+`--repo-id` is `account-or-organization/dataset-name`. The authenticated token
+must have write access to that namespace. Without `--push-to-hub`, the validated
+dataset remains local under `outputs/`.
+
+A right double clap starts or stops/saves the episode. A left double clap while
+recording discards the current attempt and immediately restarts the same episode.
 `--episode-time-s` is the maximum duration and saves automatically if reached.
+`Esc` or `Ctrl+C` discards any active partial episode before stopping. `Esc` is
+available with `--clap-control` in an interactive terminal.
+
+Finalization validates LeRobot v3 Parquet, episode metadata, frame counts and
+videos, then writes a local Hugging Face `README.md` dataset card. Use
+`--dataset-license <id>` to set its data license (`other` by default), and
+`--push-to-hub` only uploads after validation passes.
 
 ## 6. Validate
 

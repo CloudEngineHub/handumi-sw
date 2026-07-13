@@ -1,5 +1,8 @@
 import threading
 import argparse
+import json
+import os
+import pty
 import tempfile
 import unittest
 from dataclasses import replace
@@ -7,16 +10,21 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from handumi.cameras.base import CameraSample
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
     _default_output_dir,
+    _EscapeStopListener,
     _robot_metadata,
     _selected_camera_names,
+    _validate_finalized_lerobot_dataset,
     _validate_unique_camera_ids,
     _wait_for_clap,
     _wait_for_tracking,
+    _write_dataset_readme,
     build_observation,
     record_episode,
 )
@@ -124,6 +132,16 @@ def _clap_sequence() -> list[GripperWidths]:
     ]
 
 
+def _left_clap_sequence() -> list[GripperWidths]:
+    return [
+        _widths(50.0, 50.0),
+        _widths(2.0, 50.0),
+        _widths(50.0, 50.0),
+        _widths(2.0, 50.0),
+        _widths(50.0, 50.0),
+    ]
+
+
 class DefaultOutputDirTest(unittest.TestCase):
     def test_is_timestamped_under_outputs(self):
         out = _default_output_dir()
@@ -185,6 +203,68 @@ class RobotMetadataTest(unittest.TestCase):
         self.assertEqual(len(metadata["sha256"]), 64)
 
 
+class FinalizedDatasetGuaranteesTest(unittest.TestCase):
+    @staticmethod
+    def _valid_dataset(root: Path) -> None:
+        (root / "meta" / "episodes" / "chunk-000").mkdir(parents=True)
+        (root / "data" / "chunk-000").mkdir(parents=True)
+        (root / "meta" / "stats.json").write_text("{}\n")
+        info = {
+            "codebase_version": "v3.0",
+            "total_episodes": 1,
+            "total_frames": 2,
+            "features": {},
+        }
+        (root / "meta" / "info.json").write_text(json.dumps(info))
+        pq.write_table(
+            pa.table({"task_index": [0], "task": ["test"]}),
+            root / "meta" / "tasks.parquet",
+        )
+        pq.write_table(
+            pa.table({"episode_index": [0]}),
+            root / "meta" / "episodes" / "chunk-000" / "file-000.parquet",
+        )
+        pq.write_table(
+            pa.table({"episode_index": [0, 0], "frame_index": [0, 1]}),
+            root / "data" / "chunk-000" / "file-000.parquet",
+        )
+
+    def test_writes_local_lerobot_card_and_validates_dataset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._valid_dataset(root)
+
+            _write_dataset_readme(
+                root,
+                repo_id="local/test",
+                task="pick cube",
+                license_id="other",
+            )
+            _validate_finalized_lerobot_dataset(root)
+
+            readme = (root / "README.md").read_text()
+            self.assertIn("LeRobot", readme)
+            self.assertIn("HandUMI", readme)
+            self.assertIn("pick cube", readme)
+
+    def test_rejects_incomplete_data_parquet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._valid_dataset(root)
+            _write_dataset_readme(
+                root,
+                repo_id="local/test",
+                task="test",
+                license_id="other",
+            )
+            (root / "data" / "chunk-000" / "file-000.parquet").write_bytes(
+                b"incomplete"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "Parquet files are incomplete"):
+                _validate_finalized_lerobot_dataset(root)
+
+
 class WaitForClapTest(unittest.TestCase):
     def test_returns_true_on_double_clap(self):
         grippers = _FakeGrippers(_clap_sequence())
@@ -197,6 +277,21 @@ class WaitForClapTest(unittest.TestCase):
         stop.set()
         grippers = _FakeGrippers([_widths(50.0, 50.0)])
         self.assertFalse(_wait_for_clap(grippers, DoubleClapDetector(), stop))
+
+
+class EscapeStopListenerTest(unittest.TestCase):
+    def test_escape_sets_graceful_stop_event(self):
+        master_fd, slave_fd = pty.openpty()
+        stop = threading.Event()
+        listener = _EscapeStopListener(stop, fd=slave_fd)
+        try:
+            self.assertTrue(listener.start())
+            os.write(master_fd, b"\x1b")
+            self.assertTrue(stop.wait(timeout=1.0))
+        finally:
+            listener.stop()
+            os.close(master_fd)
+            os.close(slave_fd)
 
 
 class WaitForTrackingTest(unittest.TestCase):
@@ -237,6 +332,59 @@ class RecordEpisodeClapControlTest(unittest.TestCase):
         self.assertEqual(status, "recorded")
         self.assertGreater(n_frames, 0)
         self.assertEqual(len(dataset.frames), n_frames)
+
+    def test_left_double_clap_discards_and_restarts_the_episode(self):
+        dataset = _FakeDataset()
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_FakeTracker(),
+            grippers=_FakeGrippers(_left_clap_sequence()),
+            episode_time_s=9999.0,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            clap_detector=DoubleClapDetector(),
+        )
+        self.assertEqual(status, "repeat")
+        self.assertGreaterEqual(n_frames, 0)
+        self.assertEqual(dataset.frames, [])
+
+    def test_global_stop_discards_an_active_partial_episode(self):
+        dataset = _FakeDataset()
+        dataset.add_frame({"partial": True})
+        stop = threading.Event()
+        stop.set()
+
+        _, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_FakeTracker(),
+            grippers=_FakeGrippers([_widths(50.0, 50.0)]),
+            episode_time_s=9999.0,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=stop,
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+        )
+
+        self.assertEqual(status, "interrupted")
+        self.assertEqual(dataset.frames, [])
 
 
 class RecordEpisodeTrackingGateTest(unittest.TestCase):

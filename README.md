@@ -87,7 +87,7 @@ the enabled, tracked arms from home. While teleop is active, another double
 clap clears the anchors, parks the enabled arms at home, and waits for a fresh
 start. Pass `--space-start` if you also want the keyboard Space key to start
 idle arms at once. Spoken feedback; `--no-sounds` to mute. In the recorder
-below, double clap starts episodes and stops/saves while recording.
+below, right double clap starts or stops/saves; left double clap restarts.
 Without session calibration it recenters the HMD workspace; a calibrated table
 frame remains locked across episodes.
 
@@ -174,9 +174,13 @@ Useful options:
   snapshot in metadata; raw controller poses remain unchanged.
 - `--session-calibration` locks Meta Quest poses to the calibrated table frame
   and snapshots both spatial and session calibrations in dataset metadata.
-- `--clap-control` starts an episode by squeezing either gripper twice; another
-  double clap during the episode stops and saves it.
+- `--clap-control` uses a right double clap to start or stop/save an episode;
+  a left double clap while recording restarts the same episode.
+- `Esc` (with `--clap-control`) or `Ctrl+C` discards an active partial episode
+  and keeps completed episodes.
 - `--push-to-hub` pushes the dataset after recording.
+- `--dataset-license` sets the dataset-card license (`other` by default); each
+  finalized dataset gets a local `README.md` and integrity validation before upload.
 - `--skip-feetech` records with zero-filled gripper widths.
 - `--pico-wifi` uses PICO over Wi-Fi instead of ADB.
 - `--manual-control` lets PICO buttons start/repeat/finish episodes.

@@ -2,9 +2,8 @@
 """Unified HandUMI recorder for PICO and Meta Quest tracking backends.
 
 Episode control: timed by default (--episode-time-s), PICO buttons with
---manual-control, or hands-free with --clap-control (squeeze either the left
-or right gripper twice within 1.6s to start an episode; another double-clap
-during the episode stops and saves it).
+--manual-control, or hands-free with --clap-control (double-clap right to
+start or stop/save; double-clap left while recording to restart the attempt).
 
 Spoken status announcements ("Recording episode 3", "Episode 3 saved, 812
 frames", ...) are on by default — pass --no-sounds to disable them. Without
@@ -18,9 +17,14 @@ import argparse
 import hashlib
 import json
 import logging
+import os
+import select
 import signal
+import sys
+import termios
 import threading
 import time
+import tty
 from datetime import datetime
 from pathlib import Path
 
@@ -91,6 +95,55 @@ logging.basicConfig(
 log = logging.getLogger("handumi.record")
 
 ROBOT_CONFIG_DIR = Path("configs/robots")
+
+
+class _EscapeStopListener:
+    """Turn terminal Escape into the recorder's graceful stop event."""
+
+    def __init__(self, stop_event: threading.Event, fd: int | None = None) -> None:
+        self.stop_event = stop_event
+        self.fd = fd
+        self._original: list | None = None
+        self._closed = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> bool:
+        fd = self.fd
+        if fd is None:
+            if not sys.stdin.isatty():
+                log.warning("Escape stop disabled: stdin is not a terminal.")
+                return False
+            fd = sys.stdin.fileno()
+            self.fd = fd
+        if not os.isatty(fd):
+            return False
+        self._original = termios.tcgetattr(fd)
+        tty.setcbreak(fd, termios.TCSANOW)
+        self._thread = threading.Thread(
+            target=self._run,
+            name="handumi_escape_stop",
+            daemon=True,
+        )
+        self._thread.start()
+        return True
+
+    def _run(self) -> None:
+        assert self.fd is not None
+        while not self._closed.is_set() and not self.stop_event.is_set():
+            readable, _, _ = select.select([self.fd], [], [], 0.1)
+            if readable and os.read(self.fd, 1) == b"\x1b":
+                log.info("Escape pressed - discarding active episode and stopping ...")
+                self.stop_event.set()
+                return
+
+    def stop(self) -> None:
+        self._closed.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+        if self.fd is not None and self._original is not None:
+            termios.tcsetattr(self.fd, termios.TCSANOW, self._original)
+            self._original = None
 
 
 def build_features(
@@ -248,7 +301,11 @@ def record_episode(
         if episode_start_ns is None:
             episode_start_ns = tracking_now_ns
         elapsed = loop_start - start_t
-        if (timed and elapsed >= episode_time_s) or stop_event.is_set():
+        if stop_event.is_set():
+            status = "interrupted"
+            dataset.clear_episode_buffer()
+            break
+        if timed and elapsed >= episode_time_s:
             if (
                 tracking_lost_since_ns is not None
                 and tracking_now_ns - tracking_lost_since_ns >= tracking_loss_timeout_ns
@@ -350,9 +407,17 @@ def record_episode(
             )
             break
 
-        if clap_control and clap_detector.update(widths.left_mm, widths.right_mm, loop_start):
-            status = "recorded"
-            break
+        if clap_control:
+            clap_side = clap_detector.update_side(
+                widths.left_mm, widths.right_mm, loop_start
+            )
+            if clap_side == "right":
+                status = "recorded"
+                break
+            if clap_side == "left":
+                status = "repeat"
+                dataset.clear_episode_buffer()
+                break
         dataset.add_frame(
             {
                 **cam_frames,
@@ -460,6 +525,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--vcodec", type=str, default="h264")
     p.add_argument("--push-to-hub", action="store_true")
     p.add_argument(
+        "--dataset-license",
+        default="other",
+        help="Hugging Face dataset-card license identifier. Defaults to 'other' so data is not relicensed as software.",
+    )
+    p.add_argument(
         "--controller-tcp-calibration",
         type=Path,
         default=None,
@@ -503,8 +573,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--clap-control",
         action="store_true",
-        help="Hands-free: squeeze either gripper twice within 1.6s to start "
-        "an episode; squeeze again during the episode to stop and save it. "
+        help="Hands-free: double-squeeze right to start or stop/save; "
+        "double-squeeze left while recording to restart the same episode. "
         "Needs real Feetech widths.",
     )
     p.add_argument(
@@ -627,29 +697,39 @@ def main() -> None:
     stop_event = threading.Event()
 
     def _on_signal(signum, frame):
-        log.info("Signal received - stopping after current episode ...")
+        log.info("Signal received - discarding active episode and stopping ...")
         stop_event.set()
 
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
+    escape_listener = _EscapeStopListener(stop_event)
+    if args.clap_control:
+        escape_listener.start()
 
     recorded = 0
     clap_detector = DoubleClapDetector() if args.clap_control else None
+    restart_active = False
     try:
         while (args.num_episodes <= 0 or recorded < args.num_episodes) and not stop_event.is_set():
             ep_num = dataset.num_episodes + 1
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
             log.info("--- Episode %d/%s ---", ep_num, ep_total)
             if args.clap_control:
-                log.info("  Double-squeeze either gripper to start episode %d ...", ep_num)
                 assert clap_detector is not None
-                if not _wait_for_clap(grippers, clap_detector, stop_event):
-                    break
-                # A calibrated table workspace is locked and ignores this
-                # legacy HMD recenter; uncalibrated sessions retain it.
-                reset_workspace = getattr(tracker, "reset_workspace", None)
-                if reset_workspace is not None:
-                    reset_workspace()
+                if restart_active:
+                    restart_active = False
+                    log.info("  Restarting episode %d immediately ...", ep_num)
+                else:
+                    log.info("  Double-squeeze right gripper to start episode %d ...", ep_num)
+                    if not _wait_for_clap(
+                        grippers, clap_detector, stop_event, side="right"
+                    ):
+                        break
+                    # A calibrated table workspace is locked and ignores this
+                    # legacy HMD recenter; uncalibrated sessions retain it.
+                    reset_workspace = getattr(tracker, "reset_workspace", None)
+                    if reset_workspace is not None:
+                        reset_workspace()
             elif args.manual_control:
                 action = wait_for_manual_start(
                     getattr(tracker, "xrt"),
@@ -705,12 +785,17 @@ def main() -> None:
                 log.warning("Episode restart requested (%d frames discarded).", n_frames)
                 log_say("Restart recording", play_sounds=play_sounds)
                 dataset.clear_episode_buffer()
+                restart_active = True
                 continue
-            if n_frames == 0 or status in {"tracking_lost", "sensor_unhealthy"}:
+            if n_frames == 0 or status in {
+                "tracking_lost",
+                "sensor_unhealthy",
+                "interrupted",
+            }:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
                 dataset.clear_episode_buffer()
-                if status == "finish":
+                if status in {"finish", "interrupted"}:
                     break
                 continue
             dataset.save_episode()
@@ -720,40 +805,64 @@ def main() -> None:
             if status == "finish":
                 break
     finally:
+        escape_listener.stop()
         log_say("Stop recording", play_sounds=play_sounds, blocking=True)
         log.info("--- Finalising ---")
-        dataset.finalize()
-        _update_info_json(
-            Path(dataset.root),
-            {
-                "recording_device": args.device,
-                "tracking_schema": "controller_raw_and_workspace_v3",
-                "tracking_workspace": (
-                    "table" if spatial_session_metadata is not None else "hmd_recentered"
-                ),
-                "state_semantics": "workspace_controller_pose7_plus_gripper_widths",
-                "capture_schema": "synchronized_sources_v1",
-                "sync_lag_s": args.sync_lag_s,
-                "max_sync_skew_s": args.max_sync_skew_s,
-                "camera_stale_timeout_s": args.camera_stale_timeout_s,
-                "gripper_stale_timeout_s": args.gripper_stale_timeout_s,
-                "cameras": [
-                    {"name": spec["name"], "index_or_path": spec["id"]}
-                    for spec in camera_specs
-                ],
-                "controller_tcp_calibration": calibration_metadata,
-                "spatial_session_calibration": spatial_session_metadata,
-                "target_robot": robot_metadata,
-            },
-        )
-        if args.push_to_hub:
-            dataset.push_to_hub()
-        disconnect_cameras(cameras)
-        if grippers is not None:
-            grippers.stop()
-        if gripper_pair is not None:
-            gripper_pair.close()
-        tracker.stop()
+        finalization_error: BaseException | None = None
+        try:
+            dataset.finalize()
+            root = Path(dataset.root)
+            updated_info = _update_info_json(
+                root,
+                {
+                    "recording_device": args.device,
+                    "tracking_schema": "controller_raw_and_workspace_v3",
+                    "tracking_workspace": (
+                        "table" if spatial_session_metadata is not None else "hmd_recentered"
+                    ),
+                    "state_semantics": "workspace_controller_pose7_plus_gripper_widths",
+                    "capture_schema": "synchronized_sources_v1",
+                    "sync_lag_s": args.sync_lag_s,
+                    "max_sync_skew_s": args.max_sync_skew_s,
+                    "camera_stale_timeout_s": args.camera_stale_timeout_s,
+                    "gripper_stale_timeout_s": args.gripper_stale_timeout_s,
+                    "cameras": [
+                        {"name": spec["name"], "index_or_path": spec["id"]}
+                        for spec in camera_specs
+                    ],
+                    "controller_tcp_calibration": calibration_metadata,
+                    "spatial_session_calibration": spatial_session_metadata,
+                    "target_robot": robot_metadata,
+                },
+            )
+            if updated_info is not None:
+                dataset.meta.info = updated_info
+            card_kwargs = _write_dataset_readme(
+                root,
+                repo_id=args.repo_id,
+                task=args.task,
+                license_id=args.dataset_license,
+            )
+            _validate_finalized_lerobot_dataset(root)
+            log.info("LeRobot v3 integrity validation passed.")
+            if args.push_to_hub:
+                dataset.push_to_hub(
+                    license=args.dataset_license,
+                    tags=["HandUMI"],
+                    **card_kwargs,
+                )
+        except BaseException as exc:
+            finalization_error = exc
+            log.exception("Dataset finalization failed; do not upload this dataset.")
+        finally:
+            disconnect_cameras(cameras)
+            if grippers is not None:
+                grippers.stop()
+            if gripper_pair is not None:
+                gripper_pair.close()
+            tracker.stop()
+        if finalization_error is not None:
+            raise finalization_error
         log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
         log_say("Exiting", play_sounds=play_sounds)
 
@@ -809,11 +918,16 @@ def _wait_for_clap(
     grippers: FeetechGripperSampler | FeetechGripperPair | None,
     clap_detector: DoubleClapDetector,
     stop_event: threading.Event,
+    *,
+    side: str = "right",
 ) -> bool:
-    """Poll Feetech widths until a double-clap fires (or ``stop_event`` sets)."""
+    """Poll widths until ``side`` double-claps (or ``stop_event`` sets)."""
     while not stop_event.is_set():
         widths = _latest_gripper_widths(grippers)
-        if clap_detector.update(widths.left_mm, widths.right_mm, time.perf_counter()):
+        triggered = clap_detector.update_side(
+            widths.left_mm, widths.right_mm, time.perf_counter()
+        )
+        if triggered == side:
             return True
         time.sleep(0.02)
     return False
@@ -898,14 +1012,116 @@ def _validate_unique_camera_ids(
         )
 
 
-def _update_info_json(root: Path, handumi: dict[str, object]) -> None:
+def _update_info_json(
+    root: Path, handumi: dict[str, object]
+) -> dict[str, object] | None:
     path = root / "meta" / "info.json"
     if not path.exists():
         log.warning("Cannot write HandUMI metadata; missing %s", path)
-        return
+        return None
     info = json.loads(path.read_text())
     info["handumi"] = {**info.get("handumi", {}), **handumi}
     path.write_text(json.dumps(info, indent=4) + "\n")
+    return info
+
+
+def _dataset_card_kwargs(task: str) -> dict[str, str]:
+    return {
+        "dataset_description": (
+            "Bimanual HandUMI demonstration data recorded in LeRobot v3 format. "
+            f"Task: {task}"
+        ),
+        "url": "https://github.com/leoperezz/handumi-sw",
+    }
+
+
+def _write_dataset_readme(
+    root: Path,
+    *,
+    repo_id: str,
+    task: str,
+    license_id: str,
+) -> dict[str, str]:
+    """Create the same LeRobot dataset card locally that Hub upload uses."""
+    from lerobot.datasets.utils import create_lerobot_dataset_card
+
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    kwargs = _dataset_card_kwargs(task)
+    card = create_lerobot_dataset_card(
+        tags=["HandUMI"],
+        dataset_info=info,
+        license=license_id,
+        repo_id=repo_id,
+        **kwargs,
+    )
+    card.save(root / "README.md")
+    return kwargs
+
+
+def _validate_finalized_lerobot_dataset(root: Path) -> None:
+    """Reject incomplete LeRobot v3 datasets before upload or reported success."""
+    import pyarrow.parquet as pq
+
+    info_path = root / "meta" / "info.json"
+    readme_path = root / "README.md"
+    if not info_path.is_file() or not readme_path.is_file():
+        raise RuntimeError("Dataset is missing meta/info.json or README.md.")
+    info = json.loads(info_path.read_text())
+    if info.get("codebase_version") != "v3.0":
+        raise RuntimeError(
+            f"Expected LeRobot v3.0, got {info.get('codebase_version')!r}."
+        )
+
+    total_episodes = int(info.get("total_episodes", 0))
+    total_frames = int(info.get("total_frames", 0))
+    if total_episodes <= 0 or total_frames <= 0:
+        raise RuntimeError("Dataset contains no completed episodes.")
+
+    required_meta = (root / "meta" / "stats.json", root / "meta" / "tasks.parquet")
+    if not all(path.is_file() for path in required_meta):
+        raise RuntimeError("Dataset is missing stats.json or tasks.parquet.")
+
+    episode_files = sorted((root / "meta" / "episodes").glob("chunk-*/*.parquet"))
+    data_files = sorted((root / "data").glob("chunk-*/*.parquet"))
+    if not episode_files or not data_files:
+        raise RuntimeError("Dataset is missing episode metadata or data Parquet files.")
+
+    episode_indices: set[int] = set()
+    for path in episode_files:
+        try:
+            table = pq.read_table(path, columns=["episode_index"])
+        except Exception as exc:
+            raise RuntimeError(f"Invalid episode metadata Parquet: {path}.") from exc
+        episode_indices.update(int(value.as_py()) for value in table["episode_index"])
+    expected_indices = set(range(total_episodes))
+    if episode_indices != expected_indices:
+        raise RuntimeError(
+            f"Episode metadata mismatch: expected {sorted(expected_indices)}, "
+            f"found {sorted(episode_indices)}."
+        )
+
+    try:
+        parquet_frames = sum(
+            pq.ParquetFile(path).metadata.num_rows for path in data_files
+        )
+    except Exception as exc:
+        raise RuntimeError("One or more data Parquet files are incomplete.") from exc
+    if parquet_frames != total_frames:
+        raise RuntimeError(
+            f"Frame count mismatch: info.json={total_frames}, parquet={parquet_frames}."
+        )
+
+    video_keys = [
+        key
+        for key, feature in (info.get("features") or {}).items()
+        if isinstance(feature, dict) and feature.get("dtype") == "video"
+    ]
+    missing_videos = [
+        key for key in video_keys if not list((root / "videos" / key).glob("chunk-*/*.mp4"))
+    ]
+    if missing_videos:
+        raise RuntimeError(f"Dataset is missing videos for: {', '.join(missing_videos)}.")
 
 
 def _camera_arg(value: str) -> int | str:
