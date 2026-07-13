@@ -8,6 +8,8 @@ from handumi.scripts.replay.replay_in_sim import (
     _render_task_scene,
     _resolve_gripper_openings,
     _resolved_controller_device,
+    _resolved_retarget_mode,
+    _resolved_tcp_calibration,
     load_robot_from_table,
 )
 
@@ -62,6 +64,26 @@ def test_explicit_controller_device_overrides_metadata():
     assert _resolved_controller_device(args, info) == "pico"
 
 
+def test_auto_retarget_uses_absolute_table_for_calibrated_table_dataset():
+    args = Namespace(retarget_mode="auto")
+    info = {"handumi": {"tracking_workspace": "table"}}
+
+    assert _resolved_retarget_mode(args, info) == "absolute-table"
+
+
+def test_auto_retarget_falls_back_to_local_relative_without_table_frame():
+    args = Namespace(retarget_mode="auto")
+
+    assert _resolved_retarget_mode(args, {"handumi": {}}) == "local-relative"
+
+
+def test_explicit_retarget_mode_overrides_dataset_metadata():
+    args = Namespace(retarget_mode="anchored")
+    info = {"handumi": {"tracking_workspace": "table"}}
+
+    assert _resolved_retarget_mode(args, info) == "anchored"
+
+
 def test_controller_tcp_calibration_is_loaded_from_metadata():
     info = {
         "handumi": {
@@ -91,6 +113,100 @@ def test_controller_tcp_calibration_is_loaded_from_metadata():
     assert source == "dataset metadata sha256=abc123"
 
 
+def _metadata_calibration_info() -> dict[str, object]:
+    return {
+        "handumi": {
+            "controller_tcp_calibration": {
+                "sha256": "old-snapshot",
+                "applied_to_state": False,
+                "controller_to_gripper_tcp": {
+                    "left": {
+                        "position": [0.01, 0.02, 0.03],
+                        "quaternion": [0.0, 0.0, 0.0, 1.0],
+                    },
+                    "right": {
+                        "position": [-0.01, -0.02, -0.03],
+                        "quaternion": [0.0, 0.0, 0.0, 1.0],
+                    },
+                },
+            }
+        }
+    }
+
+
+def test_piper_meta_configured_tcp_calibration_precedes_dataset_snapshot():
+    from handumi.robots.registry import load_robot_config
+
+    args = Namespace(
+        controller_tcp_calibration=None,
+        use_dataset_tcp_calibration=False,
+    )
+    configured = load_robot_config("piper").controller_tcp_calibrations["meta"]
+
+    calibration, source = _resolved_tcp_calibration(
+        args,
+        _metadata_calibration_info(),
+        robot="piper",
+        controller_device="meta",
+        configured_path=configured,
+    )
+
+    np.testing.assert_allclose(
+        calibration.left[:3], [0.12068467, 0.02142489, -0.21669616]
+    )
+    assert source.startswith("configured piper/meta:")
+
+
+def test_dataset_tcp_snapshot_can_be_requested_explicitly():
+    args = Namespace(
+        controller_tcp_calibration=None,
+        use_dataset_tcp_calibration=True,
+    )
+
+    calibration, source = _resolved_tcp_calibration(
+        args,
+        _metadata_calibration_info(),
+        robot="piper",
+        controller_device="meta",
+        configured_path=Path("configs/calibration/meta_controller_tcp.yaml"),
+    )
+
+    np.testing.assert_allclose(calibration.left[:3], [0.01, 0.02, 0.03])
+    assert source == "dataset metadata sha256=old-snapshot"
+
+
+def test_explicit_tcp_path_precedes_configured_and_dataset(tmp_path: Path):
+    explicit = tmp_path / "explicit_tcp.yaml"
+    explicit.write_text(
+        """\
+calibration:
+  controller_to_gripper_tcp:
+    left:
+      position: [0.4, 0.5, 0.6]
+      quaternion: [0.0, 0.0, 0.0, 1.0]
+    right:
+      position: [-0.4, -0.5, -0.6]
+      quaternion: [0.0, 0.0, 0.0, 1.0]
+""",
+        encoding="utf-8",
+    )
+    args = Namespace(
+        controller_tcp_calibration=explicit,
+        use_dataset_tcp_calibration=False,
+    )
+
+    calibration, source = _resolved_tcp_calibration(
+        args,
+        _metadata_calibration_info(),
+        robot="piper",
+        controller_device="meta",
+        configured_path=Path("configs/calibration/meta_controller_tcp.yaml"),
+    )
+
+    np.testing.assert_allclose(calibration.left[:3], [0.4, 0.5, 0.6])
+    assert source == str(explicit)
+
+
 def test_load_robot_from_table(tmp_path: Path):
     path = tmp_path / "deployment.yaml"
     path.write_text(
@@ -113,6 +229,8 @@ def test_absolute_table_parser_defaults_prepare_start_and_align_tools():
 
     args = build_parser().parse_args([])
 
+    assert args.retarget_mode == "auto"
+    assert args.use_dataset_tcp_calibration is False
     assert args.absolute_orientation == "relative-start"
     assert args.initial_solve_iterations == 12
     assert args.initial_position_tolerance_m == 0.01

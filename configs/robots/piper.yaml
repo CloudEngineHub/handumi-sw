@@ -10,6 +10,10 @@ ee_links:
 # an artificial offset when the controller pose is anchored.
 home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0]
 gripper_max_width_m: 0.066
+# Validated physical HandUMI mount calibration for each tracking device.
+# Replay prefers this pairing over stale calibration snapshots in old datasets.
+controller_tcp_calibrations:
+  meta: configs/calibration/meta_controller_tcp.yaml
 ik_weights:
   pos: 100.0
   ori: 4.5

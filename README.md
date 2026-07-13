@@ -267,6 +267,10 @@ handumi-replay-in-sim --repo-id your-name/handumi-demo
 
 This opens a local Viser viewer and saves a rollout under `outputs/replay_in_sim/`.
 The default robot is `piper`; choose another configured robot with `--robot axol`.
+Replay mode defaults to `auto`: datasets whose metadata declares
+`handumi.tracking_workspace: table` use one shared table-to-robot transform and
+therefore preserve the recorded bimanual separation. Datasets without a
+calibrated table frame fall back to local-relative retargeting.
 
 Headless example:
 
@@ -276,8 +280,8 @@ handumi-replay-in-sim \
   --headless
 ```
 
-For a table-calibrated dataset, preserve the shared bimanual workspace with a
-single deployment transform instead of anchoring each arm independently:
+For a table-calibrated dataset this geometry-preserving mode is selected
+automatically. The equivalent explicit command is:
 
 ```bash
 handumi-replay-in-sim \
@@ -291,9 +295,13 @@ TCP trajectories, prepares the robot at the first reachable pose before frame
 0, and preserves bimanual geometry. By default it aligns each tool orientation
 at the first frame while retaining subsequent wrist rotations. Use
 `--absolute-orientation table-absolute` only when HandUMI and robot TCP frame
-conventions were externally calibrated. The replay reads the recording device
-and controller-to-TCP snapshot from dataset metadata unless explicitly
-overridden. An optional `--scene <name>` only renders static context from
+conventions were externally calibrated. Replay prefers a controller-to-TCP
+calibration assigned to the selected robot/device in `configs/robots/*.yaml`;
+Piper+Meta uses the validated `configs/calibration/meta_controller_tcp.yaml`
+even for datasets carrying an older snapshot. An explicit
+`--controller-tcp-calibration <path>` overrides it. Use
+`--use-dataset-tcp-calibration` only to reproduce the historical snapshot.
+An optional `--scene <name>` only renders static context from
 `assets/scenes/<name>`; it does not alter replay targets or reconstruct objects.
 
 Use `--strict-ik` in validation runs to reject a replay when the configured

@@ -93,6 +93,13 @@ class PiperTeleopSimConfigTest(unittest.TestCase):
         self.assertEqual(config.ik_weights.ori_weight, 4.5)
         self.assertEqual(config.ik_weights.rest_weight, 12.0)
 
+    def test_piper_selects_validated_meta_tcp_calibration(self):
+        config = load_robot_config("piper")
+
+        path = config.controller_tcp_calibrations["meta"]
+        self.assertEqual(path.name, "meta_controller_tcp.yaml")
+        self.assertTrue(path.is_file())
+
 
 class TeleopSimStartTest(unittest.TestCase):
     def test_space_start_only_returns_unanchored_enabled_sides(self):

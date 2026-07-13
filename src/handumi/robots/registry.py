@@ -47,6 +47,7 @@ class RobotConfig:
     home_q: np.ndarray
     ik_weights: KinematicsConfig
     gripper_max_width_m: float
+    controller_tcp_calibrations: dict[str, Path]
     real: RobotRealConfig
 
 
@@ -155,6 +156,10 @@ def load_robot_config(name: str) -> RobotConfig:
     pkg_root = _resolve_path(data["pkg_root"])
     mjcf = _resolve_path(data["mjcf"]) if data.get("mjcf") else None
     home_q = np.asarray(data.get("home_q") or [], dtype=np.float32)
+    controller_tcp_calibrations = {
+        str(device): _resolve_path(value)
+        for device, value in (data.get("controller_tcp_calibrations") or {}).items()
+    }
     return RobotConfig(
         kind=str(data.get("kind") or name),
         urdf=urdf,
@@ -163,6 +168,7 @@ def load_robot_config(name: str) -> RobotConfig:
         ee_links=dict(data["ee_links"]),
         home_q=home_q,
         gripper_max_width_m=float(data.get("gripper_max_width_m", 0.08)),
+        controller_tcp_calibrations=controller_tcp_calibrations,
         ik_weights=KinematicsConfig(
             pos_weight=float(weights.get("pos", 100.0)),
             ori_weight=float(weights.get("ori", 15.0)),

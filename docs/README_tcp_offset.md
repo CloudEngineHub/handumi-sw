@@ -6,6 +6,10 @@ Recordings store raw controller poses; this transform
 post-hoc by replay/conversion. Stored per device in
 `configs/calibration/{meta,pico}_controller_tcp.yaml` (committed — it is a
 property of the mount design). Redo only when the 3D-printed mount changes.
+Robot configs may select a validated device calibration for replay. Piper
+selects the Meta calibration, which takes precedence over stale snapshots in
+older datasets; pass `--use-dataset-tcp-calibration` only for historical
+reproduction.
 
 Gripper-width calibration is separate:
 [README_gripper_width.md](README_gripper_width.md).

@@ -80,12 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument(
         "--retarget-mode",
-        choices=("local-relative", "anchored", "absolute-table"),
-        default="local-relative",
+        choices=("auto", "local-relative", "anchored", "absolute-table"),
+        default="auto",
         help=(
-            "local-relative replays frame-to-frame TCP SE(3) deltas in robot EE "
-            "space. anchored preserves the older home + position-delta mode. "
-            "absolute-table applies one shared table->robot transform to both TCPs."
+            "auto selects absolute-table for datasets recorded in a calibrated table "
+            "workspace, otherwise local-relative. local-relative replays frame-to-frame "
+            "TCP SE(3) deltas in robot EE space. anchored preserves the older home + "
+            "position-delta mode. absolute-table applies one shared table->robot "
+            "transform to both TCPs."
         ),
     )
     parser.add_argument(
@@ -117,8 +119,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "YAML with controller->HandUMI TCP transforms. "
-            "Defaults to configs/calibration/{controller_device}_controller_tcp.yaml."
+            "Explicit YAML with controller->HandUMI TCP transforms. Overrides both "
+            "the robot/device configured calibration and dataset metadata."
+        ),
+    )
+    parser.add_argument(
+        "--use-dataset-tcp-calibration",
+        action="store_true",
+        help=(
+            "Replay the historical controller->TCP snapshot embedded in the dataset "
+            "instead of the current robot/device configured calibration."
         ),
     )
     parser.add_argument(
@@ -303,6 +313,18 @@ def _resolved_controller_device(
     return DEFAULT_CONTROLLER_DEVICE
 
 
+def _resolved_retarget_mode(
+    args: argparse.Namespace,
+    source_info: dict[str, object],
+) -> str:
+    """Choose geometry-preserving replay when the dataset has a table frame."""
+    requested = str(args.retarget_mode)
+    if requested != "auto":
+        return requested
+    workspace = handumi_metadata(source_info).get("tracking_workspace")
+    return "absolute-table" if workspace == "table" else "local-relative"
+
+
 def _metadata_tcp_calibration(
     source_info: dict[str, object],
 ) -> tuple[ControllerTcpCalibration, str] | None:
@@ -312,6 +334,43 @@ def _metadata_tcp_calibration(
     calibration = controller_tcp_calibration_from_metadata(snapshot)
     sha256 = str(snapshot.get("sha256", "unknown"))
     return calibration, f"dataset metadata sha256={sha256}"
+
+
+def _resolved_tcp_calibration(
+    args: argparse.Namespace,
+    source_info: dict[str, object],
+    *,
+    robot: str,
+    controller_device: str,
+    configured_path: Path | None,
+) -> tuple[ControllerTcpCalibration, str]:
+    """Resolve TCP calibration with explicit, deployment, then historical precedence."""
+    explicit_path = args.controller_tcp_calibration
+    use_dataset = bool(getattr(args, "use_dataset_tcp_calibration", False))
+    if explicit_path is not None and use_dataset:
+        raise SystemExit(
+            "--controller-tcp-calibration and --use-dataset-tcp-calibration "
+            "are mutually exclusive."
+        )
+    if explicit_path is not None:
+        return load_controller_tcp_calibration(explicit_path), str(explicit_path)
+
+    metadata_calibration = _metadata_tcp_calibration(source_info)
+    if use_dataset:
+        if metadata_calibration is None:
+            raise SystemExit("Dataset has no unapplied controller->TCP calibration snapshot.")
+        return metadata_calibration
+
+    if configured_path is not None:
+        calibration = load_controller_tcp_calibration(configured_path)
+        source = f"configured {robot}/{controller_device}: {configured_path}"
+        return calibration, source
+
+    if metadata_calibration is not None:
+        return metadata_calibration
+
+    fallback_path = calibration_path_for_device(controller_device)
+    return load_controller_tcp_calibration(fallback_path), str(fallback_path)
 
 
 def _pose7_from_mapping(value: object, *, name: str) -> np.ndarray:
@@ -397,6 +456,8 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     states, fps, source_info, recorded_gripper_openings = load_episode_states(args)
     source_metadata = handumi_metadata(source_info)
     controller_device = _resolved_controller_device(args, source_info)
+    requested_retarget_mode = str(args.retarget_mode)
+    retarget_mode = _resolved_retarget_mode(args, source_info)
     gripper_openings, gripper_source = _resolve_gripper_openings(
         states,
         recorded_gripper_openings,
@@ -420,17 +481,15 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         right_tcp_arr = raw_right_controller_arr
         calibration_source = None
     else:
-        if args.controller_tcp_calibration is not None:
-            calibration = load_controller_tcp_calibration(args.controller_tcp_calibration)
-            calibration_source_value = str(args.controller_tcp_calibration)
-        else:
-            metadata_calibration = _metadata_tcp_calibration(source_info)
-            if metadata_calibration is not None:
-                calibration, calibration_source_value = metadata_calibration
-            else:
-                calibration_path = calibration_path_for_device(controller_device)
-                calibration = load_controller_tcp_calibration(calibration_path)
-                calibration_source_value = str(calibration_path)
+        calibration, calibration_source_value = _resolved_tcp_calibration(
+            args,
+            source_info,
+            robot=args.robot,
+            controller_device=controller_device,
+            configured_path=runtime.config.controller_tcp_calibrations.get(
+                controller_device
+            ),
+        )
         (
             states_for_retarget,
             raw_left_controller_arr,
@@ -481,14 +540,14 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     initial_solve_count = 0
     initial_max_position_error_m = 0.0
     initial_max_rotation_error_deg = 0.0
-    if args.retarget_mode == "anchored":
+    if retarget_mode == "anchored":
         anchors = retarget_anchors_from_raw_state(
             states_for_retarget[frame_indices[0]],
             left_robot_pose7=home_left_pose7,
             right_robot_pose7=home_right_pose7,
             max_reach=cfg.max_reach,
         )
-    elif args.retarget_mode == "local-relative":
+    elif retarget_mode == "local-relative":
         world_map = (
             VR_TO_ROBOT
             if controller_device == "pico"
@@ -570,7 +629,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     for selected_index, frame_index in enumerate(frame_indices):
         state = states_for_retarget[frame_index]
         raw_left, raw_right = raw_state_pose7_pair(state)
-        if args.retarget_mode == "anchored":
+        if retarget_mode == "anchored":
             if anchors is None:
                 raise RuntimeError("Anchored retarget mode was not initialized.")
             left_pose7, right_pose7 = raw_state_robot_target_pose7(state, anchors)
@@ -580,7 +639,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
                 right_pose=(right_pose7[:3], right_pose7[3:7]),
             )
             fk_left_pose7, fk_right_pose7 = solver.fk_pose7(q)
-        elif args.retarget_mode == "absolute-table":
+        elif retarget_mode == "absolute-table":
             if robot_from_table is None:
                 raise RuntimeError("Absolute table retarget mode was not initialized.")
             left_pose7, right_pose7 = absolute_table_robot_target_pose7(
@@ -676,15 +735,21 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         f"fps={fps:g} solved={elapsed:.2f}s ({elapsed / len(qs) * 1000:.1f} ms/frame)"
     )
     print(
-        f"[replay] retarget={args.retarget_mode} "
+        f"[replay] retarget={retarget_mode} "
         f"compose={args.compose_source} translation_scale={args.translation_scale:g}"
     )
+    if requested_retarget_mode == "auto":
+        print(
+            "[replay] retarget auto: "
+            f"tracking_workspace={source_metadata.get('tracking_workspace')!r} "
+            f"-> {retarget_mode}"
+        )
     if calibration_source is None:
         print("[replay] input pose: raw controller DEBUG mode")
     else:
         print(f"[replay] input pose: calibrated HandUMI TCP via {calibration_source}")
     print(f"[replay] grippers: {gripper_source}")
-    if args.retarget_mode == "absolute-table":
+    if retarget_mode == "absolute-table":
         print(
             "[replay] start prepared: "
             f"iterations={initial_solve_count} "
@@ -773,7 +838,8 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         ),
         "gripper_source": np.asarray([gripper_source]),
         "raw_controller_debug": np.asarray([args.raw_controller_debug], dtype=np.bool_),
-        "retarget_mode": np.asarray([args.retarget_mode]),
+        "retarget_mode": np.asarray([retarget_mode]),
+        "retarget_mode_requested": np.asarray([requested_retarget_mode]),
         "compose_source": np.asarray([args.compose_source]),
         "translation_scale": np.asarray([args.translation_scale], dtype=np.float32),
     }
