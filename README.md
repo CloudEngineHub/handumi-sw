@@ -276,6 +276,30 @@ handumi-replay-in-sim \
   --headless
 ```
 
+For a table-calibrated dataset, preserve the shared bimanual workspace with a
+single deployment transform instead of anchoring each arm independently:
+
+```bash
+handumi-replay-in-sim \
+  --repo-id your-name/handumi-demo \
+  --retarget-mode absolute-table \
+  --deployment-calibration configs/calibration/<robot>_table.yaml
+```
+
+`absolute-table` applies `robot_from_table` from the deployment YAML to both
+TCP trajectories, prepares the robot at the first reachable pose before frame
+0, and preserves bimanual geometry. By default it aligns each tool orientation
+at the first frame while retaining subsequent wrist rotations. Use
+`--absolute-orientation table-absolute` only when HandUMI and robot TCP frame
+conventions were externally calibrated. The replay reads the recording device
+and controller-to-TCP snapshot from dataset metadata unless explicitly
+overridden. An optional `--scene <name>` only renders static context from
+`assets/scenes/<name>`; it does not alter replay targets or reconstruct objects.
+
+Use `--strict-ik` in validation runs to reject a replay when the configured
+position or rotation error thresholds are exceeded. The default viewer warns
+but still opens so unreachable segments can be inspected.
+
 ## Train
 
 Training is out of scope for this repo — HandUMI produces LeRobot-compatible

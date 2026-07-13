@@ -46,6 +46,7 @@ class RobotConfig:
     ee_links: dict[str, str]
     home_q: np.ndarray
     ik_weights: KinematicsConfig
+    gripper_max_width_m: float
     real: RobotRealConfig
 
 
@@ -161,6 +162,7 @@ def load_robot_config(name: str) -> RobotConfig:
         mjcf=mjcf,
         ee_links=dict(data["ee_links"]),
         home_q=home_q,
+        gripper_max_width_m=float(data.get("gripper_max_width_m", 0.08)),
         ik_weights=KinematicsConfig(
             pos_weight=float(weights.get("pos", 100.0)),
             ori_weight=float(weights.get("ori", 15.0)),

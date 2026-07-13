@@ -9,6 +9,7 @@ ee_links:
 # Keeping simulation, conversion, and real-arm startup on the same home avoids
 # an artificial offset when the controller pose is anchored.
 home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0]
+gripper_max_width_m: 0.066
 ik_weights:
   pos: 100.0
   ori: 4.5

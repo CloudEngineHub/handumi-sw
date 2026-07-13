@@ -5,36 +5,55 @@ from __future__ import annotations
 
 import argparse
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
 from handumi.calibration.control_tcp import (
     DEFAULT_DEVICE as DEFAULT_CONTROLLER_DEVICE,
+    ControllerTcpCalibration,
     apply_controller_tcp_calibration,
     calibration_path_for_device,
+    controller_tcp_calibration_from_metadata,
     load_controller_tcp_calibration,
 )
 from handumi.dataset import (
     DatasetRef,
     ensure_metadata,
+    handumi_metadata,
     open_dataset,
     validate_raw_state_metadata,
 )
-from handumi.dataset.raw import HANDUMI_RAW_STATE_SIZE, LEFT_POSE_SLICE, RIGHT_POSE_SLICE
+from handumi.dataset.raw import (
+    HANDUMI_RAW_STATE_SIZE,
+    LEFT_GRIPPER_INDEX,
+    LEFT_POSE_SLICE,
+    RIGHT_GRIPPER_INDEX,
+    RIGHT_POSE_SLICE,
+)
 from handumi.retargeting.handumi_to_robot import (
     HANDUMI_POSE_ONLY_STATE_SIZE,
+    VR_TO_ROBOT,
+    absolute_table_robot_target_pose7,
     local_frame_adapter,
     local_relative_robot_target_pose7,
+    orientation_only_pose_adapter,
     raw_state_pose7_pair,
     raw_state_robot_target_pose7,
     retarget_anchors_from_raw_state,
 )
 from handumi.robots.kinematics import optimization_score_from_errors, pose_error_arrays
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
+from handumi.robots.utils import pose_mul, quat_normalize
 
 DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/handumi-dataset-v2"
 DEFAULT_OUT_DIR = Path("outputs/replay_in_sim")
+DEFAULT_DEPLOYMENT_CALIBRATION_DIR = Path("configs/calibration")
+GRIPPER_NORMALIZED_KEYS = (
+    "observation.feetech.left_normalized",
+    "observation.feetech.right_normalized",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,11 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument(
         "--retarget-mode",
-        choices=("local-relative", "anchored"),
+        choices=("local-relative", "anchored", "absolute-table"),
         default="local-relative",
         help=(
             "local-relative replays frame-to-frame TCP SE(3) deltas in robot EE "
-            "space. anchored preserves the older home + absolute position-delta mode."
+            "space. anchored preserves the older home + position-delta mode. "
+            "absolute-table applies one shared table->robot transform to both TCPs."
         ),
     )
     parser.add_argument(
@@ -86,8 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--controller-device",
         choices=("pico", "meta"),
-        default=DEFAULT_CONTROLLER_DEVICE,
-        help="Controller calibration device used to derive the default YAML path.",
+        default=None,
+        help=(
+            "Controller device. Defaults to handumi.recording_device in dataset "
+            f"metadata, then {DEFAULT_CONTROLLER_DEVICE!r} for legacy datasets."
+        ),
     )
     parser.add_argument(
         "--controller-tcp-calibration",
@@ -103,13 +126,94 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Replay raw PICO controller poses without controller->TCP calibration.",
     )
+    parser.add_argument(
+        "--deployment-calibration",
+        type=Path,
+        default=None,
+        help=(
+            "YAML containing robot_from_table for --retarget-mode absolute-table. "
+            "Defaults to configs/calibration/{robot}_table.yaml."
+        ),
+    )
+    parser.add_argument(
+        "--absolute-orientation",
+        choices=("relative-start", "table-absolute"),
+        default="relative-start",
+        help=(
+            "Orientation policy for absolute-table. relative-start aligns each "
+            "HandUMI tool frame to the robot home TCP at frame 0 while preserving "
+            "all subsequent wrist rotations. table-absolute requires matching, "
+            "externally calibrated HandUMI and robot TCP frame conventions."
+        ),
+    )
+    parser.add_argument(
+        "--initial-solve-iterations",
+        type=int,
+        default=12,
+        help=(
+            "Unrestricted IK iterations used to prepare the absolute-table start "
+            "configuration before frame 0."
+        ),
+    )
+    parser.add_argument(
+        "--initial-position-tolerance-m",
+        type=float,
+        default=0.01,
+        help="Required maximum TCP position error before starting replay.",
+    )
+    parser.add_argument(
+        "--gripper-max-width-m",
+        type=float,
+        default=None,
+        help=(
+            "Fallback physical opening mapped to fully open. Defaults to the robot "
+            "configuration and is used only when recorded Feetech "
+            "normalized fields are unavailable."
+        ),
+    )
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument(
+        "--scene",
+        default=None,
+        help=(
+            "Render assets/scenes/<name>/scene.xml in the calibrated table frame. "
+            "This provides initial task context; recorded object motion is unavailable."
+        ),
+    )
+    parser.add_argument(
+        "--max-ik-position-error-m",
+        type=float,
+        default=0.03,
+        help="Maximum acceptable per-frame TCP position error.",
+    )
+    parser.add_argument(
+        "--table-clearance-warning-m",
+        type=float,
+        default=0.10,
+        help=(
+            "Warn when a table-calibrated episode never places either HandUMI TCP "
+            "closer than this height to table z=0."
+        ),
+    )
+    parser.add_argument(
+        "--max-ik-rotation-error-deg",
+        type=float,
+        default=45.0,
+        help="Maximum acceptable per-frame TCP rotation error.",
+    )
+    parser.add_argument(
+        "--strict-ik",
+        action="store_true",
+        help="Fail instead of warning when an IK error threshold is exceeded.",
+    )
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("-o", "--output", type=Path, default=None)
     return parser
 
 
-def load_episode_states(args: argparse.Namespace) -> tuple[np.ndarray, float]:
+def load_episode_states(
+    args: argparse.Namespace,
+) -> tuple[np.ndarray, float, dict[str, object], np.ndarray | None]:
     """Load replay states, accepting current 16D raw and legacy 14D pose-only data."""
     ref = DatasetRef.from_repo_id(
         args.repo_id,
@@ -121,6 +225,8 @@ def load_episode_states(args: argparse.Namespace) -> tuple[np.ndarray, float]:
     dataset = open_dataset(ref, episode=args.episode)
     fps = float(getattr(dataset, "fps", 30) or 30)
     states: list[np.ndarray] = []
+    normalized_grippers: list[np.ndarray] = []
+    has_normalized_grippers = True
     observed_sizes: set[int] = set()
 
     for item in dataset:
@@ -135,6 +241,18 @@ def load_episode_states(args: argparse.Namespace) -> tuple[np.ndarray, float]:
                 f"(legacy poses only) in {args.source!r}, got {len(state)}."
             )
         states.append(state)
+        if all(key in item for key in GRIPPER_NORMALIZED_KEYS):
+            normalized_grippers.append(
+                np.asarray(
+                    [
+                        np.asarray(item[key], dtype=np.float32).reshape(-1)[0]
+                        for key in GRIPPER_NORMALIZED_KEYS
+                    ],
+                    dtype=np.float32,
+                )
+            )
+        else:
+            has_normalized_grippers = False
 
     if not states:
         raise ValueError(f"Episode {args.episode} is empty.")
@@ -148,19 +266,102 @@ def load_episode_states(args: argparse.Namespace) -> tuple[np.ndarray, float]:
             "[replay] input state: legacy 14D pose-only format "
             "(left pose7 + right pose7; no gripper widths)"
         )
-    return np.stack(states, axis=0), fps
+    normalized = (
+        np.clip(np.stack(normalized_grippers, axis=0), 0.0, 1.0)
+        if has_normalized_grippers and len(normalized_grippers) == len(states)
+        else None
+    )
+    return np.stack(states, axis=0), fps, source_info, normalized
+
+
+def _resolve_gripper_openings(
+    states: np.ndarray,
+    recorded_normalized: np.ndarray | None,
+    *,
+    max_width_m: float,
+) -> tuple[np.ndarray | None, str]:
+    """Return per-frame 0-1 gripper openings and their source description."""
+    if recorded_normalized is not None:
+        return np.clip(recorded_normalized, 0.0, 1.0), "recorded Feetech normalized"
+    if states.shape[1] != HANDUMI_RAW_STATE_SIZE:
+        return None, "unavailable (legacy pose-only state)"
+    if max_width_m <= 0:
+        raise SystemExit("--gripper-max-width-m must be greater than zero.")
+    widths_m = states[:, [LEFT_GRIPPER_INDEX, RIGHT_GRIPPER_INDEX]]
+    return np.clip(widths_m / float(max_width_m), 0.0, 1.0), "state widths in meters"
+
+
+def _resolved_controller_device(
+    args: argparse.Namespace,
+    source_info: dict[str, object],
+) -> str:
+    if args.controller_device is not None:
+        return str(args.controller_device)
+    recorded = handumi_metadata(source_info).get("recording_device")
+    if recorded in ("pico", "meta"):
+        return str(recorded)
+    return DEFAULT_CONTROLLER_DEVICE
+
+
+def _metadata_tcp_calibration(
+    source_info: dict[str, object],
+) -> tuple[ControllerTcpCalibration, str] | None:
+    snapshot = handumi_metadata(source_info).get("controller_tcp_calibration")
+    if not isinstance(snapshot, dict) or snapshot.get("applied_to_state") is True:
+        return None
+    calibration = controller_tcp_calibration_from_metadata(snapshot)
+    sha256 = str(snapshot.get("sha256", "unknown"))
+    return calibration, f"dataset metadata sha256={sha256}"
+
+
+def _pose7_from_mapping(value: object, *, name: str) -> np.ndarray:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a mapping")
+    try:
+        position = np.asarray(value["position"], dtype=np.float32).reshape(3)
+        quaternion = quat_normalize(
+            np.asarray(value["quaternion"], dtype=np.float32).reshape(4)
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{name} must contain position[3] and quaternion[4]"
+        ) from exc
+    return np.concatenate([position, quaternion]).astype(np.float32)
+
+
+def load_robot_from_table(path: Path) -> np.ndarray:
+    """Load ``T_robot_world_table`` from a deployment calibration YAML."""
+    if not path.exists():
+        raise SystemExit(
+            f"Missing deployment calibration: {path}\n"
+            "Create it with calibration.robot_from_table position/quaternion values."
+        )
+    import yaml
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if data.get("verified") is not True:
+        print(
+            f"[replay] warning: deployment calibration {path} is not marked "
+            "verified; absolute task placement depends on the physical rig matching it."
+        )
+    root = data.get("calibration", data)
+    try:
+        return _pose7_from_mapping(root["robot_from_table"], name="robot_from_table")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"Invalid deployment calibration {path}: {exc}") from exc
 
 
 def apply_tcp_calibration_to_states(
     states: np.ndarray,
-    calibration_path: Path,
+    calibration: ControllerTcpCalibration,
+    calibration_source: str,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
     np.ndarray,
     np.ndarray,
     np.ndarray,
-    Path | None,
+    str,
 ]:
     """Return states whose left/right poses are calibrated gripper TCP poses."""
     raw_left: list[np.ndarray] = []
@@ -172,7 +373,6 @@ def apply_tcp_calibration_to_states(
 
     raw_left_arr = np.asarray(raw_left, dtype=np.float32)
     raw_right_arr = np.asarray(raw_right, dtype=np.float32)
-    calibration = load_controller_tcp_calibration(calibration_path)
     left_tcp, right_tcp = apply_controller_tcp_calibration(
         raw_left_arr,
         raw_right_arr,
@@ -188,13 +388,24 @@ def apply_tcp_calibration_to_states(
         raw_right_arr,
         left_tcp,
         right_tcp,
-        calibration.source,
+        calibration_source,
     )
 
 
 def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     runtime = load_embodiment(args.robot)
-    states, fps = load_episode_states(args)
+    states, fps, source_info, recorded_gripper_openings = load_episode_states(args)
+    source_metadata = handumi_metadata(source_info)
+    controller_device = _resolved_controller_device(args, source_info)
+    gripper_openings, gripper_source = _resolve_gripper_openings(
+        states,
+        recorded_gripper_openings,
+        max_width_m=(
+            runtime.config.gripper_max_width_m
+            if args.gripper_max_width_m is None
+            else args.gripper_max_width_m
+        ),
+    )
     if args.raw_controller_debug:
         states_for_retarget = states
         raw_left_controller: list[np.ndarray] = []
@@ -209,6 +420,17 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         right_tcp_arr = raw_right_controller_arr
         calibration_source = None
     else:
+        if args.controller_tcp_calibration is not None:
+            calibration = load_controller_tcp_calibration(args.controller_tcp_calibration)
+            calibration_source_value = str(args.controller_tcp_calibration)
+        else:
+            metadata_calibration = _metadata_tcp_calibration(source_info)
+            if metadata_calibration is not None:
+                calibration, calibration_source_value = metadata_calibration
+            else:
+                calibration_path = calibration_path_for_device(controller_device)
+                calibration = load_controller_tcp_calibration(calibration_path)
+                calibration_source_value = str(calibration_path)
         (
             states_for_retarget,
             raw_left_controller_arr,
@@ -216,13 +438,25 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             left_tcp_arr,
             right_tcp_arr,
             calibration_source,
-        ) = apply_tcp_calibration_to_states(states, args.controller_tcp_calibration)
+        ) = apply_tcp_calibration_to_states(
+            states,
+            calibration,
+            calibration_source_value,
+        )
 
     frame_indices = list(range(args.start_frame, len(states), args.stride))
     if args.max_frames is not None:
         frame_indices = frame_indices[: args.max_frames]
     if not frame_indices:
         raise ValueError("No frames selected for replay.")
+    if source_metadata.get("tracking_workspace") == "table":
+        minimum_tcp_z = float(np.min(states_for_retarget[:, [2, 9]]))
+        if minimum_tcp_z > args.table_clearance_warning_m:
+            print(
+                "[replay] warning: calibrated TCP never approaches table z=0 "
+                f"(minimum={minimum_tcp_z * 100:.1f}cm). Re-run controller->TCP "
+                "pivot calibration; do not compensate this with robot_from_table."
+            )
 
     cfg = runtime.config.ik_weights
     q = runtime.config.home_q.astype(np.float32).copy()
@@ -241,6 +475,12 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     anchors = None
     left_adapter = None
     right_adapter = None
+    robot_from_table = None
+    left_tool_adapter = None
+    right_tool_adapter = None
+    initial_solve_count = 0
+    initial_max_position_error_m = 0.0
+    initial_max_rotation_error_deg = 0.0
     if args.retarget_mode == "anchored":
         anchors = retarget_anchors_from_raw_state(
             states_for_retarget[frame_indices[0]],
@@ -248,9 +488,83 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             right_robot_pose7=home_right_pose7,
             max_reach=cfg.max_reach,
         )
+    elif args.retarget_mode == "local-relative":
+        world_map = (
+            VR_TO_ROBOT
+            if controller_device == "pico"
+            else np.eye(3, dtype=np.float32)
+        )
+        left_adapter = local_frame_adapter(
+            first_left_pose7,
+            home_left_pose7,
+            source_world_to_robot_world=world_map,
+        )
+        right_adapter = local_frame_adapter(
+            first_right_pose7,
+            home_right_pose7,
+            source_world_to_robot_world=world_map,
+        )
     else:
-        left_adapter = local_frame_adapter(first_left_pose7, home_left_pose7)
-        right_adapter = local_frame_adapter(first_right_pose7, home_right_pose7)
+        if source_metadata.get("tracking_workspace") != "table":
+            raise SystemExit(
+                "--retarget-mode absolute-table requires a dataset recorded in the "
+                "calibrated table workspace."
+            )
+        deployment_path = args.deployment_calibration or (
+            DEFAULT_DEPLOYMENT_CALIBRATION_DIR / f"{args.robot}_table.yaml"
+        )
+        robot_from_table = load_robot_from_table(deployment_path)
+        mapped_left, mapped_right = absolute_table_robot_target_pose7(
+            states_for_retarget[frame_indices[0]],
+            robot_from_table,
+        )
+        if args.absolute_orientation == "relative-start":
+            left_tool_adapter = orientation_only_pose_adapter(
+                mapped_left, home_left_pose7
+            )
+            right_tool_adapter = orientation_only_pose_adapter(
+                mapped_right, home_right_pose7
+            )
+
+        first_left_target, first_right_target = absolute_table_robot_target_pose7(
+            states_for_retarget[frame_indices[0]],
+            robot_from_table,
+            left_tool_adapter_pose7=left_tool_adapter,
+            right_tool_adapter_pose7=right_tool_adapter,
+        )
+        initial_solver = runtime.solver_cls(
+            config=replace(cfg, max_joint_delta=None)
+        )
+        for initial_solve_count in range(1, args.initial_solve_iterations + 1):
+            q = initial_solver.ik(
+                q,
+                left_pose=(first_left_target[:3], first_left_target[3:7]),
+                right_pose=(first_right_target[:3], first_right_target[3:7]),
+            )
+            initial_left, initial_right = initial_solver.fk_pose7(q)
+            initial_errors = pose_error_arrays(
+                first_left_target[None],
+                first_right_target[None],
+                initial_left[None],
+                initial_right[None],
+            )
+            initial_max_position_error_m = max(
+                float(initial_errors["left_pos_error_m"][0]),
+                float(initial_errors["right_pos_error_m"][0]),
+            )
+            initial_max_rotation_error_deg = max(
+                float(initial_errors["left_rot_error_deg"][0]),
+                float(initial_errors["right_rot_error_deg"][0]),
+            )
+            if initial_max_position_error_m <= args.initial_position_tolerance_m:
+                break
+        if initial_max_position_error_m > args.initial_position_tolerance_m:
+            raise SystemExit(
+                "Unable to prepare replay start pose: maximum TCP position error "
+                f"is {initial_max_position_error_m * 100:.2f} cm after "
+                f"{initial_solve_count} IK iterations. Check robot_from_table, TCP "
+                "calibration, or robot reachability."
+            )
 
     start = time.perf_counter()
     for selected_index, frame_index in enumerate(frame_indices):
@@ -260,6 +574,21 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             if anchors is None:
                 raise RuntimeError("Anchored retarget mode was not initialized.")
             left_pose7, right_pose7 = raw_state_robot_target_pose7(state, anchors)
+            q = solver.ik(
+                q,
+                left_pose=(left_pose7[:3], left_pose7[3:7]),
+                right_pose=(right_pose7[:3], right_pose7[3:7]),
+            )
+            fk_left_pose7, fk_right_pose7 = solver.fk_pose7(q)
+        elif args.retarget_mode == "absolute-table":
+            if robot_from_table is None:
+                raise RuntimeError("Absolute table retarget mode was not initialized.")
+            left_pose7, right_pose7 = absolute_table_robot_target_pose7(
+                state,
+                robot_from_table,
+                left_tool_adapter_pose7=left_tool_adapter,
+                right_tool_adapter_pose7=right_tool_adapter,
+            )
             q = solver.ik(
                 q,
                 left_pose=(left_pose7[:3], left_pose7[3:7]),
@@ -310,6 +639,12 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
                 right_pose=(right_pose7[:3], right_pose7[3:7]),
             )
             fk_left_pose7, fk_right_pose7 = solver.fk_pose7(q)
+        if gripper_openings is not None:
+            opening = gripper_openings[frame_index]
+            runtime.set_finger_positions(
+                q,
+                {"left": float(opening[0]), "right": float(opening[1])},
+            )
         qs.append(q.copy())
         raw_left_gt.append(raw_left)
         raw_right_gt.append(raw_right)
@@ -348,6 +683,15 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         print("[replay] input pose: raw controller DEBUG mode")
     else:
         print(f"[replay] input pose: calibrated HandUMI TCP via {calibration_source}")
+    print(f"[replay] grippers: {gripper_source}")
+    if args.retarget_mode == "absolute-table":
+        print(
+            "[replay] start prepared: "
+            f"iterations={initial_solve_count} "
+            f"pos_max={initial_max_position_error_m * 100:.2f}cm "
+            f"rot_max={initial_max_rotation_error_deg:.2f}deg "
+            f"orientation={args.absolute_orientation}"
+        )
     print(
         "[replay] IK EE error: "
         f"pos mean={all_pos_err.mean() * 100:.2f}cm "
@@ -355,6 +699,22 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         f"rot mean={all_rot_err.mean():.2f}deg max={all_rot_err.max():.2f}deg; "
         f"score={score:.4f}"
     )
+    violations = []
+    if float(all_pos_err.max()) > args.max_ik_position_error_m:
+        violations.append(
+            f"position {all_pos_err.max() * 100:.2f}cm > "
+            f"{args.max_ik_position_error_m * 100:.2f}cm"
+        )
+    if float(all_rot_err.max()) > args.max_ik_rotation_error_deg:
+        violations.append(
+            f"rotation {all_rot_err.max():.2f}deg > "
+            f"{args.max_ik_rotation_error_deg:.2f}deg"
+        )
+    if violations:
+        message = "IK fidelity threshold exceeded: " + "; ".join(violations)
+        if args.strict_ik:
+            raise SystemExit(message)
+        print(f"[replay] warning: {message}")
     return {
         "qpos": np.asarray(qs, dtype=np.float32),
         "raw_left_pose7_ground_truth": np.asarray(raw_left_gt, dtype=np.float32),
@@ -380,6 +740,38 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         "frame_indices": np.asarray(frame_indices, dtype=np.int64),
         "fps": np.asarray([fps], dtype=np.float32),
         "controller_tcp_calibration": np.asarray([str(calibration_source or "")]),
+        "controller_device": np.asarray([controller_device]),
+        "tracking_workspace": np.asarray(
+            [str(source_metadata.get("tracking_workspace", ""))]
+        ),
+        "robot_from_table_pose7": np.asarray(
+            [robot_from_table] if robot_from_table is not None else [],
+            dtype=np.float32,
+        ),
+        "left_tool_adapter_pose7": np.asarray(
+            [left_tool_adapter] if left_tool_adapter is not None else [],
+            dtype=np.float32,
+        ),
+        "right_tool_adapter_pose7": np.asarray(
+            [right_tool_adapter] if right_tool_adapter is not None else [],
+            dtype=np.float32,
+        ),
+        "absolute_orientation": np.asarray([args.absolute_orientation]),
+        "initial_solve_iterations": np.asarray(
+            [initial_solve_count], dtype=np.int64
+        ),
+        "initial_max_position_error_m": np.asarray(
+            [initial_max_position_error_m], dtype=np.float32
+        ),
+        "initial_max_rotation_error_deg": np.asarray(
+            [initial_max_rotation_error_deg], dtype=np.float32
+        ),
+        "gripper_normalized": (
+            gripper_openings[frame_indices]
+            if gripper_openings is not None
+            else np.empty((len(frame_indices), 0), dtype=np.float32)
+        ),
+        "gripper_source": np.asarray([gripper_source]),
         "raw_controller_debug": np.asarray([args.raw_controller_debug], dtype=np.bool_),
         "retarget_mode": np.asarray([args.retarget_mode]),
         "compose_source": np.asarray([args.compose_source]),
@@ -403,6 +795,44 @@ def save_rollout(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Pa
     return output
 
 
+def _render_task_scene(server, args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> None:
+    if args.scene is None:
+        return
+    transforms = rollout["robot_from_table_pose7"]
+    if len(transforms) != 1:
+        raise SystemExit("--scene currently requires --retarget-mode absolute-table.")
+
+    from handumi.sim.scene import load_scene
+
+    robot_from_table = transforms[0]
+    for body in load_scene(args.scene):
+        body_table = np.concatenate(
+            [
+                body.rest_position,
+                body.rest_quaternion_wxyz[[1, 2, 3, 0]],
+            ]
+        ).astype(np.float32)
+        body_robot = pose_mul(robot_from_table, body_table)
+        frame = server.scene.add_frame(
+            f"/scene/{body.name}",
+            position=tuple(body_robot[:3]),
+            wxyz=tuple(body_robot[[6, 3, 4, 5]]),
+            show_axes=False,
+        )
+        del frame
+        for index, geom in enumerate(body.geoms):
+            if geom.kind != "box":
+                continue
+            color = tuple(int(round(channel * 255)) for channel in geom.rgba[:3])
+            server.scene.add_box(
+                f"/scene/{body.name}/geom_{index}",
+                dimensions=tuple(2.0 * value for value in geom.size),
+                position=tuple(geom.local_position),
+                wxyz=tuple(geom.local_quaternion_wxyz),
+                color=color,
+            )
+
+
 def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> None:
     import viser
     import yourdfpy
@@ -417,6 +847,7 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
         load_meshes=True,
     )
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
+    _render_task_scene(server, args, rollout)
     server.scene.add_spline_catmull_rom(
         "/traj/target_left",
         positions=rollout["target_left_pose7_robot_world"][:, :3],
@@ -489,10 +920,18 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
 
 def main() -> None:
     args = build_parser().parse_args()
-    if args.controller_tcp_calibration is None:
-        args.controller_tcp_calibration = calibration_path_for_device(args.controller_device)
     if args.stride < 1:
         raise ValueError("--stride must be >= 1.")
+    if args.initial_solve_iterations < 1:
+        raise ValueError("--initial-solve-iterations must be >= 1.")
+    if args.initial_position_tolerance_m <= 0.0:
+        raise ValueError("--initial-position-tolerance-m must be > 0.")
+    if args.max_ik_position_error_m <= 0.0:
+        raise ValueError("--max-ik-position-error-m must be > 0.")
+    if args.max_ik_rotation_error_deg <= 0.0:
+        raise ValueError("--max-ik-rotation-error-deg must be > 0.")
+    if args.table_clearance_warning_m <= 0.0:
+        raise ValueError("--table-clearance-warning-m must be > 0.")
     rollout = solve_episode(args)
     save_rollout(args, rollout)
     if not args.headless:
