@@ -214,6 +214,8 @@ def calibrate_fisheye(
         cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
         | cv2.fisheye.CALIB_CHECK_COND
         | cv2.fisheye.CALIB_FIX_SKEW
+        | cv2.fisheye.CALIB_FIX_K3
+        | cv2.fisheye.CALIB_FIX_K4
     )
     rms, matrix, distortion, rvecs, tvecs = cv2.fisheye.calibrate(
         object_points,
@@ -244,40 +246,107 @@ def calibrate_fisheye(
     )
 
 
+def calibrate_pinhole(
+    camera: str,
+    detections: Sequence[CharucoDetection],
+    image_size: tuple[int, int],
+) -> CameraIntrinsics:
+    if len(detections) < 10:
+        raise ValueError("At least 10 accepted ChArUco views are required.")
+    object_points = [d.object_points.reshape(-1, 3).astype(np.float32) for d in detections]
+    image_points = [d.image_points.reshape(-1, 2).astype(np.float32) for d in detections]
+    rms, matrix, distortion, rvecs, tvecs = cv2.calibrateCamera(
+        object_points,
+        image_points,
+        image_size,
+        None,
+        None,
+    )
+    errors: list[float] = []
+    for detection, rvec, tvec in zip(detections, rvecs, tvecs, strict=True):
+        projected, _ = cv2.projectPoints(
+            detection.object_points, rvec, tvec, matrix, distortion
+        )
+        errors.extend(
+            np.linalg.norm(
+                projected.reshape(-1, 2) - detection.image_points.reshape(-1, 2),
+                axis=1,
+            )
+        )
+    return CameraIntrinsics(
+        camera=camera,
+        width=image_size[0],
+        height=image_size[1],
+        matrix=matrix,
+        distortion=distortion,
+        rms_px=float(rms),
+        mean_error_px=float(np.mean(errors)),
+        views=len(detections),
+        model="pinhole",
+    )
+
+
 def estimate_board_pose(
     detection: CharucoDetection,
     intrinsics: CameraIntrinsics,
 ) -> tuple[np.ndarray, float]:
     """Return ``T_camera_board`` and mean fisheye reprojection error."""
-    undistorted = cv2.fisheye.undistortPoints(
-        detection.image_points,
-        intrinsics.matrix,
-        intrinsics.distortion,
-    )
-    ok, rvec, tvec = cv2.solvePnP(
+    if intrinsics.model == "fisheye":
+        image_points = cv2.fisheye.undistortPoints(
+            detection.image_points,
+            intrinsics.matrix,
+            intrinsics.distortion,
+        )
+        solve_matrix = np.eye(3)
+        solve_distortion = np.zeros(4)
+    elif intrinsics.model == "pinhole":
+        image_points = detection.image_points
+        solve_matrix = intrinsics.matrix
+        solve_distortion = intrinsics.distortion
+    else:
+        raise ValueError(f"Unsupported camera model: {intrinsics.model}")
+    ok, rvecs, tvecs, _ = cv2.solvePnPGeneric(
         detection.object_points,
-        undistorted,
-        np.eye(3),
-        np.zeros(4),
-        flags=cv2.SOLVEPNP_ITERATIVE,
+        image_points,
+        solve_matrix,
+        solve_distortion,
+        flags=cv2.SOLVEPNP_IPPE,
     )
-    if not ok:
+    if not ok or not rvecs:
         raise ValueError("Could not estimate ChArUco board pose.")
-    rotation, _ = cv2.Rodrigues(rvec)
-    transform = np.eye(4, dtype=np.float64)
-    transform[:3, :3] = rotation
-    transform[:3, 3] = tvec.reshape(3)
-    projected, _ = cv2.fisheye.projectPoints(
-        detection.object_points,
-        rvec,
-        tvec,
-        intrinsics.matrix,
-        intrinsics.distortion,
-    )
-    error = np.linalg.norm(
-        projected.reshape(-1, 2) - detection.image_points.reshape(-1, 2), axis=1
-    )
-    return mat_to_pose7(transform), float(np.mean(error))
+    candidates: list[tuple[float, np.ndarray]] = []
+    for rvec, tvec in zip(rvecs, tvecs, strict=True):
+        if float(np.asarray(tvec).reshape(3)[2]) <= 0.0:
+            continue
+        if intrinsics.model == "fisheye":
+            projected, _ = cv2.fisheye.projectPoints(
+                detection.object_points,
+                rvec,
+                tvec,
+                intrinsics.matrix,
+                intrinsics.distortion,
+            )
+        else:
+            projected, _ = cv2.projectPoints(
+                detection.object_points,
+                rvec,
+                tvec,
+                intrinsics.matrix,
+                intrinsics.distortion,
+            )
+        error = np.linalg.norm(
+            projected.reshape(-1, 2) - detection.image_points.reshape(-1, 2),
+            axis=1,
+        )
+        rotation, _ = cv2.Rodrigues(rvec)
+        transform = np.eye(4, dtype=np.float64)
+        transform[:3, :3] = rotation
+        transform[:3, 3] = np.asarray(tvec).reshape(3)
+        candidates.append((float(np.mean(error)), transform))
+    if not candidates:
+        raise ValueError("ChArUco pose is behind the camera.")
+    error_px, transform = min(candidates, key=lambda candidate: candidate[0])
+    return mat_to_pose7(transform), error_px
 
 
 def _parameters_to_matrix(parameters: np.ndarray) -> np.ndarray:
@@ -336,17 +405,48 @@ def solve_controller_camera(
         raise ValueError("At least 8 paired controller/board views are required.")
     gripper = [pose7_to_mat(p).astype(np.float64) for p in quest_controller_poses]
     target = [pose7_to_mat(p).astype(np.float64) for p in camera_board_poses]
-    rotation, translation = cv2.calibrateHandEye(
-        [g[:3, :3] for g in gripper],
-        [g[:3, 3] for g in gripper],
-        [t[:3, :3] for t in target],
-        [t[:3, 3] for t in target],
-        method=cv2.CALIB_HAND_EYE_PARK,
+    candidates: list[tuple[float, np.ndarray, np.ndarray]] = []
+    methods = (
+        cv2.CALIB_HAND_EYE_TSAI,
+        cv2.CALIB_HAND_EYE_PARK,
+        cv2.CALIB_HAND_EYE_HORAUD,
+        cv2.CALIB_HAND_EYE_ANDREFF,
+        cv2.CALIB_HAND_EYE_DANIILIDIS,
     )
-    x0 = np.eye(4, dtype=np.float64)
-    x0[:3, :3] = rotation
-    x0[:3, 3] = np.asarray(translation).reshape(3)
-    y0 = mean_transform([g @ x0 @ c for g, c in zip(gripper, target, strict=True)])
+    for method in methods:
+        try:
+            rotation, translation = cv2.calibrateHandEye(
+                [g[:3, :3] for g in gripper],
+                [g[:3, 3] for g in gripper],
+                [t[:3, :3] for t in target],
+                [t[:3, 3] for t in target],
+                method=method,
+            )
+        except cv2.error:
+            continue
+        rotation = np.asarray(rotation, dtype=np.float64)
+        translation = np.asarray(translation, dtype=np.float64).reshape(3)
+        if (
+            not np.all(np.isfinite(rotation))
+            or not np.all(np.isfinite(translation))
+            or np.linalg.det(rotation) <= 0.0
+        ):
+            continue
+        x = np.eye(4, dtype=np.float64)
+        x[:3, :3] = Rotation.from_matrix(rotation).as_matrix()
+        x[:3, 3] = translation
+        fixed_board = [g @ x @ c for g, c in zip(gripper, target, strict=True)]
+        y = mean_transform(fixed_board)
+        residual = np.concatenate(
+            [_transform_residual(np.linalg.inv(y) @ value) for value in fixed_board]
+        )
+        candidates.append((float(np.mean(np.square(residual))), x, y))
+    if not candidates:
+        raise ValueError(
+            "Hand-eye calibration produced no valid right-handed solution; "
+            "capture more varied controller rotations."
+        )
+    _, x0, y0 = min(candidates, key=lambda candidate: candidate[0])
 
     initial = np.concatenate([_matrix_to_parameters(x0), _matrix_to_parameters(y0)])
 
@@ -495,6 +595,7 @@ __all__ = [
     "CharucoDetection",
     "board_from_table_pose",
     "calibrate_fisheye",
+    "calibrate_pinhole",
     "calibration_hash",
     "detect_charuco",
     "draw_detection",

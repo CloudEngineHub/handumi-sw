@@ -4,7 +4,7 @@
 Episode control: timed by default (--episode-time-s), PICO buttons with
 --manual-control, or hands-free with --clap-control (squeeze either the left
 or right gripper twice within 1.6s to start an episode; another double-clap
-during the episode discards it and restarts the attempt).
+during the episode stops and saves it).
 
 Spoken status announcements ("Recording episode 3", "Episode 3 saved, 812
 frames", ...) are on by default — pass --no-sounds to disable them. Without
@@ -232,8 +232,8 @@ def record_episode(
         else False
     )
 
-    # Clap starts episodes hands-free. Once recording, the timer still ends the
-    # episode; another clap is treated like the manual repeat button.
+    # Clap starts episodes hands-free. Once recording, another clap saves the
+    # episode; the timer remains a maximum-duration safety limit.
     timed = not manual_control
     tracking_loss_timeout_ns = int(tracking_loss_timeout_s * 1e9)
     tracking_lost_since_ns: int | None = None
@@ -351,8 +351,7 @@ def record_episode(
             break
 
         if clap_control and clap_detector.update(widths.left_mm, widths.right_mm, loop_start):
-            status = "repeat"
-            dataset.clear_episode_buffer()
+            status = "recorded"
             break
         dataset.add_frame(
             {
@@ -505,7 +504,7 @@ def parse_args() -> argparse.Namespace:
         "--clap-control",
         action="store_true",
         help="Hands-free: squeeze either gripper twice within 1.6s to start "
-        "an episode; squeeze again during the episode to discard/restart it. "
+        "an episode; squeeze again during the episode to stop and save it. "
         "Needs real Feetech widths.",
     )
     p.add_argument(

@@ -65,7 +65,7 @@ Before recording, configure and calibrate the hardware once:
 - [docs/README_quest.md](docs/README_quest.md) - Meta Quest setup.
 - [docs/README_pico.md](docs/README_pico.md) - PICO setup.
 - [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
-- [docs/calibration_plan.md](docs/calibration_plan.md) - camera and Quest-to-table calibration.
+- [docs/README_record.md](docs/README_record.md) - ChArUco calibration and episode recording.
 
 After spatial/session calibration, `handumi-calibrate-spatial visualize` opens
 the table-frame Rerun view with all three cameras and both controller trails.
@@ -87,7 +87,7 @@ the enabled, tracked arms from home. While teleop is active, another double
 clap clears the anchors, parks the enabled arms at home, and waits for a fresh
 start. Pass `--space-start` if you also want the keyboard Space key to start
 idle arms at once. Spoken feedback; `--no-sounds` to mute. In the recorder
-below, double clap starts episodes and requests a restart while recording.
+below, double clap starts episodes and stops/saves while recording.
 Without session calibration it recenters the HMD workspace; a calibrated table
 frame remains locked across episodes.
 
@@ -175,7 +175,7 @@ Useful options:
 - `--session-calibration` locks Meta Quest poses to the calibrated table frame
   and snapshots both spatial and session calibrations in dataset metadata.
 - `--clap-control` starts an episode by squeezing either gripper twice; another
-  double clap during the episode discards it and returns to the start gate.
+  double clap during the episode stops and saves it.
 - `--push-to-hub` pushes the dataset after recording.
 - `--skip-feetech` records with zero-filled gripper widths.
 - `--pico-wifi` uses PICO over Wi-Fi instead of ADB.
@@ -337,8 +337,7 @@ widths in meters. Camera, Feetech, and tracking diagnostics also include
   Piper real-hardware setup and teleop.
 - [docs/README_quality.md](docs/README_quality.md) - synchronization, sensor health,
   and offline episode filtering.
-- [docs/calibration_plan.md](docs/calibration_plan.md) - portable Quest/table
-  calibration plan and acceptance criteria.
+- [docs/README_record.md](docs/README_record.md) - ChArUco calibration and episode recording.
 
 ## References and Acknowledgments
 

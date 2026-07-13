@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation
 
 from handumi.calibration.spatial import (
+    CameraIntrinsics,
+    CharucoDetection,
     CharucoBoardSpec,
     board_from_table_pose,
     calibration_hash,
     detect_charuco,
+    estimate_board_pose,
     new_spatial_calibration,
     pose7_to_dict,
     session_calibration_metadata,
@@ -65,6 +69,39 @@ def test_canonical_board_detects_24_corners_and_ids_0_through_16():
     assert detection.count == 24
     assert detection.marker_ids is not None
     assert sorted(detection.marker_ids.reshape(-1).tolist()) == list(range(17))
+
+
+def test_pinhole_board_pose_uses_native_distortion_model():
+    matrix = np.array([[500.0, 0.0, 320.0], [0.0, 500.0, 240.0], [0.0, 0.0, 1.0]])
+    object_points = np.array(
+        [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.1, 0.1, 0.0], [0.0, 0.1, 0.0]],
+        dtype=np.float64,
+    ).reshape(-1, 1, 3)
+    rvec = np.array([0.1, -0.2, 0.05])
+    tvec = np.array([0.02, -0.01, 0.6])
+    image_points, _ = cv2.projectPoints(object_points, rvec, tvec, matrix, np.zeros(5))
+    detection = CharucoDetection(
+        object_points=object_points,
+        image_points=image_points,
+        ids=np.arange(4),
+        marker_corners=(),
+        marker_ids=None,
+    )
+    intrinsics = CameraIntrinsics(
+        camera="workspace",
+        width=640,
+        height=480,
+        matrix=matrix,
+        distortion=np.zeros((5, 1)),
+        rms_px=0.0,
+        mean_error_px=0.0,
+        views=15,
+        model="pinhole",
+    )
+
+    _, error_px = estimate_board_pose(detection, intrinsics)
+
+    assert error_px < 1e-4
 
 
 def test_controller_camera_solver_recovers_mount():

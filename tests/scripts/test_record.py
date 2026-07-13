@@ -213,7 +213,7 @@ class WaitForTrackingTest(unittest.TestCase):
 
 
 class RecordEpisodeClapControlTest(unittest.TestCase):
-    def test_double_clap_restarts_the_episode(self):
+    def test_double_clap_stops_and_keeps_the_episode(self):
         dataset = _FakeDataset()
         n_frames, status = record_episode(
             dataset=dataset,
@@ -234,9 +234,9 @@ class RecordEpisodeClapControlTest(unittest.TestCase):
             start_threshold=0.75,
             clap_detector=DoubleClapDetector(),
         )
-        self.assertEqual(status, "repeat")
-        self.assertGreaterEqual(n_frames, 0)
-        self.assertEqual(dataset.frames, [])
+        self.assertEqual(status, "recorded")
+        self.assertGreater(n_frames, 0)
+        self.assertEqual(len(dataset.frames), n_frames)
 
 
 class RecordEpisodeTrackingGateTest(unittest.TestCase):
