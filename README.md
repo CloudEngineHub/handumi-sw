@@ -80,7 +80,19 @@ replay — handy before a session to check tracking health and TCP calibration:
 
 ```bash
 handumi-teleop-sim --device meta            # or --device pico
+
+# Add the context camera configured in configs/rig.yaml to Rerun.
+handumi-teleop-sim --device meta --context-camera
 ```
+
+`--context-camera` (also `--workspace-camera`) loads the `workspace` camera
+ID from `--rig-config` and displays it between the left and right wrist views
+in Rerun. If overriding the IDs, pass all three in that order:
+`--cam-ids LEFT_ID WORKSPACE_ID RIGHT_ID`.
+
+Use `--no-viser` when you want no Viser server at all; the live cameras and
+tracking remain available in Rerun. `--no-browser` only suppresses opening the
+Viser URL automatically.
 
 Teleop controls: a **double clap on either gripper** (close/open twice) starts
 the enabled, tracked arms from home. While teleop is active, another double
@@ -137,6 +149,7 @@ handumi-record \
   --task "pick and place with HandUMI" \
   --robot piper \
   --wrist-cameras --workspace-camera \
+  --rerun \
   --num-episodes 10 \
   --episode-time-s 30 \
   --fps 30 \
@@ -149,15 +162,16 @@ For Meta Quest:
 ```bash
 handumi-record \
   --device meta \
-  --repo-id your-name/handumi-demo \
-  --output-dir outputs/datasets/handumi-demo \
-  --task "pick and place with HandUMI" \
   --robot piper \
+  --task "pick the screws and place them in the controller" \
+  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
   --wrist-cameras --workspace-camera \
   --session-calibration outputs/calibration/session.yaml \
+  --rerun \
   --clap-control \
-  --num-episodes 10 \
-  --fps 30
+  --num-episodes 20 \
+  --episode-time-s 60 \
+  --push-to-hub
 ```
 
 Useful options:
@@ -178,6 +192,11 @@ Useful options:
   and snapshots both spatial and session calibrations in dataset metadata.
 - `--clap-control` uses a right double clap to start or stop/save an episode;
   a left double clap while recording restarts the same episode.
+- `--rerun` opens a live Rerun view of the same cameras being recorded, the
+  controller/TCP trails, gripper widths, and a persistent status panel
+  (`WAITING`, `RECORDING`, `RESTARTED`, `SAVED`, `DISCARDED`, or `STOPPED`).
+  It uses the recorder's existing camera, tracker, and Feetech connections—do
+  not start `handumi-teleop-sim` alongside it.
 - `Esc` (with `--clap-control`) or `Ctrl+C` discards an active partial episode
   and keeps completed episodes.
 - `--push-to-hub` pushes the dataset after recording.
@@ -206,8 +225,8 @@ Run offline validation before training or conversion:
 
 ```bash
 handumi-validate \
-  --repo-id your-name/handumi-demo \
-  --root outputs/datasets/handumi-demo
+  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
+  --root <local-output-dir>
 ```
 
 This writes `meta/handumi_quality.json` without deleting raw data. It rejects
@@ -222,8 +241,8 @@ If the dataset was not recorded with `--push-to-hub`, upload the local folder:
 
 ```bash
 huggingface-cli login
-huggingface-cli upload your-name/handumi-demo \
-  outputs/datasets/handumi-demo --repo-type dataset
+huggingface-cli upload NONHUMAN-RESEARCH/pick_screws_handumi \
+  <local-output-dir> --repo-type dataset
 ```
 
 ## Convert to Robot Joints
@@ -240,14 +259,14 @@ episodes, and writes `meta/source_quality.json` in the converted dataset.
 Minimal conversion:
 
 ```bash
-handumi-convert --repo-id your-name/handumi-demo
+handumi-convert --repo-id NONHUMAN-RESEARCH/pick_screws_handumi
 ```
 
 The default embodiment is `axol`. To convert for Piper, use:
 
 ```bash
 handumi-convert \
-  --repo-id your-name/handumi-demo \
+  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
   --embodiment piper
 ```
 
@@ -264,7 +283,7 @@ To inspect how a recorded dataset moves the robot in simulation with
 ([src/handumi/scripts/replay/replay_in_sim.py](src/handumi/scripts/replay/replay_in_sim.py)):
 
 ```bash
-handumi-replay-in-sim --repo-id your-name/handumi-demo
+handumi-replay-in-sim --repo-id NONHUMAN-RESEARCH/pick_screws_handumi
 ```
 
 This opens a local Viser viewer and saves a rollout under `outputs/replay_in_sim/`.
@@ -278,7 +297,7 @@ Headless example:
 
 ```bash
 handumi-replay-in-sim \
-  --repo-id your-name/handumi-demo \
+  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
   --headless
 ```
 
@@ -287,7 +306,7 @@ automatically. The equivalent explicit command is:
 
 ```bash
 handumi-replay-in-sim \
-  --repo-id your-name/handumi-demo \
+  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
   --retarget-mode absolute-table \
   --deployment-calibration configs/calibration/<robot>_table.yaml
 ```

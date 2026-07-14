@@ -1,6 +1,7 @@
 import argparse
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -12,7 +13,9 @@ from handumi.scripts.teleop_sim import (
     _clear_enabled_anchors,
     _has_enabled_anchors,
     _load_calibration,
+    parse_args,
     _sample_state,
+    _selected_camera_names,
     _start_sides,
     _tracking_world_map,
 )
@@ -40,6 +43,24 @@ class SampleStateTest(unittest.TestCase):
         self.assertTrue(np.allclose(state[7:10], [0.4, 0.5, 0.6]))
         self.assertEqual(state[14], 0.0)
         self.assertEqual(state[15], 0.0)
+
+
+class TeleopSimCameraSelectionTest(unittest.TestCase):
+    def test_no_viser_flag_is_parsed(self):
+        with mock.patch("sys.argv", ["handumi-teleop-sim", "--device", "meta", "--no-viser"]):
+            self.assertTrue(parse_args().no_viser)
+
+    def test_context_camera_is_between_wrist_views(self):
+        self.assertEqual(
+            _selected_camera_names(context_camera=True),
+            ["left_wrist", "workspace", "right_wrist"],
+        )
+
+    def test_default_uses_both_wrist_cameras(self):
+        self.assertEqual(
+            _selected_camera_names(context_camera=False),
+            ["left_wrist", "right_wrist"],
+        )
 
 
 class LoadCalibrationTest(unittest.TestCase):

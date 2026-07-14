@@ -66,10 +66,11 @@ hf auth whoami
 handumi-record \
   --device meta \
   --robot piper \
-  --task "pick and place the blue cube in the white box" \
-  --repo-id NONHUMAN-RESEARCH/test_handumi_pickandplace \
+  --task "pick the screws and place them in the controller" \
+  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
   --session-calibration outputs/calibration/session.yaml \
   --wrist-cameras --workspace-camera \
+  --rerun \
   --clap-control \
   --num-episodes 20 \
   --episode-time-s 60 \

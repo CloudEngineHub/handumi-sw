@@ -115,6 +115,11 @@ def parse_args() -> argparse.Namespace:
         help="Scale HandUMI translation deltas before applying them to the robot TCP.",
     )
     p.add_argument("--no-browser", action="store_true", help="Don't auto-open Viser.")
+    p.add_argument(
+        "--no-viser",
+        action="store_true",
+        help="Disable the Viser server and 3D robot view entirely (Rerun remains enabled).",
+    )
     p.add_argument("--no-rerun", action="store_true", help="Disable the Rerun view.")
     p.add_argument("--no-sounds", action="store_true", help="Disable spoken anchor/home feedback.")
     p.add_argument(
@@ -156,6 +161,16 @@ def parse_args() -> argparse.Namespace:
 
     # Camera + Feetech flags, same names as handumi-record.
     p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
+    p.add_argument(
+        "--context-camera",
+        "--workspace-camera",
+        dest="context_camera",
+        action="store_true",
+        help=(
+            "Add the workspace/context camera from --rig-config to Rerun, "
+            "between the left and right wrist views."
+        ),
+    )
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
@@ -308,9 +323,18 @@ def _tracking_world_map(device: str) -> np.ndarray:
     return VR_TO_ROBOT if device == "pico" else np.eye(3, dtype=np.float32)
 
 
+def _selected_camera_names(context_camera: bool) -> list[str]:
+    """Return live-camera names in their intended Rerun grid order."""
+    names = ["left_wrist", "right_wrist"]
+    if context_camera:
+        # The order is also the visual order of the Rerun camera row.
+        names.insert(1, "workspace")
+    return names
+
+
 def _init_rerun(enabled: bool, cam_names: list[str]):
     """Start Rerun with the classic live layout: 3D tracking on the left,
-    wrist cameras top-right, gripper-width chart bottom-right."""
+    cameras top-right, gripper-width chart bottom-right."""
     if not enabled:
         return None
     import rerun as rr
@@ -427,9 +451,16 @@ def main() -> None:
     cameras: list = []
     cam_names: list[str] = []
     if not args.skip_cameras:
-        cam_ids = resolve_camera_ids(args.cam_ids, args.rig_config)
+        camera_names = _selected_camera_names(args.context_camera)
+        cam_ids = resolve_camera_ids(
+            args.cam_ids, args.rig_config, camera_names=camera_names
+        )
         camera_specs, _ = build_camera_specs(
-            cam_ids, laptop_camera=False, laptop_cam_id=0, laptop_cam_name="laptop"
+            cam_ids,
+            camera_names=camera_names,
+            laptop_camera=False,
+            laptop_cam_id=0,
+            laptop_cam_name="laptop",
         )
         cam_names = [spec["name"] for spec in camera_specs]
         cameras = connect_cameras(
@@ -449,17 +480,20 @@ def main() -> None:
     home_left_pose7, home_right_pose7 = solver.fk_pose7(q)
     max_reach = runtime.config.ik_weights.max_reach
 
-    import viser
-    import yourdfpy
-    from viser.extras import ViserUrdf
+    server = None
+    robot_view = None
+    if not args.no_viser:
+        import viser
+        import yourdfpy
+        from viser.extras import ViserUrdf
 
-    server = viser.ViserServer(port=args.port)
-    server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
-    urdf = yourdfpy.URDF.load(
-        str(runtime.urdf_path), mesh_dir=str(runtime.urdf_path.parent), load_meshes=True
-    )
-    robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
-    robot_view.update_cfg(q)
+        server = viser.ViserServer(port=args.port)
+        server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
+        urdf = yourdfpy.URDF.load(
+            str(runtime.urdf_path), mesh_dir=str(runtime.urdf_path.parent), load_meshes=True
+        )
+        robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
+        robot_view.update_cfg(q)
 
     physics = None
     scene_frames: dict[str, object] = {}
@@ -474,20 +508,21 @@ def main() -> None:
             data = yaml.safe_load(scene_config.read_text()) or {}
             scene_position = tuple((data.get("scene") or {}).get("position", scene_position))
         # Props render under per-body frames so physics can move them.
-        for body in load_scene(args.scene, position=scene_position):
-            frame = server.scene.add_frame(
-                f"/scene/{body.name}", position=tuple(body.rest_position), show_axes=False
-            )
-            scene_frames[body.name] = frame
-            for i, geom in enumerate(body.geoms):
-                sx, sy, sz = (2.0 * s for s in geom.size)
-                cr, cg, cb = (int(round(c * 255)) for c in geom.rgba[:3])
-                server.scene.add_box(
-                    f"/scene/{body.name}/g{i}",
-                    dimensions=(sx, sy, sz),
-                    color=(cr, cg, cb),
-                    position=tuple(geom.local_position),
+        if server is not None:
+            for body in load_scene(args.scene, position=scene_position):
+                frame = server.scene.add_frame(
+                    f"/scene/{body.name}", position=tuple(body.rest_position), show_axes=False
                 )
+                scene_frames[body.name] = frame
+                for i, geom in enumerate(body.geoms):
+                    sx, sy, sz = (2.0 * s for s in geom.size)
+                    cr, cg, cb = (int(round(c * 255)) for c in geom.rgba[:3])
+                    server.scene.add_box(
+                        f"/scene/{body.name}/g{i}",
+                        dimensions=(sx, sy, sz),
+                        color=(cr, cg, cb),
+                        position=tuple(geom.local_position),
+                    )
         if runtime.config.mjcf is not None:
             from handumi.sim.mujoco_sim import MujocoPhysics
 
@@ -501,21 +536,26 @@ def main() -> None:
             log.info("Scene %r with MuJoCo contact physics at %s.", args.scene, scene_position)
         else:
             log.info("Scene %r rendered statically (no MJCF for %s).", args.scene, args.robot)
-    target_markers = {
-        "left": server.scene.add_icosphere("/target/left", radius=0.018, color=LEFT_COLOR),
-        "right": server.scene.add_icosphere("/target/right", radius=0.018, color=RIGHT_COLOR),
-    }
-    @server.on_client_connect
-    def _set_initial_camera(client: viser.ClientHandle) -> None:
-        # Behind the arms (operator's point of view — you see their backs),
-        # slightly elevated, framed so no manual zoom/orbit is needed.
-        client.camera.position = (-1.4, 0.0, 0.9)
-        client.camera.look_at = (0.2, 0.0, 0.35)
+    target_markers = {}
+    if server is not None:
+        target_markers = {
+            "left": server.scene.add_icosphere("/target/left", radius=0.018, color=LEFT_COLOR),
+            "right": server.scene.add_icosphere("/target/right", radius=0.018, color=RIGHT_COLOR),
+        }
 
-    url = f"http://localhost:{server.get_port()}"
-    log.info("Live view ready: %s (Ctrl+C to stop)", url)
-    if not args.no_browser:
-        webbrowser.open(url)
+        @server.on_client_connect
+        def _set_initial_camera(client: viser.ClientHandle) -> None:
+            # Behind the arms (operator's point of view — you see their backs),
+            # slightly elevated, framed so no manual zoom/orbit is needed.
+            client.camera.position = (-1.4, 0.0, 0.9)
+            client.camera.look_at = (0.2, 0.0, 0.35)
+
+        url = f"http://localhost:{server.get_port()}"
+        log.info("Live view ready: %s (Ctrl+C to stop)", url)
+        if not args.no_browser:
+            webbrowser.open(url)
+    else:
+        log.info("Viser disabled; streaming live cameras and tracking only to Rerun.")
 
     rr = _init_rerun(not args.no_rerun, cam_names)
     max_points = max(2, int(_TRAIL_SECONDS * args.fps))
@@ -650,7 +690,8 @@ def main() -> None:
                     max_reach=max_reach,
                 )
                 ik_targets[side] = (pose7[:3], pose7[3:7])
-                target_markers[side].position = tuple(pose7[:3])
+                if target_markers:
+                    target_markers[side].position = tuple(pose7[:3])
             q = solver.ik(q, left_pose=ik_targets["left"], right_pose=ik_targets["right"])
             for side in ("left", "right"):
                 if anchors[side] is None:
@@ -674,7 +715,8 @@ def main() -> None:
                 q_render = q.copy()
                 for i, name in enumerate(joint_names):
                     q_render[i] = settled.get(_mjcf_name(name), q[i])
-                robot_view.update_cfg(q_render)
+                if robot_view is not None:
+                    robot_view.update_cfg(q_render)
                 for body_name, frame in scene_frames.items():
                     pose = physics.body_pose(body_name)
                     if pose is not None:
@@ -682,7 +724,8 @@ def main() -> None:
                         frame.position = tuple(position.tolist())
                         frame.wxyz = tuple(quat_wxyz.tolist())
             else:
-                robot_view.update_cfg(q)
+                if robot_view is not None:
+                    robot_view.update_cfg(q)
 
             if rr is not None:
                 for side, tcp, raw, color in (

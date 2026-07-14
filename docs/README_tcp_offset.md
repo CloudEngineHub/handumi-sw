@@ -114,8 +114,8 @@ Replay de comprobación:
 
 ```bash
 JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --repo-id your-name/handumi-demo \
-  --dataset-root outputs/handumi-demo \
+  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
+  --dataset-root <local-output-dir> \
   --episode 0 \
   --robot piper \
   --controller-tcp-calibration outputs/calibration/meta_controller_tcp_candidate.yaml

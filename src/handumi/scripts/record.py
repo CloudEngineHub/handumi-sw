@@ -88,6 +88,8 @@ from handumi.tracking.pico import (
 )
 from handumi.tracking.transforms import Pose
 from handumi.utils.speech import log_say
+from handumi.utils.trajectory import TrajectoryTrail
+from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,6 +99,8 @@ logging.basicConfig(
 log = logging.getLogger("handumi.record")
 
 ROBOT_CONFIG_DIR = Path("configs/robots")
+_RERUN_TRAIL_SECONDS = 10.0
+_RERUN_CHART_WINDOW_S = 20.0
 
 
 class _EscapeStopListener:
@@ -234,6 +238,125 @@ def _wait_for_tracking(
     return False
 
 
+class _RecordingRerun:
+    """Live Rerun stream owned by the recorder (never opens another device)."""
+
+    def __init__(self, cam_names: list[str], fps: int) -> None:
+        import rerun as rr
+        import rerun.blueprint as rrb
+        import rerun.datatypes as rdt
+
+        self.rr = rr
+        self.trails = {
+            "left": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
+            "right": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
+        }
+        self.raw_trails = {
+            "left": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
+            "right": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
+        }
+        self._healthy = True
+        rr.init("handumi_record", spawn=True)
+        rr.log("tracking", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+        for path, name, color in (
+            ("observation.feetech.left_width_mm", "left_width_mm", LEFT_COLOR),
+            ("observation.feetech.right_width_mm", "right_width_mm", RIGHT_COLOR),
+        ):
+            rr.log(path, rr.SeriesLines(colors=[[*color, 255]], widths=[2.5], names=[name]), static=True)
+
+        corners = [[sx * 0.75, sy * 0.75, sz * 0.4]
+                   for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
+        rr.log("tracking/bounds", rr.Points3D(corners, colors=[[128, 100, 100, 90]] * 8, radii=0.004), static=True)
+        recent = rrb.VisibleTimeRanges(rrb.VisibleTimeRange(
+            timeline="log_time",
+            range=rdt.TimeRange(
+                start=rdt.TimeRangeBoundary.cursor_relative(seconds=-_RERUN_CHART_WINDOW_S),
+                end=rdt.TimeRangeBoundary.cursor_relative(seconds=0.0),
+            ),
+        ))
+        chart = rrb.TimeSeriesView(
+            origin="/",
+            contents=["/observation.feetech.left_width_mm", "/observation.feetech.right_width_mm"],
+            name="gripper_width_mm",
+            axis_y=rrb.ScalarAxis(range=(0.0, 90.0)),
+            time_ranges=recent,
+            plot_legend=rrb.Corner2D.LeftTop,
+        )
+        right = chart if not cam_names else rrb.Vertical(
+            rrb.Horizontal(*[
+                rrb.Spatial2DView(origin=f"/observation.images.{name}", name=name)
+                for name in cam_names
+            ]),
+            chart,
+            row_shares=[3, 2],
+        )
+        status = rrb.TextDocumentView(
+            origin="/recording",
+            contents=["/recording/status"],
+            name="recording_status",
+        )
+        rr.send_blueprint(rrb.Blueprint(
+            rrb.Vertical(
+                rrb.Horizontal(
+                    rrb.Spatial3DView(origin="/tracking", name="controller_trajectory",
+                                       background=rrb.Background(color=[*BACKGROUND_COLOR, 255])),
+                    right,
+                    column_shares=[2, 3],
+                ),
+                status,
+                row_shares=[10, 1],
+            ),
+            rrb.BlueprintPanel(state="collapsed"),
+            rrb.SelectionPanel(state="collapsed"),
+            rrb.TimePanel(state="collapsed"),
+        ), make_active=True, make_default=True)
+        self.set_status("READY", "Waiting to start the first episode")
+
+    def set_status(self, state: str, detail: str) -> None:
+        """Show the current recorder state as a persistent operator flag."""
+        self.rr.log(
+            "recording/status",
+            self.rr.TextDocument(
+                f"# {state}\n\n{detail}", media_type="text/markdown"
+            ),
+        )
+
+    def log(self, cam_frames: dict, sample: ControllerPairSample, widths: GripperWidths) -> None:
+        """Log a frame without allowing a viewer problem to stop recording."""
+        if not self._healthy:
+            return
+        rr = self.rr
+        try:
+            # ``cam_frames`` also contains camera-health scalar fields. Only
+            # image entries belong in Rerun's image archetype.
+            for key, frame in cam_frames.items():
+                if key.startswith("observation.images."):
+                    rr.log(key, rr.Image(frame).compress(jpeg_quality=75))
+            rr.log("observation.feetech.left_width_mm", rr.Scalars(float(widths.left_mm)))
+            rr.log("observation.feetech.right_width_mm", rr.Scalars(float(widths.right_mm)))
+            for side, tcp, raw, color, tracked in (
+                ("left", sample.left_tcp_pose, sample.left_controller_pose, LEFT_COLOR, sample.left_tracked),
+                ("right", sample.right_tcp_pose, sample.right_controller_pose, RIGHT_COLOR, sample.right_tracked),
+            ):
+                if not tracked:
+                    continue
+                trail = self.trails[side]
+                trail.append(tcp[:3])
+                rr.log(f"tracking/{side}/tcp", rr.Points3D([tcp[:3]], colors=[color], radii=0.012))
+                if len(points := trail.points()) >= 2:
+                    rr.log(f"tracking/{side}/trail", rr.LineStrips3D([points], colors=[color], radii=0.003))
+                raw_trail = self.raw_trails[side]
+                raw_trail.append(raw[:3])
+                rr.log(f"tracking/{side}/raw", rr.Points3D([raw[:3]], colors=[[*color, 90]], radii=0.007))
+                if len(raw_points := raw_trail.points()) >= 2:
+                    rr.log(f"tracking/{side}/raw_trail", rr.LineStrips3D(
+                        [raw_points], colors=[[*color, 90]], radii=0.0015
+                    ))
+        except Exception:
+            self._healthy = False
+            log.exception("Rerun failed; disabling live view while recording continues.")
+
+
 def record_episode(
     *,
     dataset,
@@ -259,6 +382,7 @@ def record_episode(
     camera_stale_timeout_s: float = 0.25,
     gripper_stale_timeout_s: float = 0.10,
     sensor_loss_timeout_s: float = 1.0,
+    rerun: _RecordingRerun | None = None,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
     n_frames = 0
@@ -415,6 +539,8 @@ def record_episode(
                 status = "repeat"
                 dataset.clear_episode_buffer()
                 break
+        if rerun is not None:
+            rerun.log(cam_frames, sample, widths)
         dataset.add_frame(
             {
                 **cam_frames,
@@ -514,6 +640,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--feetech-sample-hz", type=float, default=100.0)
     p.add_argument("--no-video", action="store_true")
+    p.add_argument(
+        "--rerun",
+        action="store_true",
+        help="Open a live Rerun view with recorded cameras, controller/TCP trails, and gripper widths.",
+    )
     p.add_argument("--vcodec", type=str, default="h264")
     p.add_argument("--push-to-hub", action="store_true")
     p.add_argument(
@@ -655,6 +786,7 @@ def main() -> None:
         height=args.cam_height,
         zero_non_laptop=False,
     )
+    rerun = _RecordingRerun(cam_names, args.fps) if args.rerun else None
 
     log.info("--- Feetech setup ---")
     gripper_pair = connect_feetech(args)
@@ -704,11 +836,15 @@ def main() -> None:
             ep_num = dataset.num_episodes + 1
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
             log.info("--- Episode %d/%s ---", ep_num, ep_total)
+            if rerun is not None:
+                rerun.set_status("WAITING", f"Episode {ep_num}/{ep_total}: waiting to start")
             if args.clap_control:
                 assert clap_detector is not None
                 if restart_active:
                     restart_active = False
                     log.info("  Restarting episode %d immediately ...", ep_num)
+                    if rerun is not None:
+                        rerun.set_status("RESTARTED", f"Episode {ep_num}/{ep_total}: restarting now")
                 else:
                     log.info("  Double-squeeze right gripper to start episode %d ...", ep_num)
                     if not _wait_for_clap(
@@ -746,6 +882,8 @@ def main() -> None:
             if not _wait_for_tracking(tracker, stop_event):
                 break
             log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
+            if rerun is not None:
+                rerun.set_status("RECORDING", f"Episode {ep_num}/{ep_total} is being recorded")
             n_frames, status = record_episode(
                 dataset=dataset,
                 cameras=cameras,
@@ -770,10 +908,16 @@ def main() -> None:
                 camera_stale_timeout_s=args.camera_stale_timeout_s,
                 gripper_stale_timeout_s=args.gripper_stale_timeout_s,
                 sensor_loss_timeout_s=args.sensor_loss_timeout_s,
+                rerun=rerun,
             )
             if status == "repeat":
                 log.warning("Episode restart requested (%d frames discarded).", n_frames)
                 log_say("Restart recording", play_sounds=play_sounds)
+                if rerun is not None:
+                    rerun.set_status(
+                        "RESTARTED",
+                        f"Episode {ep_num}/{ep_total}: {n_frames} frames discarded; restarting",
+                    )
                 dataset.clear_episode_buffer()
                 restart_active = True
                 continue
@@ -784,6 +928,11 @@ def main() -> None:
             }:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
+                if rerun is not None:
+                    rerun.set_status(
+                        "DISCARDED",
+                        f"Episode {ep_num}/{ep_total}: {status} after {n_frames} frames",
+                    )
                 dataset.clear_episode_buffer()
                 if status in {"finish", "interrupted"}:
                     break
@@ -792,10 +941,16 @@ def main() -> None:
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
             log_say(f"Episode {ep_num} saved, {n_frames} frames", play_sounds=play_sounds)
+            if rerun is not None:
+                rerun.set_status(
+                    "SAVED", f"Episode {ep_num}/{ep_total}: {n_frames} frames saved"
+                )
             if status == "finish":
                 break
     finally:
         escape_listener.stop()
+        if rerun is not None:
+            rerun.set_status("STOPPED", f"Recording stopped: {recorded} episode(s) saved")
         log_say("Stop recording", play_sounds=play_sounds, blocking=True)
         log.info("--- Finalising ---")
         finalization_error: BaseException | None = None
