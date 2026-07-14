@@ -35,7 +35,6 @@ from handumi.dataset.raw import (
     RIGHT_POSE_SLICE,
 )
 from handumi.retargeting.handumi_to_robot import (
-    HANDUMI_POSE_ONLY_STATE_SIZE,
     VR_TO_ROBOT,
     absolute_table_robot_target_pose7,
     local_frame_adapter,
@@ -237,7 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
 def load_episode_states(
     args: argparse.Namespace,
 ) -> tuple[np.ndarray, float, dict[str, object], np.ndarray | None]:
-    """Load replay states, accepting current 16D raw and legacy 14D pose-only data."""
+    """Load one episode from the current 16D HandUMI raw layout."""
     ref = DatasetRef.from_repo_id(
         args.repo_id,
         root=args.dataset_root,
@@ -250,18 +249,15 @@ def load_episode_states(
     states: list[np.ndarray] = []
     normalized_grippers: list[np.ndarray] = []
     has_normalized_grippers = True
-    observed_sizes: set[int] = set()
 
     for item in dataset:
         if args.source not in item:
             raise ValueError(f"Dataset item has no {args.source!r} feature.")
         state = np.asarray(item[args.source], dtype=np.float32).reshape(-1)
-        observed_sizes.add(len(state))
-        if len(state) not in (HANDUMI_RAW_STATE_SIZE, HANDUMI_POSE_ONLY_STATE_SIZE):
+        if len(state) != HANDUMI_RAW_STATE_SIZE:
             raise ValueError(
                 f"Expected HandUMI state length {HANDUMI_RAW_STATE_SIZE} "
-                f"(poses + grippers) or {HANDUMI_POSE_ONLY_STATE_SIZE} "
-                f"(legacy poses only) in {args.source!r}, got {len(state)}."
+                f"(poses + grippers) in {args.source!r}, got {len(state)}."
             )
         states.append(state)
         if all(key in item for key in GRIPPER_NORMALIZED_KEYS):
@@ -279,16 +275,6 @@ def load_episode_states(
 
     if not states:
         raise ValueError(f"Episode {args.episode} is empty.")
-    if len(observed_sizes) > 1:
-        raise ValueError(
-            f"Episode {args.episode} mixes incompatible state sizes: "
-            f"{sorted(observed_sizes)}."
-        )
-    if HANDUMI_POSE_ONLY_STATE_SIZE in observed_sizes:
-        print(
-            "[replay] input state: legacy 14D pose-only format "
-            "(left pose7 + right pose7; no gripper widths)"
-        )
     normalized = (
         np.clip(np.stack(normalized_grippers, axis=0), 0.0, 1.0)
         if has_normalized_grippers and len(normalized_grippers) == len(states)
@@ -306,8 +292,11 @@ def _resolve_gripper_openings(
     """Return per-frame 0-1 gripper openings and their source description."""
     if recorded_normalized is not None:
         return np.clip(recorded_normalized, 0.0, 1.0), "recorded Feetech normalized"
-    if states.shape[1] != HANDUMI_RAW_STATE_SIZE:
-        return None, "unavailable (legacy pose-only state)"
+    if states.ndim != 2 or states.shape[1] != HANDUMI_RAW_STATE_SIZE:
+        raise ValueError(
+            f"Expected HandUMI states shape (T, {HANDUMI_RAW_STATE_SIZE}), "
+            f"got {states.shape}."
+        )
     if max_width_m <= 0:
         raise SystemExit("--gripper-max-width-m must be greater than zero.")
     widths_m = states[:, [LEFT_GRIPPER_INDEX, RIGHT_GRIPPER_INDEX]]

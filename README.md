@@ -365,8 +365,9 @@ observation.camera.<name>.healthy
 widths in meters. `observation.state[0:14]` already contains the workspace
 controller poses, so they are not duplicated as tracking columns. Sensor
 enablement is dataset metadata. The normalized reader derives `enabled`,
-`age_ms`, `sync_error_ms`, workspace HMD pose, and legacy tracking aliases for
-both `controller_raw_and_workspace_v3` and `controller_raw_compact_v4` datasets.
+`age_ms`, `sync_error_ms`, and workspace HMD pose. HandUMI writes one
+`controller_raw_compact` layout inside the LeRobot v3 dataset format; older
+HandUMI layouts must be re-recorded.
 
 ## More Docs
 

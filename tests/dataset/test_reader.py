@@ -1,7 +1,17 @@
 import numpy as np
+import pytest
 
-from handumi.dataset.raw import TRACKING_VALIDITY_NAMES
-from handumi.dataset.reader import _compose_pose7, normalize_raw_signals
+from handumi.dataset.raw import (
+    HANDUMI_CAPTURE_SCHEMA,
+    HANDUMI_STATE_SEMANTICS,
+    HANDUMI_TRACKING_SCHEMA,
+    TRACKING_VALIDITY_NAMES,
+)
+from handumi.dataset.reader import (
+    _compose_pose7,
+    normalize_raw_signals,
+    validate_raw_state_metadata,
+)
 
 
 def _states(frame_count: int = 2) -> np.ndarray:
@@ -28,7 +38,7 @@ def test_pose7_composition_rotates_local_translation():
     )
 
 
-def test_compact_v4_signals_restore_legacy_aliases_and_derived_timing():
+def test_compact_signals_restore_metadata_and_derived_timing():
     identity = np.tile(
         np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32),
         (2, 1),
@@ -64,7 +74,9 @@ def test_compact_v4_signals_restore_legacy_aliases_and_derived_timing():
         "observation.sync.record_time_ns": record,
     }
     metadata = {
-        "tracking_schema": "controller_raw_compact_v4",
+        "tracking_schema": HANDUMI_TRACKING_SCHEMA,
+        "capture_schema": HANDUMI_CAPTURE_SCHEMA,
+        "state_semantics": HANDUMI_STATE_SEMANTICS,
         "sources": {
             "tracking": {"enabled": True},
             "feetech": {"enabled": False},
@@ -72,18 +84,15 @@ def test_compact_v4_signals_restore_legacy_aliases_and_derived_timing():
         },
     }
 
+    validate_raw_state_metadata({"handumi": metadata})
     normalized = normalize_raw_signals(_states(), signals, metadata=metadata)
 
-    np.testing.assert_allclose(
-        normalized["observation.tracking.left_controller_pose"],
-        _states()[:, :7],
-    )
+    np.testing.assert_array_equal(normalized["observation.valid"], validity)
     np.testing.assert_allclose(
         normalized["observation.tracking.hmd_pose"], identity
     )
-    np.testing.assert_array_equal(
-        normalized["observation.tracking.streaming"], [1, 0]
-    )
+    assert "observation.tracking.streaming" not in normalized
+    assert "observation.tracking.left_controller_pose" not in normalized
     np.testing.assert_array_equal(normalized["observation.feetech.enabled"], [0, 0])
     np.testing.assert_array_equal(
         normalized["observation.camera.left_wrist.enabled"], [1, 1]
@@ -100,28 +109,14 @@ def test_compact_v4_signals_restore_legacy_aliases_and_derived_timing():
     )
 
 
-def test_legacy_v3_signals_are_compacted_without_overwriting_recorded_values():
-    recorded_sync_error = np.array([12.0, 13.0], dtype=np.float32)
-    signals = {
-        **{
-            f"observation.tracking.{name}": np.ones(2, dtype=np.int64)
-            for name in TRACKING_VALIDITY_NAMES
-        },
-        "observation.feetech.enabled": np.ones(2, dtype=np.int64),
-        "observation.feetech.sync_error_ms": recorded_sync_error,
-        "observation.sync.target_time_ns": np.array([10, 20], dtype=np.int64),
-        "observation.sync.record_time_ns": np.array([11, 21], dtype=np.int64),
-        "observation.feetech.sample_time_ns": np.array([9, 19], dtype=np.int64),
+def test_rejects_previous_handumi_tracking_layout():
+    info = {
+        "handumi": {
+            "tracking_schema": "controller_raw_and_workspace_v3",
+            "capture_schema": "synchronized_sources_v1",
+            "state_semantics": HANDUMI_STATE_SEMANTICS,
+        }
     }
 
-    normalized = normalize_raw_signals(_states(), signals, metadata={})
-
-    np.testing.assert_array_equal(
-        normalized["observation.valid"],
-        np.ones((2, len(TRACKING_VALIDITY_NAMES)), dtype=np.int64),
-    )
-    assert normalized["observation.feetech.sync_error_ms"] is recorded_sync_error
-    np.testing.assert_allclose(
-        normalized["observation.tracking.right_controller_pose"],
-        _states()[:, 7:14],
-    )
+    with pytest.raises(ValueError, match="Re-record"):
+        validate_raw_state_metadata(info)

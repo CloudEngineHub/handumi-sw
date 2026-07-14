@@ -36,9 +36,9 @@ timeout:
   more than `--sensor-loss-timeout-s`.
 
 Disabled Feetech sensing is marked once in dataset `sources` metadata and does
-not block the gate. The v3/v4 reader exposes that setting as `enabled` for
-quality checks. Short failures remain in the raw dataset with `healthy=0`; they
-are not silently replaced with apparently healthy measurements.
+not block the gate. The reader exposes that setting as `enabled` for quality
+checks. Short failures remain in the raw dataset with `healthy=0`; they are not
+silently replaced with apparently healthy measurements.
 
 ## Offline Validation
 

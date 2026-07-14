@@ -20,20 +20,16 @@ def _write_pose_dataset(path: Path, column: str) -> None:
     ).to_parquet(path)
 
 
-def test_load_episode_poses_uses_current_tracking_schema(tmp_path: Path):
-    path = tmp_path / "current.parquet"
+def test_load_episode_poses_accepts_explicit_pose_column(tmp_path: Path):
+    path = tmp_path / "explicit.parquet"
     _write_pose_dataset(path, "observation.tracking.left_controller_pose")
 
-    poses = load_episode_poses(path, 0, "left")
-
-    np.testing.assert_allclose(poses[:, 0], [0.0, 1.0])
-
-
-def test_load_episode_poses_falls_back_to_legacy_pico_schema(tmp_path: Path):
-    path = tmp_path / "legacy.parquet"
-    _write_pose_dataset(path, "observation.pico.right_controller_pose")
-
-    poses = load_episode_poses(path, 0, "right")
+    poses = load_episode_poses(
+        path,
+        0,
+        "left",
+        column="observation.tracking.left_controller_pose",
+    )
 
     np.testing.assert_allclose(poses[:, 0], [0.0, 1.0])
 

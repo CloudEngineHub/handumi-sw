@@ -41,17 +41,6 @@ def test_grippers_fall_back_to_widths_in_meters():
     assert source == "state widths in meters"
 
 
-def test_pose_only_state_has_no_gripper_opening():
-    states = np.zeros((2, 14), dtype=np.float32)
-
-    openings, source = _resolve_gripper_openings(
-        states, None, max_width_m=0.08
-    )
-
-    assert openings is None
-    assert source == "unavailable (legacy pose-only state)"
-
-
 def test_controller_device_is_read_from_dataset_metadata():
     args = Namespace(controller_device=None)
     info = {"handumi": {"recording_device": "meta"}}

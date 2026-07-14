@@ -9,8 +9,9 @@ from typing import Any
 import numpy as np
 
 from handumi.dataset.raw import (
-    LEFT_POSE_SLICE,
-    RIGHT_POSE_SLICE,
+    HANDUMI_CAPTURE_SCHEMA,
+    HANDUMI_STATE_SEMANTICS,
+    HANDUMI_TRACKING_SCHEMA,
     TRACKING_VALIDITY_NAMES,
 )
 from handumi.dataset.writer import info_path, load_info
@@ -60,7 +61,7 @@ class DatasetDownloadResult:
 
 @dataclass(frozen=True)
 class RawEpisode:
-    """Raw state plus normalized v3/v4 capture diagnostics for one episode."""
+    """Raw state plus derived diagnostics for one compact HandUMI episode."""
 
     states: np.ndarray
     fps: float
@@ -83,14 +84,25 @@ def recording_device(info_or_root: dict[str, Any] | str | Path) -> str | None:
 
 
 def validate_raw_state_metadata(info_or_root: dict[str, Any] | str | Path) -> None:
-    """Raise if a dataset advertises processed TCP poses as its main state."""
+    """Require the single current HandUMI layout stored in LeRobot v3."""
     meta = handumi_metadata(info_or_root)
     semantics = str(meta.get("state_semantics", ""))
     tracking_schema = str(meta.get("tracking_schema", ""))
-    if "tcp" in semantics.lower() or "tcp" in tracking_schema.lower():
+    capture_schema = str(meta.get("capture_schema", ""))
+    expected = {
+        "tracking_schema": HANDUMI_TRACKING_SCHEMA,
+        "capture_schema": HANDUMI_CAPTURE_SCHEMA,
+        "state_semantics": HANDUMI_STATE_SEMANTICS,
+    }
+    actual = {
+        "tracking_schema": tracking_schema,
+        "capture_schema": capture_schema,
+        "state_semantics": semantics,
+    }
+    if actual != expected:
         raise ValueError(
-            "Expected raw controller state metadata, but dataset advertises "
-            f"state_semantics={semantics!r}, tracking_schema={tracking_schema!r}."
+            "Unsupported HandUMI raw layout. Re-record with the current "
+            f"handumi-record. Expected {expected}, got {actual}."
         )
 
 
@@ -134,6 +146,9 @@ def load_raw_episode(
         revision=revision,
         download_videos=download_videos,
     )
+    info = getattr(getattr(dataset, "meta", None), "info", {})
+    validate_raw_state_metadata(info if isinstance(info, dict) else {})
+    metadata = handumi_metadata(info if isinstance(info, dict) else {})
     fps = float(getattr(dataset, "fps", 30) or 30)
     table = dataset.hf_dataset
     if source not in table.column_names:
@@ -161,8 +176,6 @@ def load_raw_episode(
         if values.ndim == 2 and values.shape[1] == 1:
             values = values[:, 0]
         signals[key] = values
-    info = getattr(getattr(dataset, "meta", None), "info", {})
-    metadata = handumi_metadata(info if isinstance(info, dict) else {})
     signals = normalize_raw_signals(states, signals, metadata=metadata)
     return RawEpisode(states=states, fps=fps, signals=signals)
 
@@ -173,47 +186,20 @@ def normalize_raw_signals(
     *,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, np.ndarray]:
-    """Expose one diagnostic contract for legacy v3 and compact v4 datasets."""
+    """Derive diagnostics omitted from the single compact on-disk layout."""
     states = np.asarray(states, dtype=np.float32)
     frame_count = len(states)
     normalized = {key: np.asarray(value) for key, value in signals.items()}
     metadata = metadata or {}
 
-    # v4 removes workspace-pose columns from disk because state already owns
-    # them. Recreate the aliases in memory for legacy callers.
-    normalized.setdefault(
-        "observation.tracking.left_controller_pose",
-        states[:, LEFT_POSE_SLICE],
-    )
-    normalized.setdefault(
-        "observation.tracking.right_controller_pose",
-        states[:, RIGHT_POSE_SLICE],
-    )
-
-    validity_key = "observation.valid"
-    validity = normalized.get(validity_key)
-    if validity is None:
-        legacy = []
-        found = False
-        for name in TRACKING_VALIDITY_NAMES:
-            key = f"observation.tracking.{name}"
-            values = _frame_signal(normalized.get(key), frame_count)
-            found |= values is not None
-            legacy.append(
-                np.zeros(frame_count, dtype=np.int64)
-                if values is None
-                else values.astype(np.int64)
-            )
-        if found:
-            validity = np.stack(legacy, axis=1)
-            normalized[validity_key] = validity
-    else:
-        validity = np.asarray(validity)
-        if validity.shape == (frame_count, len(TRACKING_VALIDITY_NAMES)):
-            for index, name in enumerate(TRACKING_VALIDITY_NAMES):
-                normalized.setdefault(
-                    f"observation.tracking.{name}", validity[:, index]
-                )
+    validity = normalized.get("observation.valid")
+    expected_validity_shape = (frame_count, len(TRACKING_VALIDITY_NAMES))
+    if validity is None or np.asarray(validity).shape != expected_validity_shape:
+        shape = None if validity is None else np.asarray(validity).shape
+        raise ValueError(
+            "Current HandUMI layout requires observation.valid shape "
+            f"{expected_validity_shape}, got {shape}."
+        )
 
     workspace = normalized.get("observation.tracking.workspace_from_device_pose")
     device_hmd = normalized.get("observation.tracking.device_hmd_pose")
@@ -262,7 +248,7 @@ def _restore_enabled_signals(
 ) -> None:
     sources = metadata.get("sources")
     if not isinstance(sources, dict):
-        return
+        raise ValueError("Current HandUMI layout requires handumi.sources metadata.")
 
     feetech = sources.get("feetech")
     if isinstance(feetech, dict) and "enabled" in feetech:

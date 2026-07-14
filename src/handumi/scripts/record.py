@@ -49,6 +49,9 @@ from handumi.cameras import (
 )
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset.raw import (
+    HANDUMI_CAPTURE_SCHEMA,
+    HANDUMI_STATE_SEMANTICS,
+    HANDUMI_TRACKING_SCHEMA,
     camera_health_features,
     capture_timing_features,
     feetech_features,
@@ -803,12 +806,12 @@ def main() -> None:
                 root,
                 {
                     "recording_device": args.device,
-                    "tracking_schema": "controller_raw_compact_v4",
+                    "tracking_schema": HANDUMI_TRACKING_SCHEMA,
                     "tracking_workspace": (
                         "table" if spatial_session_metadata is not None else "hmd_recentered"
                     ),
-                    "state_semantics": "workspace_controller_pose7_plus_gripper_widths",
-                    "capture_schema": "synchronized_sources_v2",
+                    "state_semantics": HANDUMI_STATE_SEMANTICS,
+                    "capture_schema": HANDUMI_CAPTURE_SCHEMA,
                     "sync_lag_s": args.sync_lag_s,
                     "max_sync_skew_s": args.max_sync_skew_s,
                     "camera_stale_timeout_s": args.camera_stale_timeout_s,

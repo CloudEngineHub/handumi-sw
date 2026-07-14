@@ -29,13 +29,7 @@ DEFAULT_DEVICE = "pico"
 SUPPORTED_DEVICES = ("pico", "meta")
 DEFAULT_CALIBRATION_DIR = Path("configs/calibration")
 DEFAULT_CALIBRATION = DEFAULT_CALIBRATION_DIR / f"{DEFAULT_DEVICE}_controller_tcp.yaml"
-LEFT_COLUMN = "observation.tracking.left_controller_pose"
-RIGHT_COLUMN = "observation.tracking.right_controller_pose"
 STATE_COLUMN = "observation.state"
-LEGACY_POSE_COLUMNS = {
-    "left": "observation.pico.left_controller_pose",
-    "right": "observation.pico.right_controller_pose",
-}
 SIDES = ("left", "right")
 CONTROLLER_TCP_METADATA_SCHEMA_VERSION = 2
 
@@ -159,14 +153,6 @@ def _continuous_pose7(poses: np.ndarray) -> np.ndarray:
     return poses
 
 
-def pose_column_for_side(side: str) -> str:
-    if side == "left":
-        return LEFT_COLUMN
-    if side == "right":
-        return RIGHT_COLUMN
-    raise SystemExit(f"Invalid side {side!r}; use left or right")
-
-
 def load_episode_poses(
     parquet: Path,
     episode: int,
@@ -177,15 +163,9 @@ def load_episode_poses(
     if not parquet.exists():
         raise SystemExit(missing_dataset_message(parquet))
     df = pd.read_parquet(parquet)
-    if column is None:
-        current = pose_column_for_side(side)
-        legacy = LEGACY_POSE_COLUMNS[side]
-        if current in df.columns:
-            column = current
-        elif legacy in df.columns:
-            column = legacy
-        else:
-            column = STATE_COLUMN
+    if side not in SIDES:
+        raise SystemExit(f"Invalid side {side!r}; use left or right")
+    column = column or STATE_COLUMN
     if "episode_index" not in df.columns:
         raise SystemExit(f"{parquet} has no episode_index column")
     if column not in df.columns:

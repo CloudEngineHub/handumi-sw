@@ -82,11 +82,12 @@ calibration declared in `configs/robots/piper.yaml`. Use
 The selected robot, gripper, controller mount, transforms, and SHA-256 are
 snapshotted into dataset metadata.
 
-New recordings use `controller_raw_compact_v4`: workspace controller poses live
-once in the 16D `observation.state`, original device poses remain available for
-recalibration, source enablement lives in metadata, and timing errors are
-derived when read. Replay, conversion, validation, and pivot calibration remain
-compatible with existing `controller_raw_and_workspace_v3` datasets.
+Recordings use the single `controller_raw_compact` HandUMI layout inside a
+LeRobot v3 dataset: workspace controller poses live once in the 16D
+`observation.state`, original device poses remain available for recalibration,
+source enablement lives in metadata, and timing errors are derived when read.
+Older HandUMI layouts are intentionally unsupported; re-record them instead of
+migrating their raw data.
 
 `--repo-id` is `account-or-organization/dataset-name`. The authenticated token
 must have write access to that namespace. Without `--push-to-hub`, the validated
