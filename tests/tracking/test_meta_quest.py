@@ -73,7 +73,7 @@ class MetaQuestConfigTest(unittest.TestCase):
 
 
 class ParseFrameTest(unittest.TestCase):
-    """Parsing of the YubiQuestApp flat wire format (dict-shaped vectors)."""
+    """Parsing of the HandUMI Quest App wire format (dict-shaped vectors)."""
 
     def test_full_frame(self):
         frame = parse_frame(

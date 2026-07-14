@@ -1,9 +1,6 @@
-"""Meta Quest native-app tracking receiver (Phase 2A, Step 1 — the pose pipe).
+"""HandUMI Quest App tracking receiver.
 
-This module is a HandUMI adaptation of the yubi-sw transport model, modified
-for the local tracking schema, buffering, health gates, and clock alignment.
-
-yubi-sw model: the native Quest app is a TCP server that streams one
+The native Quest app is a TCP server that streams one
 newline-delimited JSON pose sample per frame; the workstation (this module)
 dials in, parses each sample, stamps a PC receive clock, and keeps the latest
 frame in a buffer. A companion UDP NTP-style loop estimates the Quest<->PC clock
@@ -12,9 +9,8 @@ offset so poses can be aligned with camera/Feetech frames in post-processing.
 This step does NOT transform coordinates — poses are kept as raw Unity values.
 ``handumi.tracking.transforms`` (Step 2) converts them.
 
-Reference:
-  ../yubi-sw/airoa_quest/airoa_quest_bridge/transport/tcp_json.py
-  ../yubi-sw/airoa_quest/airoa_quest_msgs/msg/QuestController.msg
+App and protocol reference:
+  https://github.com/robonet-ai/handumi-quest-app
 
 Wire protocol (see docs/phase-2-motion-tracking.md → TCP/JSON Payload):
   TCP : newline-delimited JSON pose samples (Quest app is the server).
@@ -68,7 +64,7 @@ _IDENTITY_QUAT = (0.0, 0.0, 0.0, 1.0)
 class ControllerButtons:
     """Per-controller inputs. Analog values are UI/debug only — never width.
 
-    The YubiQuestApp legacy TCP/JSON reports button *presses* only (no analog
+    The compatibility TCP/JSON format reports button *presses* only (no analog
     trigger/grip), so ``trigger``/``grip`` here are 0.0/1.0 from the pressed
     flags, not continuous values.
     """
@@ -151,7 +147,7 @@ def pose_to_pose7(pose: Pose) -> np.ndarray:
     return np.concatenate([pose.position, pose.quaternion]).astype(np.float32)
 
 
-# Flat YubiQuestApp wire keys, per side (from yubi-sw quest_bridge_node.py).
+# Flat HandUMI Quest App wire keys, per side.
 _POSE_KEYS = {
     "left": {
         "pos": "leftControllerPosition", "rot": "leftControllerRotation",
@@ -195,9 +191,9 @@ def _controller_from_msg(msg: dict[str, Any], side: str) -> ControllerState:
 
 
 def parse_frame(msg: dict[str, Any], *, pc_monotonic_ns: int) -> QuestFrame:
-    """Build a :class:`QuestFrame` from one decoded YubiQuestApp JSON sample.
+    """Build a :class:`QuestFrame` from one HandUMI Quest App JSON sample.
 
-    Wire format is the yubi-sw flat layout (Unity coordinates, dict-shaped
+    Wire format uses a flat layout (Unity coordinates, dict-shaped
     vectors). Pure function so it is trivial to unit-test against the contract.
     """
     hmd_pos = msg.get("hmdPosition")
@@ -648,7 +644,7 @@ def _as_float(value: Any, *, default: float = 0.0) -> float:
 
 
 def _vec3(value: Any) -> np.ndarray:
-    """Parse a 3-vector from a yubi `{x,y,z}` dict (or an `[x,y,z]` list)."""
+    """Parse a 3-vector from an `{x,y,z}` dict (or an `[x,y,z]` list)."""
     out = np.zeros(3, dtype=np.float32)
     if isinstance(value, dict):
         out[0] = _as_float(value.get("x"))
@@ -661,7 +657,7 @@ def _vec3(value: Any) -> np.ndarray:
 
 
 def _quat(value: Any) -> np.ndarray:
-    """Parse a quaternion from a yubi `{x,y,z,w}` dict (or an `[x,y,z,w]` list)."""
+    """Parse a quaternion from an `{x,y,z,w}` dict (or an `[x,y,z,w]` list)."""
     out = np.array(_IDENTITY_QUAT, dtype=np.float32)
     if isinstance(value, dict):
         out[0] = _as_float(value.get("x"))
