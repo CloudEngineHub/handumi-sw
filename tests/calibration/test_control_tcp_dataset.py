@@ -36,3 +36,25 @@ def test_load_episode_poses_falls_back_to_legacy_pico_schema(tmp_path: Path):
     poses = load_episode_poses(path, 0, "right")
 
     np.testing.assert_allclose(poses[:, 0], [0.0, 1.0])
+
+
+def test_load_episode_poses_falls_back_to_compact_state(tmp_path: Path):
+    path = tmp_path / "compact.parquet"
+    states = []
+    for index in (1.0, 0.0):
+        state = np.zeros(16, dtype=np.float32)
+        state[3:7] = [0.0, 0.0, 0.0, 1.0]
+        state[7] = index
+        state[10:14] = [0.0, 0.0, 0.0, 1.0]
+        states.append(state)
+    pd.DataFrame(
+        {
+            "episode_index": [0, 0],
+            "frame_index": [1, 0],
+            "observation.state": states,
+        }
+    ).to_parquet(path)
+
+    poses = load_episode_poses(path, 0, "right")
+
+    np.testing.assert_allclose(poses[:, 0], [0.0, 1.0])

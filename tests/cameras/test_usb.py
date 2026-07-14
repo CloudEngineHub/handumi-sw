@@ -117,9 +117,9 @@ class UsbCameraConfigTest(unittest.TestCase):
             frame["observation.camera.left_wrist.sample_time_ns"].item(),
             1_002_000_000,
         )
-        self.assertAlmostEqual(
-            frame["observation.camera.left_wrist.sync_error_ms"].item(), 2.0
-        )
+        self.assertEqual(frame["observation.camera.left_wrist.healthy"].item(), 1)
+        self.assertNotIn("observation.camera.left_wrist.enabled", frame)
+        self.assertNotIn("observation.camera.left_wrist.sync_error_ms", frame)
 
     def test_stale_camera_is_unhealthy(self):
         _, health = read_camera_samples(

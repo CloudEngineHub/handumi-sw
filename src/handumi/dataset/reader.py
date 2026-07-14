@@ -8,6 +8,11 @@ from typing import Any
 
 import numpy as np
 
+from handumi.dataset.raw import (
+    LEFT_POSE_SLICE,
+    RIGHT_POSE_SLICE,
+    TRACKING_VALIDITY_NAMES,
+)
 from handumi.dataset.writer import info_path, load_info
 
 
@@ -55,7 +60,7 @@ class DatasetDownloadResult:
 
 @dataclass(frozen=True)
 class RawEpisode:
-    """Raw state plus scalar capture diagnostics for one episode."""
+    """Raw state plus normalized v3/v4 capture diagnostics for one episode."""
 
     states: np.ndarray
     fps: float
@@ -150,13 +155,222 @@ def load_raw_episode(
     )
     signals: dict[str, np.ndarray] = {}
     for key in table.column_names:
-        if not key.startswith(prefixes):
+        if key != "observation.valid" and not key.startswith(prefixes):
             continue
         values = np.asarray(table[key])
         if values.ndim == 2 and values.shape[1] == 1:
             values = values[:, 0]
         signals[key] = values
+    info = getattr(getattr(dataset, "meta", None), "info", {})
+    metadata = handumi_metadata(info if isinstance(info, dict) else {})
+    signals = normalize_raw_signals(states, signals, metadata=metadata)
     return RawEpisode(states=states, fps=fps, signals=signals)
+
+
+def normalize_raw_signals(
+    states: np.ndarray,
+    signals: dict[str, np.ndarray],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, np.ndarray]:
+    """Expose one diagnostic contract for legacy v3 and compact v4 datasets."""
+    states = np.asarray(states, dtype=np.float32)
+    frame_count = len(states)
+    normalized = {key: np.asarray(value) for key, value in signals.items()}
+    metadata = metadata or {}
+
+    # v4 removes workspace-pose columns from disk because state already owns
+    # them. Recreate the aliases in memory for legacy callers.
+    normalized.setdefault(
+        "observation.tracking.left_controller_pose",
+        states[:, LEFT_POSE_SLICE],
+    )
+    normalized.setdefault(
+        "observation.tracking.right_controller_pose",
+        states[:, RIGHT_POSE_SLICE],
+    )
+
+    validity_key = "observation.valid"
+    validity = normalized.get(validity_key)
+    if validity is None:
+        legacy = []
+        found = False
+        for name in TRACKING_VALIDITY_NAMES:
+            key = f"observation.tracking.{name}"
+            values = _frame_signal(normalized.get(key), frame_count)
+            found |= values is not None
+            legacy.append(
+                np.zeros(frame_count, dtype=np.int64)
+                if values is None
+                else values.astype(np.int64)
+            )
+        if found:
+            validity = np.stack(legacy, axis=1)
+            normalized[validity_key] = validity
+    else:
+        validity = np.asarray(validity)
+        if validity.shape == (frame_count, len(TRACKING_VALIDITY_NAMES)):
+            for index, name in enumerate(TRACKING_VALIDITY_NAMES):
+                normalized.setdefault(
+                    f"observation.tracking.{name}", validity[:, index]
+                )
+
+    workspace = normalized.get("observation.tracking.workspace_from_device_pose")
+    device_hmd = normalized.get("observation.tracking.device_hmd_pose")
+    if (
+        "observation.tracking.hmd_pose" not in normalized
+        and workspace is not None
+        and device_hmd is not None
+    ):
+        workspace = np.asarray(workspace)
+        device_hmd = np.asarray(device_hmd)
+        if workspace.shape == device_hmd.shape == (frame_count, 7):
+            normalized["observation.tracking.hmd_pose"] = np.stack(
+                [
+                    _compose_pose7(a, b)
+                    for a, b in zip(workspace, device_hmd, strict=True)
+                ]
+            ).astype(np.float32)
+
+    aligned = _frame_signal(
+        normalized.get("observation.tracking.aligned_time_ns"), frame_count
+    )
+    device_time = _frame_signal(
+        normalized.get("observation.tracking.device_time_ns"), frame_count
+    )
+    if (
+        "observation.tracking.clock_offset_ns" not in normalized
+        and aligned is not None
+        and device_time is not None
+    ):
+        valid_clock = (aligned > 0) & (device_time > 0)
+        normalized["observation.tracking.clock_offset_ns"] = np.where(
+            valid_clock,
+            aligned.astype(np.int64) - device_time.astype(np.int64),
+            0,
+        )
+
+    _restore_enabled_signals(normalized, metadata, frame_count)
+    _derive_source_timing(normalized, frame_count)
+    return normalized
+
+
+def _restore_enabled_signals(
+    signals: dict[str, np.ndarray],
+    metadata: dict[str, Any],
+    frame_count: int,
+) -> None:
+    sources = metadata.get("sources")
+    if not isinstance(sources, dict):
+        return
+
+    feetech = sources.get("feetech")
+    if isinstance(feetech, dict) and "enabled" in feetech:
+        signals.setdefault(
+            "observation.feetech.enabled",
+            np.full(frame_count, int(bool(feetech["enabled"])), dtype=np.int64),
+        )
+
+    cameras = sources.get("cameras")
+    if not isinstance(cameras, dict):
+        return
+    for name, config in cameras.items():
+        if not isinstance(config, dict) or "enabled" not in config:
+            continue
+        signals.setdefault(
+            f"observation.camera.{name}.enabled",
+            np.full(frame_count, int(bool(config["enabled"])), dtype=np.int64),
+        )
+
+
+def _derive_source_timing(
+    signals: dict[str, np.ndarray], frame_count: int
+) -> None:
+    target = _frame_signal(
+        signals.get("observation.sync.target_time_ns"), frame_count
+    )
+    record = _frame_signal(
+        signals.get("observation.sync.record_time_ns"), frame_count
+    )
+    if target is None or record is None:
+        return
+
+    sources: dict[str, np.ndarray] = {}
+    aligned = _frame_signal(
+        signals.get("observation.tracking.aligned_time_ns"), frame_count
+    )
+    received = _frame_signal(
+        signals.get("observation.tracking.pc_monotonic_ns"), frame_count
+    )
+    if aligned is not None:
+        sources["observation.tracking"] = (
+            aligned
+            if received is None
+            else np.where(aligned > 0, aligned, received)
+        )
+
+    for key, value in tuple(signals.items()):
+        if not key.endswith(".sample_time_ns"):
+            continue
+        sample = _frame_signal(value, frame_count)
+        if sample is not None:
+            sources[key.removesuffix(".sample_time_ns")] = sample
+
+    missing_value_ms = np.iinfo(np.int64).max / 1e6
+    for prefix, sample in sources.items():
+        missing = sample <= 0
+        age_ms = np.where(missing, missing_value_ms, np.maximum(0, record - sample) / 1e6)
+        sync_error_ms = np.where(
+            missing,
+            missing_value_ms,
+            np.abs(sample - target) / 1e6,
+        )
+        signals.setdefault(f"{prefix}.age_ms", age_ms.astype(np.float32))
+        signals.setdefault(
+            f"{prefix}.sync_error_ms", sync_error_ms.astype(np.float32)
+        )
+
+
+def _frame_signal(value: Any, frame_count: int) -> np.ndarray | None:
+    if value is None:
+        return None
+    array = np.asarray(value)
+    if array.ndim == 2 and array.shape[1] == 1:
+        array = array[:, 0]
+    return array.reshape(-1) if array.size == frame_count else None
+
+
+def _compose_pose7(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    a = np.asarray(a, dtype=np.float64).reshape(7)
+    b = np.asarray(b, dtype=np.float64).reshape(7)
+    qa = _normalize_quaternion(a[3:7])
+    qb = _normalize_quaternion(b[3:7])
+    vector = qa[:3]
+    rotated = b[:3] + 2.0 * (
+        qa[3] * np.cross(vector, b[:3])
+        + np.cross(vector, np.cross(vector, b[:3]))
+    )
+    ax, ay, az, aw = qa
+    bx, by, bz, bw = qb
+    quaternion = _normalize_quaternion(
+        np.array(
+            [
+                aw * bx + ax * bw + ay * bz - az * by,
+                aw * by - ax * bz + ay * bw + az * bx,
+                aw * bz + ax * by - ay * bx + az * bw,
+                aw * bw - ax * bx - ay * by - az * bz,
+            ]
+        )
+    )
+    return np.concatenate([a[:3] + rotated, quaternion])
+
+
+def _normalize_quaternion(value: np.ndarray) -> np.ndarray:
+    quaternion = np.asarray(value, dtype=np.float64).reshape(4)
+    norm = float(np.linalg.norm(quaternion))
+    if norm <= 1e-12:
+        return np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+    return quaternion / norm
 
 
 def _parse_episodes(value: str | None) -> list[int] | None:

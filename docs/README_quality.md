@@ -16,10 +16,11 @@ selected from their native-rate buffers against that target:
   midpoint of each serial read.
 
 The default target is 40 ms behind real time, which gives asynchronous sensors
-time to populate their buffers. Each source stores `sample_time_ns`, `age_ms`,
-`sync_error_ms`, and `healthy`. Quest additionally stores device/receive times,
-clock offset, clock sync state, raw `tracked`/`valid` flags, HMD pose, and the
-workspace transform.
+time to populate their buffers. Each source stores `sample_time_ns`, sequence,
+and `healthy`; `age_ms` and `sync_error_ms` are derived from source, target, and
+record timestamps when the dataset is read. Quest additionally stores
+device/receive/aligned times, original device poses, explicit left/right
+`tracked`, a named `observation.valid` vector, and the workspace transform.
 
 ## Online Health Gate
 
@@ -34,9 +35,10 @@ timeout:
 - The Feetech stream is stale or outside the synchronization tolerance for
   more than `--sensor-loss-timeout-s`.
 
-Disabled Feetech sensing is recorded with `enabled=0` and does not block the
-gate. Short failures remain in the raw dataset with `healthy=0`; they are not
-silently replaced with apparently healthy measurements.
+Disabled Feetech sensing is marked once in dataset `sources` metadata and does
+not block the gate. The v3/v4 reader exposes that setting as `enabled` for
+quality checks. Short failures remain in the raw dataset with `healthy=0`; they
+are not silently replaced with apparently healthy measurements.
 
 ## Offline Validation
 

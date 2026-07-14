@@ -182,12 +182,9 @@ def read_camera_samples(
         )
         health[f"camera.{name}"] = healthy
         frame[f"observation.images.{name}"] = sample.image
-        frame[f"{prefix}.enabled"] = _scalar_int(enabled)
         frame[f"{prefix}.healthy"] = _scalar_int(healthy if enabled else False)
         frame[f"{prefix}.sample_time_ns"] = _scalar_int(sample.capture_time_ns)
         frame[f"{prefix}.sequence"] = _scalar_int(sample.sequence)
-        frame[f"{prefix}.age_ms"] = _scalar_float(age_ns / 1e6)
-        frame[f"{prefix}.sync_error_ms"] = _scalar_float(sync_error_ns / 1e6)
     return frame, health
 
 
@@ -231,7 +228,3 @@ def _read_camera_value(data: dict[str, Any], key: str, default: int) -> int | st
 
 def _scalar_int(value: int | bool) -> np.ndarray:
     return np.array([int(value)], dtype=np.int64)
-
-
-def _scalar_float(value: float) -> np.ndarray:
-    return np.array([float(value)], dtype=np.float32)

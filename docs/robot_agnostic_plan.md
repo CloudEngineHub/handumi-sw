@@ -11,6 +11,8 @@ Implemented baseline:
   setup, while legacy datasets use the validated setup when available;
 - real/sim teleoperation use the same robot/device calibration selection;
 - replay reports calibration SHA-256 and source-geometry diagnostics.
+- raw capture uses the compact v4 diagnostic schema while the reader normalizes
+  existing v3 and new v4 episodes to one consumer contract.
 
 The remaining phases below describe broader decoupling that is not yet
 implemented.

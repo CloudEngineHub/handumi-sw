@@ -72,7 +72,6 @@ from handumi.synchronization import (
     capture_timing_frame,
     synchronized_gripper_frame,
     tracking_sample_at,
-    tracking_timing_frame,
 )
 from handumi.tracking.base import ControllerPairSample, TrackingProvider
 from handumi.tracking.gestures import DoubleClapDetector
@@ -184,11 +183,6 @@ def build_observation(sample: ControllerPairSample, widths: GripperWidths) -> di
         widths.left,
         widths.right,
     )
-    tracking_frame = {
-        key: value
-        for key, value in sample.tracking_frame().items()
-        if "_tcp_pose" not in key
-    }
     return {
         "observation.state": state,
         "action": state.copy(),
@@ -198,7 +192,7 @@ def build_observation(sample: ControllerPairSample, widths: GripperWidths) -> di
         "observation.feetech.right_width_mm": np.array([widths.right_mm], dtype=np.float32),
         "observation.feetech.left_normalized": np.array([widths.left_normalized], dtype=np.float32),
         "observation.feetech.right_normalized": np.array([widths.right_normalized], dtype=np.float32),
-        **tracking_frame,
+        **sample.tracking_frame(),
     }
 
 
@@ -424,11 +418,6 @@ def record_episode(
                 **build_observation(sample, widths),
                 **gripper_frame.frame,
                 **capture_timing_frame(target_time_ns, tracking_now_ns),
-                **tracking_timing_frame(
-                    sample,
-                    target_time_ns=target_time_ns,
-                    record_time_ns=tracking_now_ns,
-                ),
                 "task": task,
             }
         )
@@ -814,12 +803,12 @@ def main() -> None:
                 root,
                 {
                     "recording_device": args.device,
-                    "tracking_schema": "controller_raw_and_workspace_v3",
+                    "tracking_schema": "controller_raw_compact_v4",
                     "tracking_workspace": (
                         "table" if spatial_session_metadata is not None else "hmd_recentered"
                     ),
                     "state_semantics": "workspace_controller_pose7_plus_gripper_widths",
-                    "capture_schema": "synchronized_sources_v1",
+                    "capture_schema": "synchronized_sources_v2",
                     "sync_lag_s": args.sync_lag_s,
                     "max_sync_skew_s": args.max_sync_skew_s,
                     "camera_stale_timeout_s": args.camera_stale_timeout_s,
@@ -828,6 +817,9 @@ def main() -> None:
                         {"name": spec["name"], "index_or_path": spec["id"]}
                         for spec in camera_specs
                     ],
+                    "sources": _capture_sources_metadata(
+                        camera_specs, cameras, grippers
+                    ),
                     "controller_tcp_calibration": calibration_metadata,
                     "spatial_session_calibration": spatial_session_metadata,
                     "target_robot": robot_metadata,
@@ -972,6 +964,22 @@ def _selected_camera_names(args: argparse.Namespace) -> list[str]:
     if workspace:
         names.append("workspace")
     return names
+
+
+def _capture_sources_metadata(
+    camera_specs: list[dict[str, object]],
+    cameras: list[object | None],
+    grippers: object | None,
+) -> dict[str, object]:
+    """Store source enablement once instead of repeating it on every row."""
+    return {
+        "tracking": {"enabled": True},
+        "feetech": {"enabled": grippers is not None},
+        "cameras": {
+            str(spec["name"]): {"enabled": camera is not None}
+            for spec, camera in zip(camera_specs, cameras, strict=True)
+        },
+    }
 
 
 def _robot_metadata(name: str, config_dir: Path = ROBOT_CONFIG_DIR) -> dict[str, object]:

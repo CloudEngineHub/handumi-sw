@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 from handumi.cameras.base import CameraSample
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
+    _capture_sources_metadata,
     _default_output_dir,
     _EscapeStopListener,
     _recording_tcp_calibration_metadata,
@@ -188,6 +189,23 @@ class CameraSelectionTest(unittest.TestCase):
                 ["right_wrist", "workspace"],
                 [4, 4],
             )
+
+    def test_source_enablement_is_dataset_metadata(self):
+        sources = _capture_sources_metadata(
+            [{"name": "left_wrist"}, {"name": "right_wrist"}],
+            [object(), None],
+            grippers=None,
+        )
+
+        self.assertEqual(sources["tracking"], {"enabled": True})
+        self.assertEqual(sources["feetech"], {"enabled": False})
+        self.assertEqual(
+            sources["cameras"],
+            {
+                "left_wrist": {"enabled": True},
+                "right_wrist": {"enabled": False},
+            },
+        )
 
 
 class RobotMetadataTest(unittest.TestCase):
@@ -516,7 +534,9 @@ class BuildObservationTest(unittest.TestCase):
         self.assertEqual(state.shape, (16,))
         self.assertAlmostEqual(float(state[14]), 0.011, places=5)
         self.assertAlmostEqual(float(state[15]), 0.022, places=5)
-        self.assertIn("observation.tracking.left_controller_pose", obs)
+        self.assertNotIn("observation.tracking.left_controller_pose", obs)
+        self.assertIn("observation.tracking.left_device_controller_pose", obs)
+        self.assertEqual(obs["observation.valid"].shape, (8,))
         self.assertNotIn("observation.tracking.left_tcp_pose", obs)
 
 

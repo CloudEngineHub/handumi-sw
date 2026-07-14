@@ -21,6 +21,7 @@ import pandas as pd
 import yaml
 from scipy.spatial.transform import Rotation
 
+from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
 from handumi.robots.utils import IDENTITY_POSE7, pose_mul, quat_normalize
 
 DEFAULT_PARQUET = Path("pico_recording/data/chunk-000/file-000.parquet")
@@ -30,6 +31,7 @@ DEFAULT_CALIBRATION_DIR = Path("configs/calibration")
 DEFAULT_CALIBRATION = DEFAULT_CALIBRATION_DIR / f"{DEFAULT_DEVICE}_controller_tcp.yaml"
 LEFT_COLUMN = "observation.tracking.left_controller_pose"
 RIGHT_COLUMN = "observation.tracking.right_controller_pose"
+STATE_COLUMN = "observation.state"
 LEGACY_POSE_COLUMNS = {
     "left": "observation.pico.left_controller_pose",
     "right": "observation.pico.right_controller_pose",
@@ -178,7 +180,12 @@ def load_episode_poses(
     if column is None:
         current = pose_column_for_side(side)
         legacy = LEGACY_POSE_COLUMNS[side]
-        column = current if current in df.columns else legacy
+        if current in df.columns:
+            column = current
+        elif legacy in df.columns:
+            column = legacy
+        else:
+            column = STATE_COLUMN
     if "episode_index" not in df.columns:
         raise SystemExit(f"{parquet} has no episode_index column")
     if column not in df.columns:
@@ -191,7 +198,16 @@ def load_episode_poses(
     sort_cols = [col for col in ("frame_index", "index") if col in ep.columns]
     if sort_cols:
         ep = ep.sort_values(sort_cols)
-    poses = np.stack([_as_pose7(value) for value in ep[column]], axis=0)
+    pose_slice = LEFT_POSE_SLICE if side == "left" else RIGHT_POSE_SLICE
+    poses = np.stack(
+        [
+            _as_pose7(np.asarray(value).reshape(-1)[pose_slice])
+            if column == STATE_COLUMN
+            else _as_pose7(value)
+            for value in ep[column]
+        ],
+        axis=0,
+    )
     return _continuous_pose7(poses)
 
 

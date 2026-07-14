@@ -349,15 +349,12 @@ observation.feetech.sample_time_ns
 observation.feetech.healthy
 observation.tracking.left_tracked
 observation.tracking.right_tracked
-observation.tracking.left_device_tracked
-observation.tracking.left_pose_valid
 observation.tracking.left_device_controller_pose
 observation.tracking.right_device_controller_pose
-observation.tracking.hmd_pose
 observation.tracking.device_hmd_pose
+observation.tracking.workspace_from_device_pose
 observation.tracking.aligned_time_ns
-observation.tracking.clock_synced
-observation.tracking.streaming
+observation.valid                 # named tracking-validity vector
 observation.sync.target_time_ns
 observation.sync.record_time_ns
 observation.camera.<name>.sample_time_ns
@@ -365,8 +362,11 @@ observation.camera.<name>.healthy
 ```
 
 `observation.state[14]` and `observation.state[15]` are the left/right gripper
-widths in meters. Camera, Feetech, and tracking diagnostics also include
-`age_ms` and `sync_error_ms`.
+widths in meters. `observation.state[0:14]` already contains the workspace
+controller poses, so they are not duplicated as tracking columns. Sensor
+enablement is dataset metadata. The normalized reader derives `enabled`,
+`age_ms`, `sync_error_ms`, workspace HMD pose, and legacy tracking aliases for
+both `controller_raw_and_workspace_v3` and `controller_raw_compact_v4` datasets.
 
 ## More Docs
 
