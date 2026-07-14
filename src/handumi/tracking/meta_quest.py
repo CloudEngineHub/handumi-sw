@@ -273,9 +273,11 @@ class MetaQuestReceiver:
         config: MetaQuestConfig,
         *,
         on_frame: Callable[[QuestFrame], None] | None = None,
+        on_raw_message: Callable[[dict[str, Any], int, int], None] | None = None,
     ) -> None:
         self.config = config
         self._on_frame = on_frame
+        self._on_raw_message = on_raw_message
 
         self._lock = threading.Lock()
         self._running = False
@@ -457,14 +459,29 @@ class MetaQuestReceiver:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                self._handle_message(msg)
+                if isinstance(msg, dict):
+                    self._handle_message(msg)
 
     def _handle_message(self, msg: dict[str, Any]) -> None:
         pc_mono_ns = time.monotonic_ns()
-        frame = parse_frame(msg, pc_monotonic_ns=pc_mono_ns)
         with self._lock:
             self._receive_sequence += 1
-            frame = replace(frame, receive_sequence=self._receive_sequence)
+            receive_sequence = self._receive_sequence
+        if self._on_raw_message is not None:
+            try:
+                self._on_raw_message(msg, pc_mono_ns, receive_sequence)
+            except Exception:  # noqa: BLE001 - evidence callback must not kill rx.
+                log.exception("on_raw_message callback raised")
+
+        # A diagnostic manifest is evidence and connection metadata, not a pose
+        # sample. Do not briefly replace the production provider's latest frame
+        # with a synthetic all-zero controller sample.
+        if msg.get("packetType") == "session_manifest":
+            return
+
+        frame = parse_frame(msg, pc_monotonic_ns=pc_mono_ns)
+        with self._lock:
+            frame = replace(frame, receive_sequence=receive_sequence)
             self._latest = frame
             self._frames.append(frame)
             self._last_frame_mono = pc_mono_ns / 1e9

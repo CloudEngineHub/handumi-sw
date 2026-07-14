@@ -65,16 +65,26 @@ the legacy APK.
 handumi-quest-probe capture \
   --config configs/tracking_meta_quest.yaml \
   --duration-s 300 \
+  --adb-health \
   --output artifacts/quest-probe/neutral-head-worn
 
 handumi-quest-probe analyze \
   artifacts/quest-probe/neutral-head-worn/quest_packets.jsonl
 ```
 
-The output directory contains `quest_packets.jsonl`, `capture_context.json`,
-and `summary.json`. A mock-sender run validates the workstation transport and
-analysis only. It cannot establish runtime extension support, body accuracy, or
-a zero-loss Quest session unless the sender includes a real monotonic `seq`.
+The output directory contains the append-only `quest_packets.jsonl`, a separate
+`session_manifests.jsonl`, `capture_context.json`, and `summary.json`. With
+`--adb-health`, it also contains timestamped `quest_health.jsonl` battery,
+thermal, CPU, memory, process, and lifecycle snapshots plus
+`quest_logcat.txt`. The analyzer excludes manifests from pose-rate and loss
+calculations; distinguishes receive/render rate from distinct body source-time
+rate; reports gaps, duplicates, resets, and reordering; and calculates raw
+location-flag valid/tracked percentages for every joint. Device-clock and body
+sample-age statistics remain unavailable until UDP synchronization succeeds.
+
+A mock-sender run validates the workstation transport and analysis only. It
+cannot establish runtime extension support, body accuracy, or a zero-loss Quest
+session unless the sender includes a real monotonic `seq`.
 
 ## Troubleshooting
 
