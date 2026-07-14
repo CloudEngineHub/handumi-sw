@@ -1,59 +1,243 @@
 # Add a New Robot Embodiment
 
-Robots are config-driven: one YAML under `configs/robots/` describes the
-embodiment, and the registry (`src/handumi/robots/registry.py`) builds the
-URDF model, bimanual IK solver, and Viser sim from it. No per-robot Python
-code is needed.
+Current supported scope: fixed-base bimanual robots with one TCP and one
+parallel gripper per side.
 
-## 1. Drop the assets
+Adding a model for replay/simulation is configuration-driven. Adding real
+hardware also requires a hardware backend; real teleoperation is currently
+implemented only for Piper.
 
-Put the URDF and its meshes under `assets/<robot>/`. Requirements:
+## Required Files
 
-- **Bimanual, single file**: both arms in one URDF, with actuated joint
-  names prefixed `left_` / `right_` (the registry derives per-arm joint
-  lists and the command size from those prefixes).
-- **An EE link per side**: the link the IK targets. Prefer an explicit TCP
-  link at the gripper tip (see `left_tcp`/`right_tcp` in
-  `assets/piper/piper.urdf`) over the wrist flange, so replayed TCP
-  trajectories land on the tip.
-- `package://PKG/...` mesh paths are fine — `pkg_root` below resolves them.
+```text
+assets/<robot>/
+├── <robot>.urdf
+├── <robot>.xml              # optional; required for MuJoCo contact physics
+└── meshes/
 
-## 2. Write the config
+configs/robots/
+└── <robot>.yaml
+
+configs/calibration/
+├── <robot>_<device>_controller_tcp.yaml
+└── <robot>_table.yaml       # required for absolute-table replay
+```
+
+## 1. Add the Robot Model
+
+Place the URDF and meshes under `assets/<robot>/`.
+
+The current loader requires:
+
+- both arms in one URDF;
+- actuated joints prefixed with `left_` and `right_`;
+- one TCP link per side at the physical gripper tip;
+- a fixed base;
+- one parallel gripper per side.
+
+These are current implementation constraints, not requirements of the raw
+HandUMI dataset format.
+
+Use `package://...` mesh paths when needed. `pkg_root` in the robot YAML
+resolves them.
+
+## 2. Add the Robot Configuration
 
 Create `configs/robots/<robot>.yaml`:
 
 ```yaml
 kind: myrobot
 urdf: assets/myrobot/myrobot.urdf
-pkg_root: assets/myrobot          # resolves package:// mesh references
+mjcf: assets/myrobot/myrobot.xml
+pkg_root: assets/myrobot
+
 ee_links:
-  left: left_tcp                  # IK target link per side
+  left: left_tcp
   right: right_tcp
-home_q: [0.0, 0.0, ...]           # one value per actuated joint (or [] for zeros)
-ik_weights:                       # optional; defaults shown in registry.py
+
+home_q: [0.0, 0.0]
+gripper_max_width_m: 0.07
+
+# Physical gripper and mount installed on HandUMI for this robot.
+handumi_tool:
+  gripper: myrobot_parallel_v1
+  controller_mount: handumi_v1
+
+# Add an entry only after calibrating this exact robot/gripper/controller setup.
+controller_tcp_calibrations:
+  meta: configs/calibration/myrobot_meta_controller_tcp.yaml
+
+ik_weights:
   pos: 100.0
   ori: 15.0
   rest: 2.0
-  max_reach: 0.45                 # optional workspace clamp (meters)
+  max_joint_delta: 0.06981317
+  max_reach: 0.45
 ```
 
-Existing examples: [configs/robots/piper.yaml](../configs/robots/piper.yaml),
-[configs/robots/axol.yaml](../configs/robots/axol.yaml).
+`home_q` must contain one value for every actuated URDF joint, including any
+actuated gripper joints.
 
-## 3. Register the name
+Existing references:
 
-Add the name to `EMBODIMENT_NAMES` in `src/handumi/robots/registry.py`
-(and pick its default Viser port there if it needs one).
+- [Piper configuration](../configs/robots/piper.yaml)
+- [Axol configuration](../configs/robots/axol.yaml)
 
-## 4. Verify
+## 3. Register the Model Name
+
+Add the name to `EMBODIMENT_NAMES` in
+`src/handumi/robots/registry.py`.
+
+If the robot assets must be shipped in the wheel, add them to the package-data
+configuration in `pyproject.toml`.
+
+## 4. Calibrate the HandUMI TCP for This Robot
+
+Controller-to-TCP calibration belongs to the complete physical assembly:
+
+```text
+robot + gripper/tool + HandUMI mount + tracking controller + side
+```
+
+Do not reuse Piper calibration for another robot or gripper.
+
+Mount the new robot's gripper/tool on HandUMI and perform the pivot procedure
+for both sides. Follow [README_tcp_offset.md](README_tcp_offset.md).
+
+Write the final calibration to:
+
+```text
+configs/calibration/<robot>_<device>_controller_tcp.yaml
+```
+
+Then reference that file from the robot YAML:
+
+```yaml
+handumi_tool:
+  gripper: myrobot_parallel_v1
+  controller_mount: handumi_v1
+
+controller_tcp_calibrations:
+  meta: configs/calibration/myrobot_meta_controller_tcp.yaml
+```
+
+Changing the gripper, printed mount, controller mount, or mechanical TCP
+requires a new calibration and a new gripper/mount identifier.
+
+## 5. Calibrate Robot Placement Relative to the Table
+
+Absolute-table replay also needs `robot_from_table`:
+
+```yaml
+verified: true
+calibration:
+  robot_from_table:
+    position: [0.0, 0.0, 0.0]
+    quaternion: [0.0, 0.0, 0.0, 1.0]
+```
+
+Save it as:
+
+```text
+configs/calibration/<robot>_table.yaml
+```
+
+Controller-to-TCP and `robot_from_table` solve different problems:
+
+- Controller-to-TCP reconstructs the demonstrated gripper-tip trajectory.
+- `robot_from_table` places that trajectory in the robot workspace.
+
+Do not compensate an incorrect TCP offset by changing `robot_from_table`.
+
+## 6. Record a Validation Dataset
+
+Record using the intended embodiment:
 
 ```bash
-# solve + view a recorded episode on the new robot
-handumi-replay-in-sim --repo-id <dataset> --robot myrobot
-
-# or follow live tracking with it
-handumi-teleop-sim --device meta --robot myrobot
+uv run handumi-record \
+  --device meta \
+  --robot myrobot \
+  --repo-id local/myrobot_validation \
+  --output-dir outputs/myrobot_validation \
+  --task "myrobot TCP validation" \
+  --num-episodes 1 \
+  --no-sounds
 ```
 
-The replay reports per-frame EE pose errors — large errors usually mean
-wrong `ee_links`, a bad `home_q`, or IK weights that need tuning.
+Recording snapshots the robot, gripper, controller mount, calibration hash,
+and both Controller-to-TCP transforms into dataset metadata. Raw controller
+poses remain unchanged.
+
+## 7. Replay and Inspect Geometry
+
+```bash
+JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
+  --repo-id local/myrobot_validation \
+  --dataset-root outputs/myrobot_validation \
+  --episode 0 \
+  --robot myrobot \
+  --retarget-mode absolute-table
+```
+
+Before IK, replay reports:
+
+- source robot, gripper, controller, and mount;
+- selected calibration and SHA-256;
+- Controller-to-TCP distance for each side;
+- minimum calibrated TCP height;
+- minimum same-frame distance between both TCP trajectories;
+- selected `robot_from_table` translation.
+
+Calibration precedence is:
+
+1. explicit `--controller-tcp-calibration` override;
+2. an identity-bound calibration snapshot in the dataset;
+3. the source robot/device calibration configured in its robot YAML;
+4. legacy device fallback when no robot/tool identity exists.
+
+Legacy snapshots can be forced only for investigation with
+`--use-dataset-tcp-calibration`.
+
+## 8. Verify Simulation and IK
+
+```bash
+uv run pytest -q \
+  tests/retargeting/test_handumi_to_robot.py \
+  tests/scripts/test_replay_in_sim.py
+```
+
+Check the replay output for:
+
+- no missing mesh, joint, or TCP link;
+- initial TCP position error within tolerance;
+- acceptable per-frame IK position and rotation error;
+- the expected table contact height;
+- both arms reaching the intended shared task region.
+
+Large IK errors commonly indicate an incorrect TCP link, unreachable
+`robot_from_table`, invalid `home_q`, or unsuitable IK weights.
+
+## 9. Add Real Hardware Support
+
+Model replay does not automatically provide real hardware control.
+
+A new real robot currently requires an implementation equivalent to
+`src/handumi/real/piper_can.py` and integration in real teleoperation/setup.
+Keep vendor units, SDK objects, communication threads, and watchdog behavior
+inside that backend. Core retargeting and dataset code must continue using
+meters, radians, and pose7 quaternions in XYZW order.
+
+## Completion Checklist
+
+- [ ] Combined bimanual URDF loads.
+- [ ] Left and right TCP links are at the physical gripper tips.
+- [ ] `home_q` matches the actuated-joint count.
+- [ ] Robot name is registered.
+- [ ] Assets are included in packaging.
+- [ ] HandUMI gripper and controller mount are identified.
+- [ ] Left and right pivot calibrations pass residual checks.
+- [ ] Robot/device calibration is referenced from the robot YAML.
+- [ ] `robot_from_table` is measured and marked verified.
+- [ ] Validation recording contains identity-bound calibration metadata.
+- [ ] Replay diagnostics and IK errors are acceptable.
+- [ ] Real hardware backend exists if physical teleoperation is required.

@@ -534,7 +534,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Controller-to-HandUMI-TCP calibration to snapshot in dataset metadata. "
+            "Explicit Controller-to-HandUMI-TCP override. Defaults to the "
+            "robot/device setup and snapshots its tool identity in dataset metadata. "
             "Raw controller poses remain unchanged."
         ),
     )
@@ -615,20 +616,17 @@ def main() -> None:
     play_sounds = not args.no_sounds
 
     camera_names = _selected_camera_names(args)
-    calibration_path = (
-        args.controller_tcp_calibration
-        or calibration_path_for_device(args.device)
+    robot_metadata = _robot_metadata(args.robot)
+    calibration_metadata, calibration_source = _recording_tcp_calibration_metadata(
+        robot_metadata=robot_metadata,
+        device=args.device,
+        explicit_path=args.controller_tcp_calibration,
     )
-    calibration_metadata = controller_tcp_calibration_metadata(
-        calibration_path,
-        applied_to_state=False,
-    )
+    log.info("Controller->TCP setup: %s", calibration_source)
     try:
         spatial_session_metadata = session_calibration_metadata(args.session_calibration)
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise SystemExit(f"Invalid session calibration: {exc}") from exc
-    robot_metadata = _robot_metadata(args.robot)
-
     log.info("--- Tracking setup ---")
     calibration = ControllerTcpCalibration(
         left=IDENTITY_POSE7.astype(np.float32).copy(),
@@ -991,6 +989,62 @@ def _robot_metadata(name: str, config_dir: Path = ROBOT_CONFIG_DIR) -> dict[str,
         "sha256": hashlib.sha256(raw).hexdigest(),
         "configuration": config,
     }
+
+
+def _recording_tcp_calibration_metadata(
+    *,
+    robot_metadata: dict[str, object],
+    device: str,
+    explicit_path: Path | None,
+) -> tuple[dict[str, object], str]:
+    """Resolve and snapshot the robot/gripper TCP setup used for recording."""
+    robot = str(robot_metadata["name"])
+    configuration = robot_metadata.get("configuration")
+    if not isinstance(configuration, dict):
+        raise SystemExit(f"Robot {robot!r} has invalid configuration metadata.")
+
+    configured = configuration.get("controller_tcp_calibrations") or {}
+    configured_path_value = configured.get(device) if isinstance(configured, dict) else None
+    associated_with_robot_tool = configured_path_value is not None
+    if explicit_path is not None:
+        calibration_path = explicit_path
+        source = f"explicit {calibration_path} for {robot}/{device}"
+    elif configured_path_value is not None:
+        calibration_path = Path(str(configured_path_value))
+        source = f"configured {robot}/{device}: {calibration_path}"
+    else:
+        calibration_path = calibration_path_for_device(device)
+        source = f"legacy device fallback {device}: {calibration_path}"
+        log.warning(
+            "Robot %s has no controller_tcp_calibrations.%s entry; using %s "
+            "without treating it as a verified robot/gripper pairing.",
+            robot,
+            device,
+            calibration_path,
+        )
+
+    tool = configuration.get("handumi_tool") or {}
+    if not isinstance(tool, dict):
+        raise SystemExit(f"Robot {robot!r} handumi_tool must be a mapping.")
+    gripper = str(tool["gripper"]) if tool.get("gripper") else None
+    controller_mount = (
+        str(tool["controller_mount"]) if tool.get("controller_mount") else None
+    )
+    if associated_with_robot_tool and (gripper is None or controller_mount is None):
+        raise SystemExit(
+            f"Robot {robot!r} configures a {device} Controller->TCP calibration "
+            "but is missing handumi_tool.gripper or handumi_tool.controller_mount."
+        )
+
+    metadata = controller_tcp_calibration_metadata(
+        calibration_path,
+        applied_to_state=False,
+        source_robot=robot,
+        source_gripper=gripper if associated_with_robot_tool else None,
+        tracking_device=device,
+        controller_mount=controller_mount if associated_with_robot_tool else None,
+    )
+    return metadata, source
 
 
 def _validate_unique_camera_ids(

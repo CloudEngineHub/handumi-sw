@@ -169,9 +169,11 @@ Useful options:
   for only the workspace view, or `--only-left-camera` /
   `--only-right-camera` for one wrist view.
 - `--robot piper` records the intended embodiment and an exact snapshot of its
-  robot configuration. The raw trajectories remain robot-agnostic.
-- `--controller-tcp-calibration` selects the physical HandUMI mount offset to
-  snapshot in metadata; raw controller poses remain unchanged.
+  robot configuration. It also selects the configured Piper/gripper/controller
+  TCP setup. The raw trajectories remain robot-agnostic.
+- `--controller-tcp-calibration` explicitly overrides that robot/device setup;
+  the selected transform and physical-tool identity are snapshotted in metadata
+  while raw controller poses remain unchanged.
 - `--session-calibration` locks Meta Quest poses to the calibrated table frame
   and snapshots both spatial and session calibrations in dataset metadata.
 - `--clap-control` uses a right double clap to start or stop/save an episode;
@@ -295,12 +297,19 @@ TCP trajectories, prepares the robot at the first reachable pose before frame
 0, and preserves bimanual geometry. By default it aligns each tool orientation
 at the first frame while retaining subsequent wrist rotations. Use
 `--absolute-orientation table-absolute` only when HandUMI and robot TCP frame
-conventions were externally calibrated. Replay prefers a controller-to-TCP
-calibration assigned to the selected robot/device in `configs/robots/*.yaml`;
-Piper+Meta uses the validated `configs/calibration/meta_controller_tcp.yaml`
-even for datasets carrying an older snapshot. An explicit
-`--controller-tcp-calibration <path>` overrides it. Use
-`--use-dataset-tcp-calibration` only to reproduce the historical snapshot.
+conventions were externally calibrated. Controller-to-TCP resolution is:
+
+1. explicit `--controller-tcp-calibration <path>` override;
+2. identity-bound robot/gripper snapshot from the source dataset;
+3. source robot/device setup from `configs/robots/*.yaml`;
+4. device-only fallback for legacy datasets.
+
+Piper+Meta therefore uses the validated
+`configs/calibration/meta_controller_tcp.yaml` instead of an unidentified old
+snapshot, while new identity-bound snapshots remain reproducible. Use
+`--use-dataset-tcp-calibration` only to investigate a historical snapshot.
+Replay prints the selected source, SHA-256, Controller-to-TCP distances, minimum
+TCP height, bimanual separation, and deployment transform before solving IK.
 An optional `--scene <name>` only renders static context from
 `assets/scenes/<name>`; it does not alter replay targets or reconstruct objects.
 

@@ -48,6 +48,8 @@ class RobotConfig:
     ik_weights: KinematicsConfig
     gripper_max_width_m: float
     controller_tcp_calibrations: dict[str, Path]
+    handumi_gripper: str | None
+    handumi_controller_mount: str | None
     real: RobotRealConfig
 
 
@@ -160,6 +162,7 @@ def load_robot_config(name: str) -> RobotConfig:
         str(device): _resolve_path(value)
         for device, value in (data.get("controller_tcp_calibrations") or {}).items()
     }
+    handumi_tool = data.get("handumi_tool") or {}
     return RobotConfig(
         kind=str(data.get("kind") or name),
         urdf=urdf,
@@ -169,6 +172,14 @@ def load_robot_config(name: str) -> RobotConfig:
         home_q=home_q,
         gripper_max_width_m=float(data.get("gripper_max_width_m", 0.08)),
         controller_tcp_calibrations=controller_tcp_calibrations,
+        handumi_gripper=(
+            str(handumi_tool["gripper"]) if handumi_tool.get("gripper") else None
+        ),
+        handumi_controller_mount=(
+            str(handumi_tool["controller_mount"])
+            if handumi_tool.get("controller_mount")
+            else None
+        ),
         ik_weights=KinematicsConfig(
             pos_weight=float(weights.get("pos", 100.0)),
             ori_weight=float(weights.get("ori", 15.0)),

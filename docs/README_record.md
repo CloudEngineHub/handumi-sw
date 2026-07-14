@@ -68,7 +68,6 @@ handumi-record \
   --robot piper \
   --task "pick and place the blue cube in the white box" \
   --repo-id NONHUMAN-RESEARCH/test_handumi_pickandplace \
-  --controller-tcp-calibration configs/calibration/meta_controller_tcp.yaml \
   --session-calibration outputs/calibration/session.yaml \
   --wrist-cameras --workspace-camera \
   --clap-control \
@@ -76,6 +75,12 @@ handumi-record \
   --episode-time-s 60 \
   --push-to-hub
 ```
+
+`--robot piper --device meta` automatically selects the Piper gripper/mount
+calibration declared in `configs/robots/piper.yaml`. Use
+`--controller-tcp-calibration <path>` only to validate an explicit candidate.
+The selected robot, gripper, controller mount, transforms, and SHA-256 are
+snapshotted into dataset metadata.
 
 `--repo-id` is `account-or-organization/dataset-name`. The authenticated token
 must have write access to that namespace. Without `--push-to-hub`, the validated

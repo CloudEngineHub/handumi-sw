@@ -44,7 +44,11 @@ class SampleStateTest(unittest.TestCase):
 
 class LoadCalibrationTest(unittest.TestCase):
     def _args(self, path) -> argparse.Namespace:
-        return argparse.Namespace(controller_tcp_calibration=path, device="meta")
+        return argparse.Namespace(
+            controller_tcp_calibration=path,
+            device="meta",
+            robot="piper",
+        )
 
     def test_loads_repo_calibration(self):
         calibration = _load_calibration(
@@ -58,6 +62,14 @@ class LoadCalibrationTest(unittest.TestCase):
         calibration = _load_calibration(self._args(Path("/nonexistent/calib.yaml")))
         self.assertTrue(np.allclose(calibration.left[:3], 0.0))
         self.assertTrue(np.allclose(calibration.left[3:7], [0, 0, 0, 1]))
+
+    def test_default_comes_from_piper_robot_tool_setup(self):
+        calibration = _load_calibration(self._args(None))
+
+        np.testing.assert_allclose(
+            calibration.left[:3],
+            [0.12068467, 0.02142489, -0.21669616],
+        )
 
 
 class PiperTeleopSimConfigTest(unittest.TestCase):
@@ -99,6 +111,8 @@ class PiperTeleopSimConfigTest(unittest.TestCase):
         path = config.controller_tcp_calibrations["meta"]
         self.assertEqual(path.name, "meta_controller_tcp.yaml")
         self.assertTrue(path.is_file())
+        self.assertEqual(config.handumi_gripper, "piper_parallel_v1")
+        self.assertEqual(config.handumi_controller_mount, "handumi_v1")
 
 
 class TeleopSimStartTest(unittest.TestCase):

@@ -58,9 +58,18 @@ class CalibrationMetadataTest(unittest.TestCase):
             metadata = controller_tcp_calibration_metadata(
                 path,
                 applied_to_state=False,
+                source_robot="piper",
+                source_gripper="piper_parallel_v1",
+                tracking_device="meta",
+                controller_mount="handumi_v1",
             )
 
+        self.assertEqual(metadata["schema_version"], 2)
         self.assertFalse(metadata["applied_to_state"])
+        self.assertEqual(metadata["source_robot"], "piper")
+        self.assertEqual(metadata["source_gripper"], "piper_parallel_v1")
+        self.assertEqual(metadata["tracking_device"], "meta")
+        self.assertEqual(metadata["controller_mount"], "handumi_v1")
         self.assertEqual(len(metadata["sha256"]), 64)
         self.assertEqual(
             metadata["controller_to_gripper_tcp"]["left"]["position"],

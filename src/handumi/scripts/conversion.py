@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from dotenv import load_dotenv
@@ -40,12 +41,15 @@ import numpy as np
 
 from handumi.calibration.control_tcp import (
     DEFAULT_DEVICE as DEFAULT_CONTROLLER_DEVICE,
+    ControllerTcpCalibration,
     apply_controller_tcp_calibration,
     calibration_path_for_device,
+    controller_tcp_calibration_from_metadata,
     controller_tcp_calibration_metadata,
+    is_identity_bound_controller_tcp_metadata,
     load_controller_tcp_calibration,
 )
-from handumi.dataset.reader import dataset_root_from_repo_id
+from handumi.dataset.reader import dataset_root_from_repo_id, handumi_metadata
 from handumi.dataset.raw import (
     LEFT_GRIPPER_INDEX,
     LEFT_POSE_SLICE,
@@ -59,9 +63,16 @@ from handumi.retargeting.handumi_to_robot import (
     raw_state_robot_target_pose7,
     retarget_anchors_from_raw_state,
 )
-from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
+from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, load_robot_config
 
 load_dotenv()
+
+
+@dataclass(frozen=True)
+class ConversionTcpCalibrationSelection:
+    calibration: ControllerTcpCalibration
+    metadata: dict[str, Any]
+    source: str
 
 # ---------------------------------------------------------------------------
 # Argument parser
@@ -225,14 +236,17 @@ def build_parser() -> argparse.ArgumentParser:
     ik.add_argument(
         "--controller-device",
         choices=("pico", "meta"),
-        default=DEFAULT_CONTROLLER_DEVICE,
-        help="Controller calibration device used to derive the default YAML path.",
+        default=None,
+        help=(
+            "Override the source tracking device. Defaults to dataset metadata, "
+            f"then {DEFAULT_CONTROLLER_DEVICE!r} for legacy datasets."
+        ),
     )
     ik.add_argument(
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help="Defaults to configs/calibration/{controller_device}_controller_tcp.yaml.",
+        help="Override the source robot/device Controller->TCP calibration.",
     )
     ik.add_argument(
         "--raw-controller-debug",
@@ -302,10 +316,144 @@ def _load_source_tasks(source_root: Path) -> dict[int, str]:
     return task_map
 
 
+def _source_tcp_snapshot(source_info: dict[str, Any]) -> dict[str, Any] | None:
+    snapshot = handumi_metadata(source_info).get("controller_tcp_calibration")
+    if not isinstance(snapshot, dict) or snapshot.get("applied_to_state") is True:
+        return None
+    return dict(snapshot)
+
+
+def _resolve_conversion_tcp_calibration(
+    args: argparse.Namespace,
+    source_info: dict[str, Any],
+) -> ConversionTcpCalibrationSelection:
+    """Resolve the source robot-tool transform before converting to target joints."""
+    metadata = handumi_metadata(source_info)
+    snapshot = _source_tcp_snapshot(source_info)
+    target_robot = metadata.get("target_robot")
+    legacy_source_robot = (
+        str(target_robot.get("name"))
+        if isinstance(target_robot, dict) and target_robot.get("name")
+        else ""
+    )
+    source_robot = str(
+        (snapshot or {}).get("source_robot")
+        or legacy_source_robot
+        or args.embodiment
+    )
+    snapshot_device = str((snapshot or {}).get("tracking_device") or "")
+    if (
+        args.controller_device is not None
+        and snapshot is not None
+        and is_identity_bound_controller_tcp_metadata(snapshot)
+        and str(args.controller_device) != snapshot_device
+    ):
+        raise ValueError(
+            f"--controller-device {args.controller_device!r} conflicts with the "
+            f"identity-bound dataset snapshot ({snapshot_device!r})."
+        )
+    controller_device = str(
+        args.controller_device
+        or (snapshot or {}).get("tracking_device")
+        or metadata.get("recording_device")
+        or DEFAULT_CONTROLLER_DEVICE
+    )
+    args.controller_device = controller_device
+
+    try:
+        source_config = load_robot_config(source_robot)
+    except ValueError:
+        source_config = None
+    source_gripper = (
+        source_config.handumi_gripper if source_config is not None else None
+    )
+    controller_mount = (
+        source_config.handumi_controller_mount if source_config is not None else None
+    )
+
+    if args.controller_tcp_calibration is not None:
+        path = args.controller_tcp_calibration
+        calibration = load_controller_tcp_calibration(path)
+        output_metadata = controller_tcp_calibration_metadata(
+            path,
+            applied_to_state=True,
+            source_robot=source_robot,
+            source_gripper=source_gripper,
+            tracking_device=controller_device,
+            controller_mount=controller_mount,
+        )
+        return ConversionTcpCalibrationSelection(
+            calibration=calibration,
+            metadata=output_metadata,
+            source=f"explicit {path} sha256={output_metadata['sha256']}",
+        )
+
+    if snapshot is not None and is_identity_bound_controller_tcp_metadata(snapshot):
+        output_metadata = dict(snapshot)
+        output_metadata["applied_to_state"] = True
+        return ConversionTcpCalibrationSelection(
+            calibration=controller_tcp_calibration_from_metadata(snapshot),
+            metadata=output_metadata,
+            source=(
+                "dataset robot-tool snapshot "
+                f"{snapshot['source_robot']}/{snapshot['tracking_device']} "
+                f"sha256={snapshot.get('sha256', 'unknown')}"
+            ),
+        )
+
+    configured_path = (
+        source_config.controller_tcp_calibrations.get(controller_device)
+        if source_config is not None
+        else None
+    )
+    if configured_path is not None:
+        output_metadata = controller_tcp_calibration_metadata(
+            configured_path,
+            applied_to_state=True,
+            source_robot=source_robot,
+            source_gripper=source_gripper,
+            tracking_device=controller_device,
+            controller_mount=controller_mount,
+        )
+        return ConversionTcpCalibrationSelection(
+            calibration=load_controller_tcp_calibration(configured_path),
+            metadata=output_metadata,
+            source=(
+                f"configured {source_robot}/{controller_device}: {configured_path} "
+                f"sha256={output_metadata['sha256']}"
+            ),
+        )
+
+    if snapshot is not None:
+        output_metadata = dict(snapshot)
+        output_metadata["applied_to_state"] = True
+        return ConversionTcpCalibrationSelection(
+            calibration=controller_tcp_calibration_from_metadata(snapshot),
+            metadata=output_metadata,
+            source=f"legacy dataset metadata sha256={snapshot.get('sha256', 'unknown')}",
+        )
+
+    fallback_path = calibration_path_for_device(controller_device)
+    output_metadata = controller_tcp_calibration_metadata(
+        fallback_path,
+        applied_to_state=True,
+        source_robot=source_robot,
+        tracking_device=controller_device,
+    )
+    return ConversionTcpCalibrationSelection(
+        calibration=load_controller_tcp_calibration(fallback_path),
+        metadata=output_metadata,
+        source=(
+            f"legacy device fallback {controller_device}: {fallback_path} "
+            f"sha256={output_metadata['sha256']}"
+        ),
+    )
+
+
 def _apply_tcp_calibration_to_states(
     states: np.ndarray,
-    calibration_path: Path,
-) -> tuple[np.ndarray, Path | None]:
+    calibration: ControllerTcpCalibration,
+) -> np.ndarray:
     """Return raw states whose left/right pose slots are calibrated TCP poses."""
     raw_left: list[np.ndarray] = []
     raw_right: list[np.ndarray] = []
@@ -314,7 +462,6 @@ def _apply_tcp_calibration_to_states(
         raw_left.append(left)
         raw_right.append(right)
 
-    calibration = load_controller_tcp_calibration(calibration_path)
     left_tcp, right_tcp = apply_controller_tcp_calibration(
         np.asarray(raw_left, dtype=np.float32),
         np.asarray(raw_right, dtype=np.float32),
@@ -323,7 +470,7 @@ def _apply_tcp_calibration_to_states(
     calibrated = np.asarray(states, dtype=np.float32).copy()
     calibrated[:, LEFT_POSE_SLICE] = left_tcp
     calibrated[:, RIGHT_POSE_SLICE] = right_tcp
-    return calibrated, calibration.source
+    return calibrated
 
 
 def _solver_config(runtime, args: argparse.Namespace):
@@ -355,15 +502,24 @@ def solve_joint_trajectory_from_raw_states(
     *,
     args: argparse.Namespace,
     states: np.ndarray,
-) -> tuple[np.ndarray, Path | None]:
+) -> tuple[np.ndarray, str | None]:
     """Solve joints with the same retargeting loop used by replay_in_sim.py."""
     if args.raw_controller_debug:
         states_for_retarget = np.asarray(states, dtype=np.float32)
         calibration_source = None
     else:
-        states_for_retarget, calibration_source = _apply_tcp_calibration_to_states(
+        selection = getattr(args, "controller_tcp_selection", None)
+        if selection is None:
+            calibration = load_controller_tcp_calibration(
+                args.controller_tcp_calibration
+            )
+            calibration_source = str(args.controller_tcp_calibration)
+        else:
+            calibration = selection.calibration
+            calibration_source = selection.source
+        states_for_retarget = _apply_tcp_calibration_to_states(
             states,
-            args.controller_tcp_calibration,
+            calibration,
         )
 
     runtime = load_embodiment(args.embodiment)
@@ -589,10 +745,6 @@ def main() -> None:
         parser.error("Use only one of --left-only or --right-only.")
     if args.column is not None:
         args.source = args.column
-    if args.controller_tcp_calibration is None:
-        args.controller_tcp_calibration = calibration_path_for_device(
-            args.controller_device
-        )
 
     # ------------------------------------------------------------------
     # Resolve paths and names
@@ -622,6 +774,15 @@ def main() -> None:
         validate_raw_state_metadata(source_info)
     except ValueError as exc:
         parser.error(str(exc))
+    if not args.raw_controller_debug:
+        try:
+            args.controller_tcp_selection = _resolve_conversion_tcp_calibration(
+                args,
+                source_info,
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(f"Could not resolve source Controller->TCP calibration: {exc}")
+        print(f"Controller->TCP: {args.controller_tcp_selection.source}")
     total_source_episodes = int(source_info.get("total_episodes", 0))
     dataset_fps = int(source_info.get("fps", 30))
 
@@ -754,10 +915,7 @@ def main() -> None:
             "controller_device": args.controller_device,
             "raw_controller_debug": bool(args.raw_controller_debug),
             "controller_tcp_calibration": (
-                controller_tcp_calibration_metadata(
-                    args.controller_tcp_calibration,
-                    applied_to_state=True,
-                )
+                args.controller_tcp_selection.metadata
                 if not args.raw_controller_debug
                 else None
             ),

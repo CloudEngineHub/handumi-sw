@@ -2,6 +2,10 @@ import unittest
 
 import numpy as np
 
+from handumi.calibration.control_tcp import (
+    ControllerTcpCalibration,
+    apply_controller_tcp_calibration,
+)
 from handumi.retargeting.handumi_to_robot import (
     absolute_table_robot_target_pose7,
     local_frame_adapter,
@@ -16,6 +20,37 @@ from handumi.retargeting.handumi_to_robot import (
 
 
 class HandumiToRobotTest(unittest.TestCase):
+    def test_controller_tcp_then_table_robot_transform_composes_in_order(self):
+        half_turn = np.sqrt(0.5)
+        left_controller = np.array(
+            [[0.0, 0.0, 0.0, 0.0, 0.0, half_turn, half_turn]],
+            dtype=np.float32,
+        )
+        right_controller = np.array(
+            [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        )
+        calibration = ControllerTcpCalibration(
+            left=np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+            right=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        )
+        left_tcp, right_tcp = apply_controller_tcp_calibration(
+            left_controller,
+            right_controller,
+            calibration,
+        )
+        state = np.concatenate(
+            [left_tcp[0], right_tcp[0], np.zeros(2, dtype=np.float32)]
+        )
+        robot_from_table = np.array(
+            [0.3, 0.0, 0.2, 0.0, 0.0, 0.0, 1.0],
+            dtype=np.float32,
+        )
+
+        left_robot, _ = absolute_table_robot_target_pose7(state, robot_from_table)
+
+        np.testing.assert_allclose(left_robot[:3], [0.3, 0.1, 0.2], atol=1e-6)
+
     def test_orientation_adapter_preserves_position_and_aligns_rotation(self):
         source = np.array(
             [0.2, -0.1, 0.3, 0.0, 0.0, np.sqrt(0.5), np.sqrt(0.5)],

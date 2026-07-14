@@ -11,6 +11,7 @@ from handumi.scripts.teleop_real import (
     _clear_enabled_anchors,
     _enabled_tracking_ok,
     _has_enabled_anchors,
+    _load_required_calibration,
     _validate_feetech_ports_exist,
     _validate_args,
     parse_args,
@@ -32,6 +33,16 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         self.assertTrue(args.space_start)
         _validate_args(args)
+
+    def test_default_calibration_comes_from_piper_robot_tool_setup(self):
+        args = parse_args(["--device", "meta"])
+
+        calibration = _load_required_calibration(args)
+
+        np.testing.assert_allclose(
+            calibration.left[:3],
+            [0.12068467, 0.02142489, -0.21669616],
+        )
 
     def test_rejects_non_piper_robot(self):
         args = parse_args(["--device", "pico", "--robot", "axol", "--space-start"])

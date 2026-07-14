@@ -1,72 +1,146 @@
-# Controller → Gripper TCP Offset
+# Calibración Controller → TCP
 
-The fixed pose of the mounted controller relative to the gripper tip.
-Recordings store raw controller poses; this transform
-(`T_world_tcp = T_world_controller @ T_controller_tcp`) is applied
-post-hoc by replay/conversion. Stored per device in
-`configs/calibration/{meta,pico}_controller_tcp.yaml` (committed — it is a
-property of the mount design). Redo only when the 3D-printed mount changes.
-Robot configs may select a validated device calibration for replay. Piper
-selects the Meta calibration, which takes precedence over stale snapshots in
-older datasets; pass `--use-dataset-tcp-calibration` only for historical
-reproduction.
+Calcula la punta física del HandUMI desde el origen de tracking Meta:
 
-Gripper-width calibration is separate:
+```text
+T_world_tcp = T_world_controller @ T_controller_tcp
+```
+
+Piper usa `configs/calibration/meta_controller_tcp.yaml`. Recalibrar solo si
+cambia el montaje físico. El pivot calibra traslación; conservar los
+cuaterniones CAD actuales. La calibración de apertura está en
 [README_gripper_width.md](README_gripper_width.md).
 
-## Calibrate
+## 1. Preparación
 
-**Translation** — pivot method: pin the gripper TIP on a fixed point and
-rotate the whole device in all directions for ~25s while recording:
+- Headset y aplicación Meta conectados.
+- Ambos controladores encendidos, despiertos y visibles.
+- Punta apoyada en una hendidura o esquina firme.
+- Un directorio nuevo para cada intento.
 
-```bash
-handumi-record --device meta --skip-feetech \
-  --repo-id local/tcp_pivot_left --output-dir outputs/datasets/tcp_pivot_left \
-  --task "tcp pivot left" --num-episodes 1 --episode-time-s 25
+Durante los 25 segundos, mantener la punta inmóvil y mover el mango lentamente:
 
-handumi-calibrate-tcp-offset pivot --device meta --side left \
-  --parquet outputs/datasets/tcp_pivot_left/data/chunk-000/file-000.parquet \
-  --episode 0
-```
+1. Adelante y atrás.
+2. Izquierda y derecha.
+3. Giro horario y antihorario.
+4. Inclinaciones diagonales.
 
-RMS residual **< 5 mm** = good; higher = the tip slipped, re-record.
-Repeat per side.
-
-**Rotation** — record a short clip holding the gripper in a known world
-orientation, then:
+## 2. Izquierda
 
 ```bash
-handumi-calibrate-tcp-offset orient --device meta --side left \
-  --parquet <recording>.parquet --episode 0 \
-  --tcp-quat-world <qx> <qy> <qz> <qw>
+LEFT_RUN="outputs/tcp_pivot_left_$(date +%Y%m%d_%H%M%S)"
+uv run handumi-record \
+  --device meta \
+  --skip-feetech \
+  --only-left-camera \
+  --repo-id local/tcp_pivot_left \
+  --output-dir "$LEFT_RUN" \
+  --task "tcp pivot left" \
+  --num-episodes 1 \
+  --episode-time-s 25 \
+  --tracking-loss-timeout-s 3 \
+  --no-sounds
 ```
 
-Both subcommands write the YAML in `configs/calibration/` directly.
-Inspect it anytime:
+Presionar `ENTER` con la punta ya inmovilizada. Confirmar `Episode 1 saved`.
 
 ```bash
-handumi-calibrate-tcp-offset inspect --device meta
+uv run handumi-calibrate-tcp-offset pivot \
+  --device meta \
+  --side left \
+  --parquet "$LEFT_RUN/data/chunk-000/file-000.parquet" \
+  --episode 0 \
+  --output outputs/calibration/meta_controller_tcp_candidate.yaml
 ```
 
-## Verify
+## 3. Derecha
 
-Live (fastest): `handumi-teleop-sim --device meta` — the robot follows you in
-Viser through the same calibration + IK the replay uses.
+```bash
+RIGHT_RUN="outputs/tcp_pivot_right_$(date +%Y%m%d_%H%M%S)"
+uv run handumi-record \
+  --device meta \
+  --skip-feetech \
+  --only-right-camera \
+  --repo-id local/tcp_pivot_right \
+  --output-dir "$RIGHT_RUN" \
+  --task "tcp pivot right" \
+  --num-episodes 1 \
+  --episode-time-s 25 \
+  --tracking-loss-timeout-s 3 \
+  --no-sounds
+```
 
-- Wrist-only rotations about a still tip → the sim TCP stays nearly still
-  (sweeping arc = translation wrong).
-- A square drawn in the air → same square in sim, not rotated/sheared
-  (else rotation wrong).
+```bash
+uv run handumi-calibrate-tcp-offset pivot \
+  --device meta \
+  --side right \
+  --parquet "$RIGHT_RUN/data/chunk-000/file-000.parquet" \
+  --episode 0 \
+  --output outputs/calibration/meta_controller_tcp_candidate.yaml
+```
 
-Then confirm on a recording: `handumi-record` a short episode and
-`handumi-replay-in-sim` it — same checks, plus per-frame EE errors.
+El segundo cálculo conserva `left` y agrega `right`.
 
-## Troubleshooting
+## 4. Aceptación
 
-- **High pivot RMS** → tip slipped; use a dimple/cradle, re-record.
-- **Replay/live rotated or sheared** → rotation offset.
-- **Tip sweeps during wrist-only rotations** → translation offset.
-- **Widths stuck at 0 / not moving** → gripper calibration missing or
-  ports wrong ([README_gripper_width.md](README_gripper_width.md)).
-- **`trk=0` / frozen poses** → controllers asleep or out of the headset
-  cameras' view.
+```text
+RMS < 0.50 cm
+máximo < 1.00 cm recomendado
+condition < 500
+```
+
+RMS alto: punta deslizada. `condition` alto: poca variedad de giros. Repetir
+en otro directorio.
+
+```bash
+uv run handumi-calibrate-tcp-offset inspect \
+  outputs/calibration/meta_controller_tcp_candidate.yaml
+```
+
+## 5. Verificación
+
+```bash
+JAX_PLATFORMS=cpu uv run handumi-teleop-sim \
+  --device meta \
+  --robot piper \
+  --controller-tcp-calibration outputs/calibration/meta_controller_tcp_candidate.yaml
+```
+
+- Girar alrededor de una punta quieta: TCP simulado casi inmóvil.
+- Tocar el mismo punto con ambas puntas: estelas coincidentes.
+- Tocar la mesa: ambos TCP cerca de `z=0`.
+
+Replay de comprobación:
+
+```bash
+JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
+  --repo-id your-name/handumi-demo \
+  --dataset-root outputs/handumi-demo \
+  --episode 0 \
+  --robot piper \
+  --controller-tcp-calibration outputs/calibration/meta_controller_tcp_candidate.yaml
+```
+
+## 6. Promoción
+
+No copiar el candidato completo: el pivot no calibra orientación. Conservar los
+cuaterniones oficiales y proyectar las traslaciones medidas sobre la simetría:
+
+```text
+x = (left.x + right.x) / 2
+y = (left.y - right.y) / 2
+z = (left.z + right.z) / 2
+
+left.position  = [x,  y, z]
+right.position = [x, -y, z]
+```
+
+Actualizar solo `position` en
+`configs/calibration/meta_controller_tcp.yaml`. Piper la selecciona
+automáticamente. `--use-dataset-tcp-calibration` queda únicamente para
+reproducir un snapshot histórico.
+
+```bash
+uv run pytest -q tests/tracking/test_transforms.py \
+  tests/scripts/test_replay_in_sim.py
+```

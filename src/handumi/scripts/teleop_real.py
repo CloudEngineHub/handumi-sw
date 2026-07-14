@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 
 from handumi.calibration.control_tcp import (
-    calibration_path_for_device,
+    calibration_path_for_robot_device,
     load_controller_tcp_calibration,
 )
 from handumi.config import DEFAULT_RIG_CONFIG
@@ -102,7 +102,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help="Override configs/calibration/<device>_controller_tcp.yaml.",
+        help="Override the robot/device Controller->TCP setup calibration.",
     )
     parser.add_argument(
         "--rig-config",
@@ -195,7 +195,11 @@ def _validate_feetech_ports_exist(feetech_config) -> None:
 
 
 def _load_required_calibration(args: argparse.Namespace):
-    path = args.controller_tcp_calibration or calibration_path_for_device(args.device)
+    path, source = calibration_path_for_robot_device(
+        args.robot,
+        args.device,
+        explicit_path=args.controller_tcp_calibration,
+    )
     if not path.exists():
         raise SystemExit(
             f"Missing controller->TCP calibration: {path}\n"
@@ -203,7 +207,7 @@ def _load_required_calibration(args: argparse.Namespace):
             "--controller-tcp-calibration <path>."
         )
     calibration = load_controller_tcp_calibration(path)
-    log.info("controller->TCP calibration: %s", path)
+    log.info("controller->TCP calibration: %s", source)
     return calibration
 
 

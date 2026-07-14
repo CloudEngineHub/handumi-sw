@@ -35,6 +35,7 @@ LEGACY_POSE_COLUMNS = {
     "right": "observation.pico.right_controller_pose",
 }
 SIDES = ("left", "right")
+CONTROLLER_TCP_METADATA_SCHEMA_VERSION = 2
 
 
 def missing_dataset_message(path: Path = DEFAULT_PARQUET) -> str:
@@ -92,6 +93,50 @@ def calibration_path_for_device(device: str, root: Path = DEFAULT_CALIBRATION_DI
     if device not in SUPPORTED_DEVICES:
         raise SystemExit(f"Invalid device {device!r}; use one of {SUPPORTED_DEVICES}")
     return root / f"{device}_controller_tcp.yaml"
+
+
+def calibration_path_for_robot_device(
+    robot: str,
+    device: str,
+    *,
+    explicit_path: Path | None = None,
+) -> tuple[Path, str]:
+    """Resolve an explicit, robot-tool configured, then legacy device path."""
+    if explicit_path is not None:
+        return explicit_path, f"explicit {explicit_path}"
+
+    from handumi.robots.registry import load_robot_config
+
+    config = load_robot_config(robot)
+    configured = config.controller_tcp_calibrations.get(device)
+    if configured is not None:
+        return configured, f"configured {robot}/{device}: {configured}"
+    fallback = calibration_path_for_device(device)
+    return fallback, f"legacy device fallback {device}: {fallback}"
+
+
+def controller_tcp_calibration_sha256(path: Path) -> str:
+    """Return the exact calibration-file fingerprint used for provenance."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def is_identity_bound_controller_tcp_metadata(metadata: dict[str, Any]) -> bool:
+    """Whether a dataset snapshot names the complete source tool assembly."""
+    try:
+        schema_version = int(metadata.get("schema_version", 0))
+    except (TypeError, ValueError):
+        return False
+    required = (
+        "source_robot",
+        "source_gripper",
+        "tracking_device",
+        "controller_mount",
+    )
+    return (
+        schema_version >= CONTROLLER_TCP_METADATA_SCHEMA_VERSION
+        and metadata.get("applied_to_state") is not True
+        and all(str(metadata.get(key, "")).strip() for key in required)
+    )
 
 
 def _as_pose7(value: Any) -> np.ndarray:
@@ -261,19 +306,36 @@ def controller_tcp_calibration_metadata(
     path: Path,
     *,
     applied_to_state: bool,
+    source_robot: str | None = None,
+    source_gripper: str | None = None,
+    tracking_device: str | None = None,
+    controller_mount: str | None = None,
 ) -> dict[str, Any]:
-    """Return a self-contained, fingerprinted calibration record."""
+    """Return a self-contained, fingerprinted robot-tool calibration record.
+
+    Identity fields bind the transform to the physical assembly that produced
+    the demonstration. They are optional only for legacy conversion paths.
+    """
     calibration = load_controller_tcp_calibration(path)
     payload = calibration_to_dict(
         left=calibration.left,
         right=calibration.right,
     )["calibration"]
-    return {
+    metadata: dict[str, Any] = {
+        "schema_version": CONTROLLER_TCP_METADATA_SCHEMA_VERSION,
         "source_path": str(path),
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "sha256": controller_tcp_calibration_sha256(path),
         "applied_to_state": applied_to_state,
         **payload,
     }
+    identity = {
+        "source_robot": source_robot,
+        "source_gripper": source_gripper,
+        "tracking_device": tracking_device,
+        "controller_mount": controller_mount,
+    }
+    metadata.update({key: value for key, value in identity.items() if value})
+    return metadata
 
 
 def write_controller_tcp_calibration(

@@ -139,7 +139,9 @@ handumi-teleop-real --device pico --robot piper --skip-can-repair
 - `--space-start` lets the keyboard Space key start idle arms.
 - `--skip-feetech` disables gripper reading and double-clap start/reset; combine
   it with `--space-start`.
-- `--controller-tcp-calibration <path>` overrides the default calibration file.
+- Piper selects its device-specific calibration from
+  `configs/robots/piper.yaml`; `--controller-tcp-calibration <path>` explicitly
+  overrides that setup.
 - `--pico-wifi` uses PICO over Wi-Fi instead of USB/ADB.
 - `--skip-can-repair` leaves CAN setup to the user.
 

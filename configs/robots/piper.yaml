@@ -10,8 +10,14 @@ ee_links:
 # an artificial offset when the controller pose is anchored.
 home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0]
 gripper_max_width_m: 0.066
+# Physical tool assembly installed on HandUMI while demonstrating Piper tasks.
+# Changing this gripper or controller mount requires a new pivot calibration.
+handumi_tool:
+  gripper: piper_parallel_v1
+  controller_mount: handumi_v1
 # Validated physical HandUMI mount calibration for each tracking device.
-# Replay prefers this pairing over stale calibration snapshots in old datasets.
+# New identity-bound dataset snapshots take precedence; this pairing replaces
+# stale legacy snapshots that did not identify their robot/gripper assembly.
 controller_tcp_calibrations:
   meta: configs/calibration/meta_controller_tcp.yaml
 ik_weights:

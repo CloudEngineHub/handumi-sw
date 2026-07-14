@@ -158,8 +158,9 @@ For each side: enter the max opening in mm, open fully (ENTER), close fully
 (ENTER). This writes to the per-user cache
 (`~/.cache/handumi/calibration.yaml`), never to the repo.
 
-Setup done — head back to [README.md](README.md) to record. The other
-calibration (controller → gripper TCP, once per mount design) is in
+Setup done — head back to [README.md](../README.md) to record. The other
+calibration (controller → gripper TCP, once per robot/gripper/controller-mount
+assembly and side) is in
 [README_tcp_offset.md](README_tcp_offset.md).
 
 ## Troubleshooting

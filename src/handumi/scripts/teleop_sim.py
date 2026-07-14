@@ -58,7 +58,7 @@ from pathlib import Path
 import numpy as np
 
 from handumi.calibration.control_tcp import (
-    calibration_path_for_device,
+    calibration_path_for_robot_device,
     load_controller_tcp_calibration,
 )
 from handumi.cameras import (
@@ -144,7 +144,7 @@ def parse_args() -> argparse.Namespace:
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help="Override configs/calibration/<device>_controller_tcp.yaml.",
+        help="Override the robot/device Controller->TCP setup calibration.",
     )
 
     p.add_argument(
@@ -257,10 +257,14 @@ def _clear_enabled_anchors(
 def _load_calibration(args: argparse.Namespace):
     from handumi.calibration.control_tcp import ControllerTcpCalibration
 
-    path = args.controller_tcp_calibration or calibration_path_for_device(args.device)
+    path, source = calibration_path_for_robot_device(
+        args.robot,
+        args.device,
+        explicit_path=args.controller_tcp_calibration,
+    )
     if path.exists():
         calibration = load_controller_tcp_calibration(path)
-        log.info("controller->TCP calibration: %s", path)
+        log.info("controller->TCP calibration: %s", source)
         return calibration
     log.warning(
         "No calibration at %s — previewing RAW controller poses. "

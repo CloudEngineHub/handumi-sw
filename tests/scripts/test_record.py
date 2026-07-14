@@ -18,6 +18,7 @@ from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
     _default_output_dir,
     _EscapeStopListener,
+    _recording_tcp_calibration_metadata,
     _robot_metadata,
     _selected_camera_names,
     _validate_finalized_lerobot_dataset,
@@ -201,6 +202,60 @@ class RobotMetadataTest(unittest.TestCase):
         self.assertEqual(metadata["name"], "piper")
         self.assertEqual(metadata["configuration"]["kind"], "piper")
         self.assertEqual(len(metadata["sha256"]), 64)
+
+    def test_robot_tool_tcp_setup_is_snapshotted_with_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calibration = root / "piper_meta_tcp.yaml"
+            calibration.write_text(
+                """\
+calibration:
+  controller_to_gripper_tcp:
+    left:
+      position: [0.1, 0.0, -0.2]
+      quaternion: [0.0, 0.0, 0.0, 1.0]
+    right:
+      position: [0.1, 0.0, -0.2]
+      quaternion: [0.0, 0.0, 0.0, 1.0]
+"""
+            )
+            robot_metadata = {
+                "name": "piper",
+                "configuration": {
+                    "handumi_tool": {
+                        "gripper": "piper_parallel_v1",
+                        "controller_mount": "handumi_v1",
+                    },
+                    "controller_tcp_calibrations": {"meta": str(calibration)},
+                },
+            }
+
+            metadata, source = _recording_tcp_calibration_metadata(
+                robot_metadata=robot_metadata,
+                device="meta",
+                explicit_path=None,
+            )
+
+        self.assertEqual(metadata["schema_version"], 2)
+        self.assertEqual(metadata["source_robot"], "piper")
+        self.assertEqual(metadata["source_gripper"], "piper_parallel_v1")
+        self.assertEqual(metadata["tracking_device"], "meta")
+        self.assertEqual(metadata["controller_mount"], "handumi_v1")
+        self.assertIn("configured piper/meta", source)
+
+    def test_piper_meta_recording_uses_permanent_robot_tool_setup(self):
+        metadata, source = _recording_tcp_calibration_metadata(
+            robot_metadata=_robot_metadata("piper"),
+            device="meta",
+            explicit_path=None,
+        )
+
+        self.assertEqual(metadata["source_robot"], "piper")
+        self.assertEqual(metadata["source_gripper"], "piper_parallel_v1")
+        self.assertEqual(metadata["controller_mount"], "handumi_v1")
+        self.assertEqual(len(metadata["sha256"]), 64)
+        self.assertTrue(str(metadata["source_path"]).endswith("meta_controller_tcp.yaml"))
+        self.assertIn("configured piper/meta", source)
 
 
 class FinalizedDatasetGuaranteesTest(unittest.TestCase):

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +15,9 @@ from handumi.calibration.control_tcp import (
     ControllerTcpCalibration,
     apply_controller_tcp_calibration,
     calibration_path_for_device,
+    controller_tcp_calibration_sha256,
     controller_tcp_calibration_from_metadata,
+    is_identity_bound_controller_tcp_metadata,
     load_controller_tcp_calibration,
 )
 from handumi.dataset import (
@@ -44,7 +46,7 @@ from handumi.retargeting.handumi_to_robot import (
     retarget_anchors_from_raw_state,
 )
 from handumi.robots.kinematics import optimization_score_from_errors, pose_error_arrays
-from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
+from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, load_robot_config
 from handumi.robots.utils import pose_mul, quat_normalize
 
 DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/handumi-dataset-v2"
@@ -54,6 +56,17 @@ GRIPPER_NORMALIZED_KEYS = (
     "observation.feetech.left_normalized",
     "observation.feetech.right_normalized",
 )
+
+
+@dataclass(frozen=True)
+class TcpCalibrationSelection:
+    calibration: ControllerTcpCalibration
+    source: str
+    source_robot: str
+    source_gripper: str
+    tracking_device: str
+    controller_mount: str
+    trusted_dataset_snapshot: bool
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -127,8 +140,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--use-dataset-tcp-calibration",
         action="store_true",
         help=(
-            "Replay the historical controller->TCP snapshot embedded in the dataset "
-            "instead of the current robot/device configured calibration."
+            "Force the controller->TCP snapshot embedded in the dataset, including "
+            "unidentified legacy snapshots, instead of normal precedence."
         ),
     )
     parser.add_argument(
@@ -306,6 +319,14 @@ def _resolved_controller_device(
     source_info: dict[str, object],
 ) -> str:
     if args.controller_device is not None:
+        snapshot = _metadata_tcp_snapshot(source_info)
+        if snapshot is not None and _is_trusted_tcp_snapshot(snapshot):
+            recorded_device = str(snapshot["tracking_device"])
+            if str(args.controller_device) != recorded_device:
+                raise SystemExit(
+                    f"--controller-device {args.controller_device!r} conflicts with "
+                    f"the identity-bound dataset snapshot ({recorded_device!r})."
+                )
         return str(args.controller_device)
     recorded = handumi_metadata(source_info).get("recording_device")
     if recorded in ("pico", "meta"):
@@ -328,12 +349,61 @@ def _resolved_retarget_mode(
 def _metadata_tcp_calibration(
     source_info: dict[str, object],
 ) -> tuple[ControllerTcpCalibration, str] | None:
-    snapshot = handumi_metadata(source_info).get("controller_tcp_calibration")
+    snapshot = _metadata_tcp_snapshot(source_info)
     if not isinstance(snapshot, dict) or snapshot.get("applied_to_state") is True:
         return None
     calibration = controller_tcp_calibration_from_metadata(snapshot)
     sha256 = str(snapshot.get("sha256", "unknown"))
-    return calibration, f"dataset metadata sha256={sha256}"
+    identity = _metadata_tcp_identity(source_info)
+    if _is_trusted_tcp_snapshot(snapshot):
+        source = (
+            "dataset robot-tool snapshot "
+            f"{identity['source_robot']}/{identity['tracking_device']} "
+            f"gripper={identity['source_gripper']} "
+            f"mount={identity['controller_mount']} sha256={sha256}"
+        )
+    else:
+        source = f"legacy dataset metadata sha256={sha256}"
+    return calibration, source
+
+
+def _metadata_tcp_snapshot(source_info: dict[str, object]) -> dict[str, object] | None:
+    snapshot = handumi_metadata(source_info).get("controller_tcp_calibration")
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def _metadata_tcp_identity(source_info: dict[str, object]) -> dict[str, str]:
+    metadata = handumi_metadata(source_info)
+    snapshot = _metadata_tcp_snapshot(source_info) or {}
+    target_robot = metadata.get("target_robot")
+    target_robot_name = (
+        str(target_robot.get("name"))
+        if isinstance(target_robot, dict) and target_robot.get("name")
+        else ""
+    )
+    return {
+        "source_robot": str(snapshot.get("source_robot") or target_robot_name),
+        "source_gripper": str(snapshot.get("source_gripper") or "unknown"),
+        "tracking_device": str(
+            snapshot.get("tracking_device")
+            or metadata.get("recording_device")
+            or "unknown"
+        ),
+        "controller_mount": str(snapshot.get("controller_mount") or "unknown"),
+    }
+
+
+def _is_trusted_tcp_snapshot(snapshot: dict[str, object]) -> bool:
+    return is_identity_bound_controller_tcp_metadata(snapshot)
+
+
+def _source_robot_from_metadata(
+    source_info: dict[str, object],
+    *,
+    fallback: str,
+) -> str:
+    identity = _metadata_tcp_identity(source_info)
+    return identity["source_robot"] or fallback
 
 
 def _resolved_tcp_calibration(
@@ -343,8 +413,10 @@ def _resolved_tcp_calibration(
     robot: str,
     controller_device: str,
     configured_path: Path | None,
-) -> tuple[ControllerTcpCalibration, str]:
-    """Resolve TCP calibration with explicit, deployment, then historical precedence."""
+    configured_gripper: str | None = None,
+    configured_mount: str | None = None,
+) -> TcpCalibrationSelection:
+    """Resolve explicit, trusted dataset, robot setup, then legacy calibration."""
     explicit_path = args.controller_tcp_calibration
     use_dataset = bool(getattr(args, "use_dataset_tcp_calibration", False))
     if explicit_path is not None and use_dataset:
@@ -353,24 +425,86 @@ def _resolved_tcp_calibration(
             "are mutually exclusive."
         )
     if explicit_path is not None:
-        return load_controller_tcp_calibration(explicit_path), str(explicit_path)
+        calibration = load_controller_tcp_calibration(explicit_path)
+        sha256 = controller_tcp_calibration_sha256(explicit_path)
+        return TcpCalibrationSelection(
+            calibration=calibration,
+            source=f"explicit {explicit_path} sha256={sha256}",
+            source_robot=robot,
+            source_gripper=configured_gripper or "unknown",
+            tracking_device=controller_device,
+            controller_mount=configured_mount or "unknown",
+            trusted_dataset_snapshot=False,
+        )
 
+    snapshot = _metadata_tcp_snapshot(source_info)
     metadata_calibration = _metadata_tcp_calibration(source_info)
     if use_dataset:
         if metadata_calibration is None:
             raise SystemExit("Dataset has no unapplied controller->TCP calibration snapshot.")
-        return metadata_calibration
+        calibration, source = metadata_calibration
+        identity = _metadata_tcp_identity(source_info)
+        return TcpCalibrationSelection(
+            calibration=calibration,
+            source=source,
+            trusted_dataset_snapshot=bool(
+                snapshot is not None and _is_trusted_tcp_snapshot(snapshot)
+            ),
+            **identity,
+        )
+
+    if (
+        snapshot is not None
+        and _is_trusted_tcp_snapshot(snapshot)
+        and metadata_calibration is not None
+    ):
+        calibration, source = metadata_calibration
+        return TcpCalibrationSelection(
+            calibration=calibration,
+            source=source,
+            trusted_dataset_snapshot=True,
+            **_metadata_tcp_identity(source_info),
+        )
 
     if configured_path is not None:
         calibration = load_controller_tcp_calibration(configured_path)
-        source = f"configured {robot}/{controller_device}: {configured_path}"
-        return calibration, source
+        sha256 = controller_tcp_calibration_sha256(configured_path)
+        source = (
+            f"configured {robot}/{controller_device}: {configured_path} "
+            f"sha256={sha256}"
+        )
+        return TcpCalibrationSelection(
+            calibration=calibration,
+            source=source,
+            source_robot=robot,
+            source_gripper=configured_gripper or "unknown",
+            tracking_device=controller_device,
+            controller_mount=configured_mount or "unknown",
+            trusted_dataset_snapshot=False,
+        )
 
     if metadata_calibration is not None:
-        return metadata_calibration
+        calibration, source = metadata_calibration
+        identity = _metadata_tcp_identity(source_info)
+        return TcpCalibrationSelection(
+            calibration=calibration,
+            source=source,
+            trusted_dataset_snapshot=False,
+            **identity,
+        )
 
     fallback_path = calibration_path_for_device(controller_device)
-    return load_controller_tcp_calibration(fallback_path), str(fallback_path)
+    calibration = load_controller_tcp_calibration(fallback_path)
+    sha256 = controller_tcp_calibration_sha256(fallback_path)
+    return TcpCalibrationSelection(
+        calibration=calibration,
+        source=f"legacy device fallback {fallback_path} sha256={sha256}",
+        source_robot=robot,
+        source_gripper=configured_gripper or "unknown",
+        tracking_device=controller_device,
+        controller_mount=configured_mount or "unknown",
+        trusted_dataset_snapshot=False,
+    )
 
 
 def _pose7_from_mapping(value: object, *, name: str) -> np.ndarray:
@@ -451,6 +585,66 @@ def apply_tcp_calibration_to_states(
     )
 
 
+def _tcp_geometry_diagnostics(
+    calibration: ControllerTcpCalibration,
+    left_tcp_pose7: np.ndarray,
+    right_tcp_pose7: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Summarize source geometry before IK or deployment transforms are applied."""
+    left = np.asarray(left_tcp_pose7, dtype=np.float32)
+    right = np.asarray(right_tcp_pose7, dtype=np.float32)
+    if left.ndim != 2 or right.ndim != 2 or left.shape != right.shape:
+        raise ValueError("left/right calibrated TCP trajectories must have equal 2-D shapes")
+    if left.shape[1] < 3 or len(left) == 0:
+        raise ValueError("calibrated TCP trajectories must contain at least one position")
+    separation = np.linalg.norm(left[:, :3] - right[:, :3], axis=1)
+    return {
+        "offset_position_norm_m": np.asarray(
+            [
+                np.linalg.norm(calibration.left[:3]),
+                np.linalg.norm(calibration.right[:3]),
+            ],
+            dtype=np.float32,
+        ),
+        "workspace_min_z_m": np.asarray(
+            [np.min(left[:, 2]), np.min(right[:, 2])],
+            dtype=np.float32,
+        ),
+        "same_frame_min_separation_m": np.asarray(
+            [np.min(separation)],
+            dtype=np.float32,
+        ),
+    }
+
+
+def _print_tcp_geometry_diagnostics(
+    selection: TcpCalibrationSelection,
+    diagnostics: dict[str, np.ndarray],
+    *,
+    workspace: str,
+) -> None:
+    offsets = diagnostics["offset_position_norm_m"]
+    min_z = diagnostics["workspace_min_z_m"]
+    min_separation = float(diagnostics["same_frame_min_separation_m"][0])
+    print(
+        "[replay] source tool: "
+        f"robot={selection.source_robot} gripper={selection.source_gripper} "
+        f"device={selection.tracking_device} mount={selection.controller_mount}"
+    )
+    print(f"[replay] TCP calibration: {selection.source}")
+    print(
+        "[replay] Controller->TCP position distance: "
+        f"left={float(offsets[0]) * 100:.1f}cm "
+        f"right={float(offsets[1]) * 100:.1f}cm"
+    )
+    print(
+        f"[replay] calibrated TCP geometry in {workspace or 'tracking'} frame: "
+        f"z_min left={float(min_z[0]) * 100:.1f}cm "
+        f"right={float(min_z[1]) * 100:.1f}cm; "
+        f"same-frame separation_min={min_separation * 100:.1f}cm"
+    )
+
+
 def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     runtime = load_embodiment(args.robot)
     states, fps, source_info, recorded_gripper_openings = load_episode_states(args)
@@ -480,14 +674,45 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         left_tcp_arr = raw_left_controller_arr
         right_tcp_arr = raw_right_controller_arr
         calibration_source = None
+        tcp_selection = None
+        tcp_diagnostics: dict[str, np.ndarray] = {}
     else:
-        calibration, calibration_source_value = _resolved_tcp_calibration(
+        source_robot = _source_robot_from_metadata(
+            source_info,
+            fallback=args.robot,
+        )
+        source_config = None
+        try:
+            source_config = load_robot_config(source_robot)
+        except ValueError as exc:
+            snapshot = _metadata_tcp_snapshot(source_info)
+            can_replay_without_profile = (
+                args.controller_tcp_calibration is not None
+                or bool(getattr(args, "use_dataset_tcp_calibration", False))
+                or (snapshot is not None and _is_trusted_tcp_snapshot(snapshot))
+            )
+            if not can_replay_without_profile:
+                raise SystemExit(
+                    f"Cannot resolve source robot-tool calibration: {exc}"
+                ) from exc
+
+        tcp_selection = _resolved_tcp_calibration(
             args,
             source_info,
-            robot=args.robot,
+            robot=source_robot,
             controller_device=controller_device,
-            configured_path=runtime.config.controller_tcp_calibrations.get(
-                controller_device
+            configured_path=(
+                source_config.controller_tcp_calibrations.get(controller_device)
+                if source_config is not None
+                else None
+            ),
+            configured_gripper=(
+                source_config.handumi_gripper if source_config is not None else None
+            ),
+            configured_mount=(
+                source_config.handumi_controller_mount
+                if source_config is not None
+                else None
             ),
         )
         (
@@ -499,8 +724,18 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             calibration_source,
         ) = apply_tcp_calibration_to_states(
             states,
-            calibration,
-            calibration_source_value,
+            tcp_selection.calibration,
+            tcp_selection.source,
+        )
+        tcp_diagnostics = _tcp_geometry_diagnostics(
+            tcp_selection.calibration,
+            left_tcp_arr,
+            right_tcp_arr,
+        )
+        _print_tcp_geometry_diagnostics(
+            tcp_selection,
+            tcp_diagnostics,
+            workspace=str(source_metadata.get("tracking_workspace", "")),
         )
 
     frame_indices = list(range(args.start_frame, len(states), args.stride))
@@ -508,8 +743,8 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         frame_indices = frame_indices[: args.max_frames]
     if not frame_indices:
         raise ValueError("No frames selected for replay.")
-    if source_metadata.get("tracking_workspace") == "table":
-        minimum_tcp_z = float(np.min(states_for_retarget[:, [2, 9]]))
+    if source_metadata.get("tracking_workspace") == "table" and tcp_diagnostics:
+        minimum_tcp_z = float(np.min(tcp_diagnostics["workspace_min_z_m"]))
         if minimum_tcp_z > args.table_clearance_warning_m:
             print(
                 "[replay] warning: calibrated TCP never approaches table z=0 "
@@ -573,6 +808,11 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             DEFAULT_DEPLOYMENT_CALIBRATION_DIR / f"{args.robot}_table.yaml"
         )
         robot_from_table = load_robot_from_table(deployment_path)
+        print(
+            "[replay] robot_from_table: "
+            f"translation=[{robot_from_table[0]:.4f}, {robot_from_table[1]:.4f}, "
+            f"{robot_from_table[2]:.4f}]m source={deployment_path}"
+        )
         mapped_left, mapped_right = absolute_table_robot_target_pose7(
             states_for_retarget[frame_indices[0]],
             robot_from_table,
@@ -805,6 +1045,35 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         "frame_indices": np.asarray(frame_indices, dtype=np.int64),
         "fps": np.asarray([fps], dtype=np.float32),
         "controller_tcp_calibration": np.asarray([str(calibration_source or "")]),
+        "controller_tcp_source_robot": np.asarray(
+            [tcp_selection.source_robot if tcp_selection is not None else ""]
+        ),
+        "controller_tcp_source_gripper": np.asarray(
+            [tcp_selection.source_gripper if tcp_selection is not None else ""]
+        ),
+        "controller_tcp_controller_mount": np.asarray(
+            [tcp_selection.controller_mount if tcp_selection is not None else ""]
+        ),
+        "controller_tcp_trusted_dataset_snapshot": np.asarray(
+            [
+                tcp_selection.trusted_dataset_snapshot
+                if tcp_selection is not None
+                else False
+            ],
+            dtype=np.bool_,
+        ),
+        "controller_tcp_offset_position_norm_m": tcp_diagnostics.get(
+            "offset_position_norm_m",
+            np.asarray([], dtype=np.float32),
+        ),
+        "calibrated_tcp_workspace_min_z_m": tcp_diagnostics.get(
+            "workspace_min_z_m",
+            np.asarray([], dtype=np.float32),
+        ),
+        "calibrated_tcp_same_frame_min_separation_m": tcp_diagnostics.get(
+            "same_frame_min_separation_m",
+            np.asarray([], dtype=np.float32),
+        ),
         "controller_device": np.asarray([controller_device]),
         "tracking_workspace": np.asarray(
             [str(source_metadata.get("tracking_workspace", ""))]
