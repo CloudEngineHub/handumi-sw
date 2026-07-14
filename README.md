@@ -1,463 +1,71 @@
-# HandUMI Software
+# HandUMI
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://github.com/BrikHMP18/HandUMI"><img src="https://img.shields.io/badge/Hardware-HandUMI-4c8bf5.svg" alt="HandUMI hardware"></a>
+  <a href="https://robonet-ai.github.io/handumi-sw/"><img src="https://img.shields.io/badge/Docs-GitHub_Pages-22d3ee.svg" alt="Documentation"></a>
 </p>
 
-[HandUMI](https://github.com/BrikHMP18/HandUMI) is a hand-worn interface for
-collecting robot-free bimanual demonstrations. This repository contains its
-data-collection, calibration, validation, replay, and robot-retargeting
-software.
+[HandUMI](https://github.com/BrikHMP18/HandUMI) is a hand-worn interface for collecting robot-free bimanual demonstrations. This repository contains its synchronized data collection, calibration, validation, replay, teleoperation, and robot-retargeting software.
 
-It records synchronized [LeRobot](https://github.com/huggingface/lerobot)-compatible
-datasets:
+## Documentation
 
-```text
-left/right wrist cameras
-+ left/right Feetech gripper widths
-+ VR tracking poses (PICO / Meta Quest)
--> raw HandUMI LeRobot dataset
-```
+**[Read the HandUMI documentation](https://robonet-ai.github.io/handumi-sw/)**
 
-The usual flow is:
+- [Installation](docs/source/getting_started/installation.md)
+- [Setup and calibration](docs/source/setup.md)
+- [Record demonstrations](docs/source/record.md)
+- [Teleoperation](docs/source/teleoperation.md)
+- [Dataset pipeline](docs/source/workflows/datasets.md)
+- [Troubleshooting](docs/source/troubleshooting.md)
+- [Add a new robot embodiment](docs/source/development/new_embodiment.md)
 
-```text
-record data -> optionally push to Hugging Face -> convert to robot joints or replay in sim
-```
+## Quick Start
 
-The raw dataset remains robot-agnostic. Controller-to-TCP calibration and the
-intended robot configuration are fingerprinted in dataset metadata so later
-conversion remains reproducible.
-
-## Install
-
-Requires [uv](https://docs.astral.sh/uv/) and Python >= 3.12.
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.12 or newer.
 
 ```bash
-git clone https://github.com/leoperezz/handumi-sw.git
+git clone https://github.com/robonet-ai/handumi-sw.git
 cd handumi-sw
-bash install.sh              # PICO support included
-# bash install.sh --skip-xrt # Meta Quest only
+bash install.sh
 source .venv/bin/activate
-```
-
-Check:
-
-```bash
-python --version
 handumi-record --help
 ```
 
-`install.sh` creates the virtual environment, runs `uv sync`, and builds the
-XRoboToolkit SDK needed for PICO. Use `--skip-xrt` when the setup only uses
-Meta Quest. It also creates the ignored machine-local `configs/rig.yaml` from
-`configs/rig.example.yaml` without overwriting an existing rig configuration.
+PICO support is installed by default. Use `bash install.sh --skip-xrt` for a Meta Quest-only workstation.
 
-## Setup
-
-Before recording, configure and calibrate the hardware once:
-
-- [docs/README_hardware_setup.md](docs/README_hardware_setup.md) - guided
-  machine-local Piper CAN, Feetech, and PICO hardware setup.
-- [docs/README_gripper_width.md](docs/README_gripper_width.md) - Feetech/camera
-  ports, servo homing, and gripper-width calibration.
-- [docs/README_quest.md](docs/README_quest.md) - Meta Quest setup.
-- [docs/README_pico.md](docs/README_pico.md) - PICO setup.
-- [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
-- [docs/README_record.md](docs/README_record.md) - ChArUco calibration and episode recording.
-
-After spatial/session calibration, `handumi-calibrate-spatial visualize` opens
-the table-frame Rerun view with all three cameras and both controller trails.
-
-## Simulation Teleop (no recording)
-
-Run the app on your VR headset. Then run `handumi-teleop-sim` to open Viser
-with the robot IK-following your HandUMI motion in real time, plus a Rerun
-view of the calibrated TCP trails (`--no-rerun` to disable). Same calibration
-and retargeting the replay uses, so what you see is what a recording would
-replay — handy before a session to check tracking health and TCP calibration:
-
-```bash
-handumi-teleop-sim --device meta            # or --device pico
-
-# Add the context camera configured in configs/rig.yaml to Rerun.
-handumi-teleop-sim --device meta --context-camera
-```
-
-`--context-camera` (also `--workspace-camera`) loads the `workspace` camera
-ID from `--rig-config` and displays it between the left and right wrist views
-in Rerun. If overriding the IDs, pass all three in that order:
-`--cam-ids LEFT_ID WORKSPACE_ID RIGHT_ID`.
-
-Use `--no-viser` when you want no Viser server at all; the live cameras and
-tracking remain available in Rerun. `--no-browser` only suppresses opening the
-Viser URL automatically.
-
-Teleop controls: a **double clap on either gripper** (close/open twice) starts
-the enabled, tracked arms from home. While teleop is active, another double
-clap clears the anchors, parks the enabled arms at home, and waits for a fresh
-start. Pass `--space-start` if you also want the keyboard Space key to start
-idle arms at once. Spoken feedback; `--no-sounds` to mute. In the recorder
-below, right double clap starts or stops/saves; left double clap restarts.
-Without session calibration it recenters the HMD workspace; a calibrated table
-frame remains locked across episodes.
-
-For a full pick-and-place rehearsal with a task scene and real contact
-physics (MuJoCo: the cube is graspable, driven by your Feetech opening):
-
-```bash
-handumi-teleop-sim --device meta --scene cube_in_box
-```
-
-`--scene <name>` loads `assets/scenes/<name>/scene.xml`, placed per
-`configs/scene.yaml`. With a robot that declares an `mjcf` (Piper), the
-scene runs under MuJoCo contact physics; otherwise it renders statically.
-Optional `--anchor-z <m>`: anchor with the tip resting on the table to pin
-absolute heights to the sim table (see `handumi-teleop-sim --help`).
-
-## Real Robot Teleop
-
-Real hardware teleoperation is currently implemented for AgileX Piper. It uses
-the same tracking, TCP calibration, retargeting, and PyRoki IK path as
-`handumi-teleop-sim`, then streams Piper arm joint targets over CAN.
-
-Set up the hardware with
-[docs/README_piper_real_teleop.md](docs/README_piper_real_teleop.md), then run:
-
-```bash
-handumi-teleop-real --device pico --robot piper
-```
-
-The real Piper homes slowly first. A double clap starts enabled arms from home;
-while teleop is active, another double clap clears anchors and sends the Piper
-back home at the configured homing speed. Add `--space-start` when you want
-keyboard Space to start idle arms.
-
-## Record Data
-
-Use `handumi-record` ([src/handumi/scripts/record.py](src/handumi/scripts/record.py))
-with `--device pico` or `--device meta`.
-
-Example with the common flags:
-
-```bash
-handumi-record \
-  --device pico \
-  --repo-id your-name/handumi-demo \
-  --output-dir outputs/datasets/handumi-demo \
-  --task "pick and place with HandUMI" \
-  --robot piper \
-  --wrist-cameras --workspace-camera \
-  --rerun \
-  --num-episodes 10 \
-  --episode-time-s 30 \
-  --fps 30 \
-  --cam-width 640 \
-  --cam-height 480
-```
-
-For Meta Quest:
-
-```bash
-handumi-record \
-  --device meta \
-  --robot piper \
-  --task "pick the screws and place them in the controller" \
-  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
-  --wrist-cameras --workspace-camera \
-  --session-calibration outputs/calibration/session.yaml \
-  --rerun \
-  --clap-control \
-  --num-episodes 20 \
-  --episode-time-s 60 \
-  --push-to-hub
-```
-
-Useful options:
-
-- `--rig-config` selects the local camera, Feetech, and Meta Quest settings
-  (default: `configs/rig.yaml`).
-- No camera-selection flag records both wrist cameras. Use
-  `--wrist-cameras --workspace-camera` for all three, `--workspace-camera`
-  for only the workspace view, or `--only-left-camera` /
-  `--only-right-camera` for one wrist view.
-- `--robot piper` records the intended embodiment and an exact snapshot of its
-  robot configuration. It also selects the configured Piper/gripper/controller
-  TCP setup. The raw trajectories remain robot-agnostic.
-- `--controller-tcp-calibration` explicitly overrides that robot/device setup;
-  the selected transform and physical-tool identity are snapshotted in metadata
-  while raw controller poses remain unchanged.
-- `--session-calibration` locks Meta Quest poses to the calibrated table frame
-  and snapshots both spatial and session calibrations in dataset metadata.
-- `--clap-control` uses a right double clap to start or stop/save an episode;
-  a left double clap while recording restarts the same episode.
-- `--rerun` opens a live Rerun view of the same cameras being recorded, the
-  controller/TCP trails, gripper widths, and a persistent status panel
-  (`WAITING`, `RECORDING`, `RESTARTED`, `SAVED`, `DISCARDED`, or `STOPPED`).
-  It uses the recorder's existing camera, tracker, and Feetech connections—do
-  not start `handumi-teleop-sim` alongside it.
-- `Esc` (with `--clap-control`) or `Ctrl+C` discards an active partial episode
-  and keeps completed episodes.
-- `--push-to-hub` pushes the dataset after recording.
-- `--dataset-license` sets the dataset-card license (`other` by default); each
-  finalized dataset gets a local `README.md` and integrity validation before upload.
-- `--skip-feetech` records with zero-filled gripper widths.
-- `--pico-wifi` uses PICO over Wi-Fi instead of ADB.
-- `--manual-control` lets PICO buttons start/repeat/finish episodes.
-- `--tracking-loss-timeout-s` sets how long tracking may remain lost before
-  the current episode is discarded (default: 1 second).
-- `--sync-lag-s` selects samples from the native sensor buffers against one
-  shared target timestamp (default: 40 ms behind real time).
-- `--sensor-loss-timeout-s` discards an episode after sustained camera or
-  encoder health failure (default: 1 second).
-- `--no-video` stores image frames instead of encoded video.
-
-By default, each episode starts when you press ENTER in the terminal. Recording
-then waits for fresh, valid poses from both controllers. If either controller
-remains untracked beyond the loss timeout, the whole episode is discarded.
-Camera capture timestamps, Quest clock alignment, encoder timestamps, source
-age, synchronization error, and health flags are stored on every row.
-
-## Validate Recordings
-
-Run offline validation before training or conversion:
-
-```bash
-handumi-validate \
-  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
-  --root <local-output-dir>
-```
-
-This writes `meta/handumi_quality.json` without deleting raw data. It rejects
-episodes with excessive tracking loss, stale sensors, synchronization errors,
-source or pose freezes, implausible translation jumps, rotations over 90
-degrees per frame, or insufficient duration. Thresholds are in
-`configs/quality.yaml`; see [docs/README_quality.md](docs/README_quality.md).
-
-## Push to Hugging Face
-
-If the dataset was not recorded with `--push-to-hub`, upload the local folder:
-
-```bash
-huggingface-cli login
-huggingface-cli upload NONHUMAN-RESEARCH/pick_screws_handumi \
-  <local-output-dir> --repo-type dataset
-```
-
-## Convert to Robot Joints
-
-`handumi-convert`
-([src/handumi/scripts/conversion.py](src/handumi/scripts/conversion.py))
-converts the raw 16D HandUMI dataset into a robot-specific joint dataset using
-the robot configuration in `configs/robots/`.
-
-Conversion runs the same offline quality filter by default, skips rejected
-episodes, and writes `meta/source_quality.json` in the converted dataset.
-`--skip-quality-filter` is available only for debugging bad captures.
-
-Minimal conversion:
-
-```bash
-handumi-convert --repo-id NONHUMAN-RESEARCH/pick_screws_handumi
-```
-
-The default embodiment is `axol`. To convert for Piper, use:
-
-```bash
-handumi-convert \
-  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
-  --embodiment piper
-```
-
-Robot configs live in `configs/robots/`, for example
-[configs/robots/piper.yaml](configs/robots/piper.yaml) and
-[configs/robots/axol.yaml](configs/robots/axol.yaml).
-
-Add `--push-to-hub` to upload the converted dataset.
-
-## Replay in Simulation
-
-To inspect how a recorded dataset moves the robot in simulation with
-`handumi-replay-in-sim`
-([src/handumi/scripts/replay/replay_in_sim.py](src/handumi/scripts/replay/replay_in_sim.py)):
-
-```bash
-handumi-replay-in-sim --repo-id NONHUMAN-RESEARCH/pick_screws_handumi
-```
-
-This opens a local Viser viewer and saves a rollout under `outputs/replay_in_sim/`.
-The default robot is `piper`; choose another configured robot with `--robot axol`.
-Replay mode defaults to `auto`: datasets whose metadata declares
-`handumi.tracking_workspace: table` use one shared table-to-robot transform and
-therefore preserve the recorded bimanual separation. Datasets without a
-calibrated table frame fall back to local-relative retargeting.
-
-Headless example:
-
-```bash
-handumi-replay-in-sim \
-  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
-  --headless
-```
-
-For a table-calibrated dataset this geometry-preserving mode is selected
-automatically. The equivalent explicit command is:
-
-```bash
-handumi-replay-in-sim \
-  --repo-id NONHUMAN-RESEARCH/pick_screws_handumi \
-  --retarget-mode absolute-table \
-  --deployment-calibration configs/calibration/<robot>_table.yaml
-```
-
-`absolute-table` applies `robot_from_table` from the deployment YAML to both
-TCP trajectories, prepares the robot at the first reachable pose before frame
-0, and preserves bimanual geometry. By default it aligns each tool orientation
-at the first frame while retaining subsequent wrist rotations. Use
-`--absolute-orientation table-absolute` only when HandUMI and robot TCP frame
-conventions were externally calibrated. Controller-to-TCP resolution is:
-
-1. explicit `--controller-tcp-calibration <path>` override;
-2. identity-bound robot/gripper snapshot from the source dataset;
-3. source robot/device setup from `configs/robots/*.yaml`;
-4. device-only fallback for legacy datasets.
-
-Piper+Meta therefore uses the validated
-`configs/calibration/meta_controller_tcp.yaml` instead of an unidentified old
-snapshot, while new identity-bound snapshots remain reproducible. Use
-`--use-dataset-tcp-calibration` only to investigate a historical snapshot.
-Replay prints the selected source, SHA-256, Controller-to-TCP distances, minimum
-TCP height, bimanual separation, and deployment transform before solving IK.
-An optional `--scene <name>` only renders static context from
-`assets/scenes/<name>`; it does not alter replay targets or reconstruct objects.
-
-Use `--strict-ik` in validation runs to reject a replay when the configured
-position or rotation error thresholds are exceeded. The default viewer warns
-but still opens so unreachable segments can be inspected.
-
-## Train
-
-Training is out of scope for this repo — HandUMI produces LeRobot-compatible
-datasets, so train with [lerobot](https://github.com/huggingface/lerobot)
-directly (already a dependency):
-
-```bash
-lerobot-train \
-  --dataset.repo_id=<repo-id> --dataset.root=outputs/datasets/<name> \
-  --policy.type=act --wandb.enable=true
-```
-
-## Dataset Fields
-
-Raw HandUMI datasets include:
+## Core Workflow
 
 ```text
-observation.images.left_wrist
-observation.images.right_wrist
-observation.images.workspace            # when --workspace-camera is enabled
-observation.state                  # float32[16]
-action                             # float32[16]
-observation.feetech.left_ticks
-observation.feetech.right_ticks
-observation.feetech.left_width_mm
-observation.feetech.right_width_mm
-observation.feetech.left_normalized
-observation.feetech.right_normalized
-observation.feetech.sample_time_ns
-observation.feetech.healthy
-observation.tracking.left_tracked
-observation.tracking.right_tracked
-observation.tracking.left_device_controller_pose
-observation.tracking.right_device_controller_pose
-observation.tracking.device_hmd_pose
-observation.tracking.workspace_from_device_pose
-observation.tracking.aligned_time_ns
-observation.valid                 # named tracking-validity vector
-observation.sync.target_time_ns
-observation.sync.record_time_ns
-observation.camera.<name>.sample_time_ns
-observation.camera.<name>.healthy
+tracking + cameras + gripper widths
+                ↓
+     synchronized raw dataset
+                ↓
+       validate → convert/replay
 ```
 
-`observation.state[14]` and `observation.state[15]` are the left/right gripper
-widths in meters. `observation.state[0:14]` already contains the workspace
-controller poses, so they are not duplicated as tracking columns. Sensor
-enablement is dataset metadata. The normalized reader derives `enabled`,
-`age_ms`, `sync_error_ms`, and workspace HMD pose. HandUMI writes one
-`controller_raw_compact` layout inside the LeRobot v3 dataset format; older
-HandUMI layouts must be re-recorded.
+Raw captures remain robot-agnostic. Robot configuration and physical controller-to-TCP calibration are fingerprinted in dataset metadata so later conversion remains reproducible.
 
-## More Docs
+## Supported Scope
 
-- [docs/add_new_embodiment.md](docs/add_new_embodiment.md) - add a new robot
-  embodiment.
-- [docs/README_gripper_width.md](docs/README_gripper_width.md) - gripper and camera setup.
-- [docs/README_hardware_setup.md](docs/README_hardware_setup.md) - guided
-  machine-local hardware setup.
-- [docs/README_quest.md](docs/README_quest.md) - Meta Quest setup.
-- [docs/README_pico.md](docs/README_pico.md) - PICO setup.
-- [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
-- [docs/README_piper_real_teleop.md](docs/README_piper_real_teleop.md) -
-  Piper real-hardware setup and teleop.
-- [docs/README_quality.md](docs/README_quality.md) - synchronization, sensor health,
-  and offline episode filtering.
-- [docs/README_record.md](docs/README_record.md) - ChArUco calibration and episode recording.
-
-## References and Acknowledgments
-
-- UMI: Chi et al., "Universal Manipulation Interface: In-The-Wild Robot
-  Teaching Without In-The-Wild Robots," RSS 2024.
-  [Project](https://umi-gripper.github.io/) ·
-  [Paper](https://arxiv.org/abs/2402.10329)
-- YUBI: Ohkawa et al., "YUBI: Yielding Universal Bidigital Interface for
-  Bimanual Dexterous Manipulation at Scale," 2026.
-  [Project](https://yubi.airoa.io/) ·
-  [Paper](https://arxiv.org/abs/2606.10244) ·
-  [Software](https://github.com/airoa-org/yubi-sw)
-- Meta Quest support uses YubiQuestApp and adapts the yubi-sw protocol and
-  coordinate conversion. PICO support uses
-  [XRoboToolkit](https://github.com/XR-Robotics/XRoboToolkit-PC-Service-Pybind).
-- Core software: [LeRobot](https://github.com/huggingface/lerobot),
-  [PyRoki](https://github.com/chungmin99/pyroki),
-  [Viser](https://github.com/nerfstudio-project/viser),
-  [Rerun](https://github.com/rerun-io/rerun), and
-  [MuJoCo](https://github.com/google-deepmind/mujoco).
-- Robot assets: [Almond Axol](https://github.com/almond-bot/axol) and
-  [AgileX Piper ROS](https://github.com/agilexrobotics/piper_ros), both MIT.
-
-HandUMI is not affiliated with or endorsed by Meta, PICO, AgileX, AIRoA/YUBI,
-Almond, or Hugging Face. All trademarks belong to their respective owners.
-
-## Team
-
-- **Project lead and original hardware design:**
-  [BrikHMP18](https://github.com/BrikHMP18)
-- **Core software contributors:**
-  [Leonardo Pérez](https://github.com/leoperezz),
-  [Raul Bastidas](https://github.com/RAUL-BASTIDAS),
-  [Mitshell Ramos](https://github.com/mbrq13), and
-  [Alvaro Mendoza-Li](https://github.com/alvax64)
-- **Core hardware contributors:**
-  [Alvaro Mendoza-Li](https://github.com/alvax64) and
-  [Bryan Bastidas](https://github.com/BryanB72)
-- **IK and teleoperation explorations:**
-  Raul Bastidas developed the initial
-  [handumi-IK](https://github.com/raulbastidas1203/handumi-IK) experiments.
+- Tracking: PICO through XRoboToolkit and Meta Quest through
+  [HandUMI Quest App](https://github.com/robonet-ai/handumi-quest-app).
+- Robot models and simulation: Piper and Axol.
+- Real-robot teleoperation: AgileX Piper.
+- Dataset format: LeRobot-compatible synchronized captures.
 
 ## Safety
 
-This is research software. Preview and validate trajectories before commanding
-physical robots, keep an emergency stop accessible, and enforce the robot's
-joint, velocity, acceleration, workspace, and collision limits. The software
-is provided without warranty.
+This is research software. Preview and validate trajectories before commanding physical robots, keep an emergency stop accessible, and enforce the robot's joint, velocity, acceleration, workspace, and collision limits.
+
+## Credits
+
+HandUMI builds on UMI, HandUMI Quest App, XRoboToolkit, LeRobot, PyRoki,
+Viser, Rerun, and MuJoCo. See the [documentation](https://robonet-ai.github.io/handumi-sw/)
+and [LICENSE](LICENSE) for attribution and third-party licensing details.
+
+Project lead and original hardware design: [BrikHMP18](https://github.com/BrikHMP18). Core software contributors include [Leonardo Pérez](https://github.com/leoperezz), [Raul Bastidas](https://github.com/RAUL-BASTIDAS), [Mitshell Ramos](https://github.com/mbrq13), and [Alvaro Mendoza-Li](https://github.com/alvax64).
 
 ## License
 
-Original HandUMI software and documentation in this repository are licensed
-under the [Apache License 2.0](LICENSE). Third-party software and robot assets
-remain under their respective licenses, listed at the end of [LICENSE](LICENSE).
-
-This license does not automatically apply to datasets recorded with HandUMI,
-the separate HandUMI hardware repository, headset applications, robot
-firmware, or trademarks.
+Original HandUMI software and documentation are licensed under the [Apache License 2.0](LICENSE). Dataset, hardware, headset application, robot firmware, and trademark licenses remain separate.

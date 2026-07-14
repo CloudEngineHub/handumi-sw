@@ -1,5 +1,9 @@
 # Add a New Robot Embodiment
 
+The HandUMI recorder and raw dataset are robot agnostic. An embodiment is a
+downstream adapter for conversion, simulation, or physical deployment; adding
+one must not add vendor-specific requirements to HandUMI setup or recording.
+
 Current supported scope: fixed-base bimanual robots with one TCP and one
 parallel gripper per side.
 
@@ -80,8 +84,8 @@ actuated gripper joints.
 
 Existing references:
 
-- [Piper configuration](../configs/robots/piper.yaml)
-- [Axol configuration](../configs/robots/axol.yaml)
+- [Piper configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/piper.yaml)
+- [Axol configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/axol.yaml)
 
 ## 3. Register the Model Name
 
@@ -102,7 +106,8 @@ robot + gripper/tool + HandUMI mount + tracking controller + side
 Do not reuse Piper calibration for another robot or gripper.
 
 Mount the new robot's gripper/tool on HandUMI and perform the pivot procedure
-for both sides. Follow [README_tcp_offset.md](README_tcp_offset.md).
+for both sides. Follow
+[HandUMI Setup and Calibration](../setup.md).
 
 Write the final calibration to:
 

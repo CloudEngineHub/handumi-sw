@@ -36,8 +36,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/BrikHMP18/HandUMI"
-Repository = "https://github.com/leoperezz/handumi-sw"
-Issues = "https://github.com/leoperezz/handumi-sw/issues"
+Repository = "https://github.com/robonet-ai/handumi-sw"
+Issues = "https://github.com/robonet-ai/handumi-sw/issues"
 
 [project.optional-dependencies]
 piper = [

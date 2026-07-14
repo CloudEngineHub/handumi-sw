@@ -1251,7 +1251,7 @@ def _dataset_card_kwargs(task: str) -> dict[str, str]:
             "Bimanual HandUMI demonstration data recorded in LeRobot v3 format. "
             f"Task: {task}"
         ),
-        "url": "https://github.com/leoperezz/handumi-sw",
+        "url": "https://github.com/robonet-ai/handumi-sw",
     }
 
 
