@@ -527,8 +527,12 @@ class PicoRemoteVisionBridge:
                 (self.stream_host, self.stream_port), timeout=10
             )
         except OSError as exc:
-            log.error("Could not connect to PICO video decoder: %s", exc)
-            self.state.close()
+            if self.state.is_current(generation):
+                log.warning(
+                    "PICO video decoder is not ready yet: %s. Retrying in 1 s.",
+                    exc,
+                )
+                self.state.shutdown.wait(1.0)
             return
 
         command = build_camera_ffmpeg_command(
@@ -568,9 +572,17 @@ class PicoRemoteVisionBridge:
                 )
                 self.state.close()
         except (BrokenPipeError, ConnectionError, OSError) as exc:
-            if not self.state.shutdown.is_set():
-                log.warning("PICO video stream closed: %s", exc)
-            self.state.close()
+            if self.state.is_current(generation):
+                # XRoboToolkit briefly recreates its MediaCodec and TCP server
+                # after OPEN_CAMERA. The first forwarded connection can be
+                # closed during that hand-off; retain the request so the worker
+                # reconnects without requiring another press of Listen.
+                log.warning(
+                    "PICO video decoder restarted the stream: %s. "
+                    "Retrying in 1 s.",
+                    exc,
+                )
+                self.state.shutdown.wait(1.0)
         finally:
             stopped.set()
             stream_socket.close()

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from handumi.tracking.pico_vision import (
+    CameraRequest,
+    PicoRemoteVisionBridge,
     build_camera_ffmpeg_command,
     iter_annexb_units,
     parse_camera_request,
@@ -157,3 +159,22 @@ def test_camera_preflight_reports_busy_device_before_hardware_setup():
             raise AssertionError("busy camera was accepted")
 
     popen.assert_not_called()
+
+
+def test_decoder_connection_race_keeps_request_enabled_for_retry():
+    bridge = PicoRemoteVisionBridge(Path("/dev/video2"), setup_adb=False)
+    request = CameraRequest()
+    bridge.state.open(request)
+    _, generation = bridge.state.snapshot()
+
+    with (
+        mock.patch(
+            "handumi.tracking.pico_vision.socket.create_connection",
+            side_effect=ConnectionRefusedError("decoder restarting"),
+        ),
+        mock.patch.object(bridge.state.shutdown, "wait", return_value=False),
+    ):
+        bridge._stream_request(request, generation)
+
+    assert bridge.state.enabled.is_set()
+    assert bridge.state.is_current(generation)
