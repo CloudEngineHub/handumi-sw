@@ -25,6 +25,12 @@ from pathlib import Path
 
 import numpy as np
 
+from handumi.body import (
+    CanonicalBodyFrame,
+    canonical_body_features,
+    canonical_body_from_packet,
+    canonical_body_metadata,
+)
 from handumi.calibration.control_tcp import ControllerTcpCalibration
 from handumi.cameras import (
     build_camera_specs,
@@ -41,6 +47,7 @@ from handumi.dataset.raw import (
     raw_state_feature,
     raw_tracking_features,
 )
+from handumi.dataset.tracking_sidecar import TrackingSidecarWriter
 from handumi.feetech import (
     PORTS_PATH,
     FeetechGripperPair,
@@ -70,7 +77,7 @@ from handumi.tracking.pico import (
     wait_for_manual_start,
     wait_for_start_button,
 )
-from handumi.tracking.transforms import Pose
+from handumi.tracking.transforms import HandumiWorldCalibration, Pose
 from handumi.utils.speech import log_say
 
 logging.basicConfig(
@@ -86,6 +93,8 @@ def build_features(
     cam_width: int,
     cam_height: int,
     use_videos: bool,
+    *,
+    include_body: bool = True,
 ) -> dict:
     img_dtype = "video" if use_videos else "image"
     features: dict = {}
@@ -101,6 +110,8 @@ def build_features(
     features.update(raw_tracking_features())
     features.update(capture_timing_features())
     features.update(camera_health_features(cam_names))
+    if include_body:
+        features.update(canonical_body_features())
     return features
 
 
@@ -110,7 +121,12 @@ def _tuple_shape(feature: dict) -> dict:
     return feature
 
 
-def build_observation(sample: ControllerPairSample, widths: GripperWidths) -> dict:
+def build_observation(
+    sample: ControllerPairSample,
+    widths: GripperWidths,
+    *,
+    body_frame: CanonicalBodyFrame | None = None,
+) -> dict:
     left_controller = _pose_from_pose7(sample.left_controller_pose)
     right_controller = _pose_from_pose7(sample.right_controller_pose)
     state = pose_to_state_vector(
@@ -124,7 +140,7 @@ def build_observation(sample: ControllerPairSample, widths: GripperWidths) -> di
         for key, value in sample.tracking_frame().items()
         if "_tcp_pose" not in key
     }
-    return {
+    observation = {
         "observation.state": state,
         "action": state.copy(),
         "observation.feetech.left_ticks": np.array([widths.left_ticks], dtype=np.int64),
@@ -135,6 +151,9 @@ def build_observation(sample: ControllerPairSample, widths: GripperWidths) -> di
         "observation.feetech.right_normalized": np.array([widths.right_normalized], dtype=np.float32),
         **tracking_frame,
     }
+    if body_frame is not None:
+        observation.update(body_frame.observation())
+    return observation
 
 
 def _pose_from_pose7(pose7: np.ndarray) -> Pose:
@@ -197,6 +216,8 @@ def record_episode(
     camera_stale_timeout_s: float = 0.25,
     gripper_stale_timeout_s: float = 0.10,
     sensor_loss_timeout_s: float = 1.0,
+    tracking_sidecar: TrackingSidecarWriter | None = None,
+    world_calibration: HandumiWorldCalibration | None = None,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
     n_frames = 0
@@ -286,6 +307,13 @@ def record_episode(
         )
         widths = gripper_frame.widths
         sample = tracking_sample_at(tracker, target_time_ns)
+        body_frame = None
+        if tracking_sidecar is not None:
+            tracking_sidecar.drain_provider(tracker)
+            body_frame = canonical_body_from_packet(
+                tracking_sidecar.nearest_packet(target_time_ns),
+                calibration=world_calibration,
+            )
         sample_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
         tracking_sync_ok = bool(
             sample_time_ns > 0
@@ -342,7 +370,7 @@ def record_episode(
         dataset.add_frame(
             {
                 **cam_frames,
-                **build_observation(sample, widths),
+                **build_observation(sample, widths, body_frame=body_frame),
                 **gripper_frame.frame,
                 **capture_timing_frame(target_time_ns, tracking_now_ns),
                 **tracking_timing_frame(
@@ -531,6 +559,11 @@ def main() -> None:
         vcodec=args.vcodec,
     )
     log.info("Dataset created at: %s", dataset.root)
+    tracking_sidecar = TrackingSidecarWriter(dataset.root)
+    world_calibration = HandumiWorldCalibration.identity(
+        source_frame=f"{args.device}_right_handed_source",
+        qualified=args.device == "meta",
+    )
 
     stop_event = threading.Event()
 
@@ -584,40 +617,49 @@ def main() -> None:
 
             if not _wait_for_tracking(tracker, stop_event):
                 break
+            tracking_sidecar.start_episode(dataset.num_episodes)
             log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
-            n_frames, status = record_episode(
-                dataset=dataset,
-                cameras=cameras,
-                cam_names=cam_names,
-                tracker=tracker,
-                grippers=grippers,
-                episode_time_s=args.episode_time_s,
-                fps=args.fps,
-                task=args.task,
-                cam_width=args.cam_width,
-                cam_height=args.cam_height,
-                stop_event=stop_event,
-                manual_control=args.manual_control,
-                start_button=args.start_button,
-                repeat_button=args.repeat_button,
-                finish_button=args.finish_button,
-                start_threshold=args.start_threshold,
-                clap_detector=clap_detector,
-                tracking_loss_timeout_s=args.tracking_loss_timeout_s,
-                sync_lag_s=args.sync_lag_s,
-                max_sync_skew_s=args.max_sync_skew_s,
-                camera_stale_timeout_s=args.camera_stale_timeout_s,
-                gripper_stale_timeout_s=args.gripper_stale_timeout_s,
-                sensor_loss_timeout_s=args.sensor_loss_timeout_s,
-            )
+            try:
+                n_frames, status = record_episode(
+                    dataset=dataset,
+                    cameras=cameras,
+                    cam_names=cam_names,
+                    tracker=tracker,
+                    grippers=grippers,
+                    episode_time_s=args.episode_time_s,
+                    fps=args.fps,
+                    task=args.task,
+                    cam_width=args.cam_width,
+                    cam_height=args.cam_height,
+                    stop_event=stop_event,
+                    manual_control=args.manual_control,
+                    start_button=args.start_button,
+                    repeat_button=args.repeat_button,
+                    finish_button=args.finish_button,
+                    start_threshold=args.start_threshold,
+                    clap_detector=clap_detector,
+                    tracking_loss_timeout_s=args.tracking_loss_timeout_s,
+                    sync_lag_s=args.sync_lag_s,
+                    max_sync_skew_s=args.max_sync_skew_s,
+                    camera_stale_timeout_s=args.camera_stale_timeout_s,
+                    gripper_stale_timeout_s=args.gripper_stale_timeout_s,
+                    sensor_loss_timeout_s=args.sensor_loss_timeout_s,
+                    tracking_sidecar=tracking_sidecar,
+                    world_calibration=world_calibration,
+                )
+            except Exception:
+                tracking_sidecar.finish_episode(status="interrupted", provider=tracker)
+                raise
             if n_frames == 0 or status in {"repeat", "tracking_lost", "sensor_unhealthy"}:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
                 dataset.clear_episode_buffer()
+                tracking_sidecar.finish_episode(status="discarded", provider=tracker)
                 if status == "finish":
                     break
                 continue
             dataset.save_episode()
+            tracking_sidecar.finish_episode(status="recorded", provider=tracker)
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
             log_say(f"Episode {ep_num} saved, {n_frames} frames", play_sounds=play_sounds)
@@ -638,6 +680,13 @@ def main() -> None:
                 "max_sync_skew_s": args.max_sync_skew_s,
                 "camera_stale_timeout_s": args.camera_stale_timeout_s,
                 "gripper_stale_timeout_s": args.gripper_stale_timeout_s,
+                **canonical_body_metadata(
+                    transforms=[world_calibration.metadata()]
+                ),
+                "tracking_sidecar": {
+                    "schema": "handumi_tracking_sidecar_v1",
+                    "manifest": "raw/tracking/manifest.json",
+                },
             },
         )
         if args.push_to_hub:
@@ -647,6 +696,7 @@ def main() -> None:
             grippers.stop()
         if gripper_pair is not None:
             gripper_pair.close()
+        tracking_sidecar.close()
         tracker.stop()
         log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
         log_say("Exiting", play_sounds=play_sounds)
@@ -675,6 +725,7 @@ def build_tracker(
         sync_port=args.sync_port if args.sync_port is not None else base.sync_port,
         connect_retry_s=base.connect_retry_s,
         frame_stale_timeout_s=base.frame_stale_timeout_s,
+        packet_queue_size=base.packet_queue_size,
     )
     return MetaQuestTrackingProvider(
         config=config, calibration=calibration, reset_workspace_on_x=reset_workspace_on_x

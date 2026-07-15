@@ -10,6 +10,8 @@ import time
 
 import numpy as np
 
+from handumi.body.model import PICO_BODY_24_SOURCE_NAMES
+
 from handumi.calibration.control_tcp import ControllerTcpCalibration
 from handumi.tracking.base import (
     ControllerPairSample,
@@ -477,6 +479,7 @@ def _pico_joint_samples(
     values: object,
     *,
     prefix: str,
+    names: tuple[str, ...] | None = None,
     provenance: SourceProvenance = SourceProvenance.PLATFORM_ESTIMATED,
 ) -> tuple[JointSample, ...]:
     array = np.asarray(values, dtype=np.float32)
@@ -492,7 +495,11 @@ def _pico_joint_samples(
         joints.append(
             JointSample(
                 index=index,
-                name=f"{prefix}_{index}",
+                name=(
+                    names[index]
+                    if names is not None and index < len(names)
+                    else f"{prefix}_{index}"
+                ),
                 pose=tuple(float(item) for item in pose),  # type: ignore[arg-type]
                 location_flags=flags,
                 tracking_state=(
@@ -521,6 +528,7 @@ def tracking_packet_from_pico_frame(
     body_joints = _pico_joint_samples(
         frame.get("observation.pico.body_joints_pose", np.zeros((0, 7))),
         prefix="PicoBody",
+        names=PICO_BODY_24_SOURCE_NAMES,
     )
     body_active = any(
         joint.tracking_state is not JointTrackingState.INVALID for joint in body_joints

@@ -253,6 +253,7 @@ class TrackingFreshnessTest(unittest.TestCase):
         self.assertIs(receiver.latest(), existing)
         self.assertEqual(raw_messages[0][0], manifest)
         self.assertEqual(raw_messages[0][2], 1)
+        self.assertEqual(receiver.session_manifest(), manifest)
 
 
 class PipeSmokeTest(unittest.TestCase):

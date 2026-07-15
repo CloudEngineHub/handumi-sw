@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from handumi.dataset.writer import info_path, load_info
+from handumi.dataset.tracking_sidecar import discover_tracking_sidecars
 
 
 def dataset_root_from_repo_id(repo_id: str) -> Path:
@@ -54,12 +55,21 @@ class DatasetDownloadResult:
 
 
 @dataclass(frozen=True)
+class CanonicalBodyEpisode:
+    """Optional aligned canonical body columns for one episode."""
+
+    signals: dict[str, np.ndarray]
+
+
+@dataclass(frozen=True)
 class RawEpisode:
     """Raw state plus scalar capture diagnostics for one episode."""
 
     states: np.ndarray
     fps: float
     signals: dict[str, np.ndarray]
+    body: CanonicalBodyEpisode | None = None
+    tracking_sidecars: tuple[Path, ...] = ()
 
 
 def handumi_metadata(info_or_root: dict[str, Any] | str | Path) -> dict[str, Any]:
@@ -156,7 +166,29 @@ def load_raw_episode(
         if values.ndim == 2 and values.shape[1] == 1:
             values = values[:, 0]
         signals[key] = values
-    return RawEpisode(states=states, fps=fps, signals=signals)
+    body_signals: dict[str, np.ndarray] = {}
+    for key in table.column_names:
+        if key.startswith("observation.body."):
+            values = table[key]
+            array = np.asarray(values)
+            if array.dtype == object:
+                array = np.stack(
+                    [
+                        np.asarray(value.tolist() if hasattr(value, "tolist") else value)
+                        for value in values
+                    ]
+                )
+            body_signals[key] = array
+    body = CanonicalBodyEpisode(body_signals) if body_signals else None
+    dataset_root = Path(getattr(dataset, "root", root or "."))
+    sidecars = discover_tracking_sidecars(dataset_root, episode_index=episode)
+    return RawEpisode(
+        states=states,
+        fps=fps,
+        signals=signals,
+        body=body,
+        tracking_sidecars=sidecars,
+    )
 
 
 def _parse_episodes(value: str | None) -> list[int] | None:

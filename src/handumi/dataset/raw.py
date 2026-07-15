@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from handumi.body.model import canonical_body_features
+
 if TYPE_CHECKING:
     from handumi.tracking.transforms import Pose
 
@@ -171,6 +173,7 @@ __all__ = [
     "RIGHT_POSE_SLICE",
     "pose_to_state_vector",
     "camera_health_features",
+    "canonical_body_features",
     "capture_timing_features",
     "feetech_features",
     "pose7_feature",

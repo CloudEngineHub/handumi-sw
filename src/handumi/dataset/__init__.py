@@ -4,6 +4,7 @@ from typing import Any
 
 from handumi.dataset.reader import (
     DatasetDownloadResult,
+    CanonicalBodyEpisode,
     RawEpisode,
     download_dataset,
     ensure_metadata,
@@ -58,17 +59,35 @@ def __getattr__(name: str) -> Any:
         )
 
         return locals()[name]
+    sidecar_symbols = {
+        "SIDECAR_SCHEMA",
+        "TrackingSidecarWriter",
+        "discover_tracking_sidecars",
+        "load_tracking_sidecar",
+    }
+    if name in sidecar_symbols:
+        from handumi.dataset.tracking_sidecar import (
+            SIDECAR_SCHEMA,
+            TrackingSidecarWriter,
+            discover_tracking_sidecars,
+            load_tracking_sidecar,
+        )
+
+        return locals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
     "CHUNKS_SIZE",
     "DatasetDownloadResult",
+    "CanonicalBodyEpisode",
     "DatasetRef",
     "EpisodeResult",
     "EpisodeQualityConfig",
     "EpisodeQualityReport",
     "RawEpisode",
+    "SIDECAR_SCHEMA",
+    "TrackingSidecarWriter",
     "QualityFinding",
     "HANDUMI_RAW_IMAGE_KEYS",
     "HANDUMI_RAW_STATE_NAMES",
@@ -80,12 +99,14 @@ __all__ = [
     "chunk_and_file",
     "dataset_root_from_repo_id",
     "download_dataset",
+    "discover_tracking_sidecars",
     "ensure_metadata",
     "handumi_metadata",
     "info_path",
     "load_info",
     "load_raw_episode_states",
     "load_raw_episode",
+    "load_tracking_sidecar",
     "open_dataset",
     "raw_state_feature",
     "recording_device",

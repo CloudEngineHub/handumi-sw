@@ -156,6 +156,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Convert rejected episodes too; intended only for debugging.",
     )
+    ds.add_argument(
+        "--preserve-body",
+        action="store_true",
+        help=(
+            "Copy optional aligned observation.body fields and native tracking "
+            "sidecars into the derived dataset."
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Embodiment selection
@@ -525,6 +533,7 @@ def process_episode(
     episode_index: int,
     source_episode_index: int,
     task: str,
+    optional_observations: dict[str, np.ndarray] | None = None,
 ) -> Any:
     """Run IK retargeting on one episode and return an EpisodeResult.
 
@@ -566,6 +575,10 @@ def process_episode(
         actions=actions,
         task=task,
         source_episode_index=source_episode_index,
+        optional_observations={
+            key: np.asarray(value)[:-1]
+            for key, value in (optional_observations or {}).items()
+        },
     )
 
 
@@ -734,6 +747,11 @@ def main() -> None:
                 episode_index=len(results),
                 source_episode_index=src_idx,
                 task=task,
+                optional_observations=(
+                    raw_episode.body.signals
+                    if args.preserve_body and raw_episode.body is not None
+                    else None
+                ),
             )
         except Exception as exc:
             print(f"  SKIP: IK failed — {exc}", file=sys.stderr)
@@ -784,7 +802,9 @@ def main() -> None:
                 not report.accepted for report in quality_reports
             ),
             "converted_source_episodes": len(results),
+            "body_observations_preserved": bool(args.preserve_body),
         },
+        preserve_tracking_sidecars=bool(args.preserve_body),
     )
 
     if quality_config is not None:

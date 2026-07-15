@@ -12,6 +12,7 @@ from handumi.scripts.record import (
     _default_output_dir,
     _wait_for_clap,
     _wait_for_tracking,
+    build_features,
     build_observation,
     record_episode,
 )
@@ -249,6 +250,12 @@ class RecordEpisodeTrackingGateTest(unittest.TestCase):
 
 
 class BuildObservationTest(unittest.TestCase):
+    def test_features_add_body_without_changing_legacy_state_width(self):
+        features = build_features([], 64, 48, False)
+        self.assertEqual(features["observation.state"]["shape"], (16,))
+        self.assertEqual(features["action"]["shape"], (16,))
+        self.assertEqual(features["observation.body.joint_pose"]["shape"], (25, 7))
+
     def test_state_carries_widths_and_tracking_frame(self):
         obs = build_observation(ControllerPairSample.empty("meta"), _widths(11.0, 22.0))
         state = obs["observation.state"]

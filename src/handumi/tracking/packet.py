@@ -208,17 +208,30 @@ class PacketTrackingProvider(Protocol):
     def drain_packets(self, max_packets: int | None = None) -> list[TrackingPacket]: ...
 
 
-def _json_safe(value: Any) -> Any:
+def json_safe_value(value: Any) -> Any:
     """Convert packet source values, including numpy-like arrays, to JSON values."""
     if isinstance(value, Mapping):
-        return {str(key): _json_safe(item) for key, item in value.items()}
+        return {str(key): json_safe_value(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
-        return [_json_safe(item) for item in value]
+        return [json_safe_value(item) for item in value]
     if hasattr(value, "tolist"):
-        return _json_safe(value.tolist())
+        return json_safe_value(value.tolist())
     if hasattr(value, "item"):
         return value.item()
     return value
+
+
+def tracking_packet_record(packet: TrackingPacket) -> dict[str, Any]:
+    """Return the stable lossless JSON envelope for one normalized packet."""
+    return {
+        "recordType": "tracking_packet",
+        "schema": packet.schema,
+        "sourceSchemaVersion": packet.source_schema_version,
+        "source": packet.source,
+        "sequence": packet.sequence,
+        "receiveSequence": packet.receive_sequence,
+        "packet": json_safe_value(packet.raw),
+    }
 
 
 def drain_tracking_packets_jsonl(
@@ -234,15 +247,7 @@ def drain_tracking_packets_jsonl(
     """
     packets = stream.drain(max_packets)
     for packet in packets:
-        record = {
-            "recordType": "tracking_packet",
-            "schema": packet.schema,
-            "sourceSchemaVersion": packet.source_schema_version,
-            "source": packet.source,
-            "sequence": packet.sequence,
-            "receiveSequence": packet.receive_sequence,
-            "packet": _json_safe(packet.raw),
-        }
+        record = tracking_packet_record(packet)
         output.write(json.dumps(record, separators=(",", ":"), allow_nan=True))
         output.write("\n")
     return len(packets)
@@ -276,4 +281,6 @@ __all__ = [
     "TrackingTimestamps",
     "tracking_state_from_location_flags",
     "drain_tracking_packets_jsonl",
+    "json_safe_value",
+    "tracking_packet_record",
 ]

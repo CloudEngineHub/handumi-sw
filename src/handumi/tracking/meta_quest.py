@@ -577,6 +577,7 @@ class MetaQuestReceiver:
         self._packet_diagnostics: Counter[str] = Counter()
         self._last_source_sequence: int | None = None
         self._connection_count = 0
+        self._session_manifest: dict[str, Any] | None = None
 
     # ---------- public API ----------
 
@@ -612,6 +613,14 @@ class MetaQuestReceiver:
 
     def drain_packets(self, max_packets: int | None = None) -> list[TrackingPacket]:
         return self._packet_stream.drain(max_packets)
+
+    def session_manifest(self) -> dict[str, Any] | None:
+        with self._lock:
+            return (
+                None
+                if self._session_manifest is None
+                else dict(self._session_manifest)
+            )
 
     def packet_stream_stats(self) -> dict[str, Any]:
         stats = self._packet_stream.stats()
@@ -790,6 +799,8 @@ class MetaQuestReceiver:
         # sample. Do not briefly replace the production provider's latest frame
         # with a synthetic all-zero controller sample.
         if msg.get("packetType") == "session_manifest":
+            with self._lock:
+                self._session_manifest = dict(msg)
             return
 
         raw_schema = msg.get("schema")
@@ -952,6 +963,9 @@ class MetaQuestTrackingProvider:
 
     def drain_packets(self, max_packets: int | None = None) -> list[TrackingPacket]:
         return self.receiver.drain_packets(max_packets)
+
+    def session_manifest(self) -> dict[str, Any] | None:
+        return self.receiver.session_manifest()
 
     def sample_at(self, target_time_ns: int) -> ControllerPairSample:
         """Return the native Quest frame nearest a synchronized row target."""
