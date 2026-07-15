@@ -17,6 +17,9 @@ def test_openarm_uses_configured_arm_joint_names_not_left_prefix():
 
     assert runtime.arm_joint_names("left")[0] == "openarm_left_joint1"
     assert runtime.arm_joint_names("right")[0] == "openarm_right_joint1"
+    assert runtime.config.default_home_pose == "down"
+    assert runtime.home_q("hands_up")[3] == 2.0
+    assert runtime.home_q("hands_up")[10] == 2.0
     assert runtime.arm_joint_indices("left") == [0, 1, 2, 3, 4, 5, 6, 14]
     assert runtime.arm_joint_indices("right") == [7, 8, 9, 10, 11, 12, 13, 15]
     assert runtime.finger_joints == {

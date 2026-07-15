@@ -1,5 +1,7 @@
 # Teleoperation
 
+Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
+
 HandUMI produces robot-agnostic live tool poses and gripper commands. A selected
 robot embodiment maps those commands to its kinematics; an optional hardware
 backend sends them to physical arms. Start in simulation and connect hardware
@@ -20,6 +22,13 @@ For example, using the currently supported Piper embodiment:
 TARGET_ROBOT=piper
 handumi-teleop-sim --device meta --robot "$TARGET_ROBOT" \
   --workspace-camera --space-start
+```
+
+OpenArm v1 uses the same command and defaults to its official arms-down pose:
+
+```bash
+handumi-teleop-sim --device meta --robot openarmv1 \
+  --home-pose down --space-start
 ```
 
 This opens Viser with the live robot model and Rerun with tracking, TCP trails,
@@ -61,6 +70,7 @@ handumi-teleop-real --robot <robot_id> --device meta
 | Robot | Live simulation | Real teleoperation |
 | --- | --- | --- |
 | Piper | Supported | Supported |
+| OpenArm v1 | Supported (kinematic) | Supported through optional `openarm` backend |
 | Axol | Supported | Not yet supported |
 | Other robots | Add an embodiment | Add a hardware backend |
 
@@ -91,6 +101,39 @@ Start with one arm:
 ```bash
 handumi-teleop-real --device meta --robot piper --side right
 ```
+:::
+
+:::{dropdown} Example: physical OpenArm v1
+
+Install the optional backend, then run the guided setup:
+
+```bash
+uv sync --extra openarm
+handumi-setup-hardware --robot openarmv1 --device meta
+```
+
+The wizard maps the right adapter first and the left adapter second, configures
+CAN-FD at 1/5 Mbps, verifies J1-J8 without enabling motion, reuses complete
+Feetech calibration, and refuses real teleoperation until the OpenArm tool has
+an explicit Controller-to-TCP calibration.
+
+Mechanical-zero calibration moves the robot and is never automatic:
+
+```bash
+handumi-setup-hardware --robot openarmv1 --device meta \
+  --skip-can-map --skip-feetech-map --skip-feetech-calibration \
+  --calibrate-openarm-zero
+```
+
+Start with the right arm, reduced translation, and the down pose:
+
+```bash
+handumi-teleop-real --device meta --robot openarmv1 --side right \
+  --home-pose down --translation-scale 0.25 --space-start
+```
+
+Validate right, then left, before using `--side both`. Keep the emergency stop
+reachable during every moving step.
 :::
 
 ### Safety

@@ -30,10 +30,32 @@ arms:
     gripper_joints:
       - name: openarm_right_finger_joint1
         open: 0.044
-home_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+default_home_pose: down
+home_poses:
+  down: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  hands_up: [0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.044, 0.044]
 gripper_max_width_m: 0.088
+handumi_tool:
+  gripper: openarm_parallel_v1
+  controller_mount: handumi_v1
+controller_tcp_calibrations:
+  meta: configs/calibration/openarmv1_meta_controller_tcp.yaml
+  pico: configs/calibration/openarmv1_pico_controller_tcp.yaml
 ik_weights:
   pos: 100.0
   ori: 10.0
   rest: 3.0
   max_joint_delta: 0.08726646
+real:
+  backend: openarm_can
+  control:
+    command_rate_hz: 100
+    max_joint_speed_rad_s: 1.0
+    home_max_joint_speed_rad_s: 0.25
+    home_timeout_s: 30
+    home_tolerance_rad: 0.05
+    watchdog_timeout_s: 0.15
+    following_error_rad: 0.35
+  gains:
+    kp: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+    kd: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
