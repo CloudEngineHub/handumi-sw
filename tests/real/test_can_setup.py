@@ -257,20 +257,14 @@ class CanWizardTest(unittest.TestCase):
             sysfs.mkdir()
             rig = root / "rig.yaml"
             rig.write_text("robots: {}\n", encoding="utf-8")
-            connect_count = 0
-
-            def input_fn(prompt):
-                nonlocal connect_count
-                if "Conecta" in prompt:
-                    name = "can0" if connect_count == 0 else "can1"
-                    (sysfs / name).mkdir()
-                    connect_count += 1
-                return ""
+            (sysfs / "can0").mkdir()
+            (sysfs / "can1").mkdir()
+            answers = iter(("can0", "can1"))
 
             left, right = run_openarm_can_wizard(
                 rig_config=rig,
                 sys_class_net=sysfs,
-                input_fn=input_fn,
+                input_fn=lambda _prompt: next(answers),
                 poll_s=0.001,
             )
             data = yaml.safe_load(rig.read_text(encoding="utf-8"))
@@ -282,6 +276,24 @@ class CanWizardTest(unittest.TestCase):
         self.assertEqual(can["dbitrate"], 5_000_000)
         self.assertTrue(can["left_usb_path"].endswith("/can1"))
         self.assertTrue(can["right_usb_path"].endswith("/can0"))
+
+    def test_openarm_wizard_rejects_duplicate_side_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sysfs = root / "net"
+            sysfs.mkdir()
+            (sysfs / "can0").mkdir()
+            (sysfs / "can1").mkdir()
+            rig = root / "rig.yaml"
+            rig.write_text("robots: {}\n", encoding="utf-8")
+            answers = iter(("can0", "can0"))
+
+            with self.assertRaisesRegex(SystemExit, "different CAN interfaces"):
+                run_openarm_can_wizard(
+                    rig_config=rig,
+                    sys_class_net=sysfs,
+                    input_fn=lambda _prompt: next(answers),
+                )
 
     def test_fd_validation_accepts_matching_links_without_sudo(self):
         calls = []

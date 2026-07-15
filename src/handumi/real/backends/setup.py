@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +30,7 @@ class RobotSetupOptions:
     skip_can_repair: bool
     skip_motor_check: bool
     calibrate_openarm_zero: bool
+    openarm_zero_side: str = "both"
 
 
 def run_robot_setup(options: RobotSetupOptions) -> None:
@@ -89,35 +91,75 @@ def _setup_openarm(options: RobotSetupOptions) -> None:
             ("right", settings.right_port),
             ("left", settings.left_port),
         ):
-            _check_openarm_motors(side, port)
+            _check_openarm_motors(
+                side,
+                port,
+                bitrate=settings.bitrate,
+                dbitrate=settings.dbitrate,
+            )
     if options.calibrate_openarm_zero:
-        answer = input(
-            "OpenArm zero calibration moves joints to mechanical stops. "
-            "Workspace clear and emergency stop ready? Type CALIBRATE: "
-        ).strip()
-        if answer != "CALIBRATE":
+        calibration_executable = shutil.which(
+            "openarm-can-zero-position-calibration"
+        )
+        if calibration_executable is None:
             raise SystemExit(
-                "OpenArm zero calibration cancelled; no motors were moved."
+                "Missing openarm-can-zero-position-calibration from OpenArm v1."
             )
-        for side, port in (
-            ("right_arm", settings.right_port),
-            ("left_arm", settings.left_port),
-        ):
-            subprocess.run(
-                [
-                    "openarm-can-zero-position-calibration",
-                    "--canport",
-                    port,
-                    "--arm-side",
-                    side,
-                    "--robot-version",
-                    "v1",
-                ],
-                check=True,
+        selected = {
+            "right": ("right_arm", settings.right_port),
+            "left": ("left_arm", settings.left_port),
+        }
+        if options.openarm_zero_side not in (*selected, "both"):
+            raise SystemExit(
+                f"Invalid OpenArm zero side: {options.openarm_zero_side}."
+            )
+        side_names = (
+            ("right", "left")
+            if options.openarm_zero_side == "both"
+            else (options.openarm_zero_side,)
+        )
+        for side_name in side_names:
+            side, port = selected[side_name]
+            answer = input(
+                f"OpenArm {side_name} zero calibration on {port} moves joints "
+                "to mechanical stops. Put this arm near the official zero pose, "
+                "close its gripper, clear the workspace, and hold the emergency "
+                f"stop ready. Type CALIBRATE {side_name.upper()}: "
+            ).strip()
+            if answer != f"CALIBRATE {side_name.upper()}":
+                raise SystemExit(
+                    f"OpenArm {side_name} zero calibration cancelled; "
+                    "no calibration command was sent for this arm."
+                )
+            _run_openarm_zero_calibration(
+                side,
+                port,
+                executable=calibration_executable,
             )
 
 
-def _check_openarm_motors(side: str, port: str) -> None:
+def _run_openarm_zero_calibration(side: str, port: str, *, executable: str) -> None:
+    """Run the OpenArm v1 calibrator inside the active HandUMI Python env."""
+    subprocess.run(
+        [
+            sys.executable,
+            executable,
+            "--canport",
+            port,
+            "--arm-side",
+            side,
+        ],
+        check=True,
+    )
+
+
+def _check_openarm_motors(
+    side: str,
+    port: str,
+    *,
+    bitrate: int = 1_000_000,
+    dbitrate: int = 5_000_000,
+) -> None:
     """Read motor parameters without enabling motor output."""
     result = subprocess.run(
         [
@@ -137,9 +179,15 @@ def _check_openarm_motors(side: str, port: str) -> None:
     responded = output.count("MOTOR ID:")
     if result.returncode != 0 or responded != 8 or "NO RESPONSE FROM MOTOR" in output:
         raise SystemExit(
-            f"OpenArm {side} motor diagnostic failed on {port}:\n{output.strip()}"
+            f"OpenArm {side} motor diagnostic failed on {port}. Expected J1-J8 "
+            f"at CAN-FD {bitrate}/{dbitrate} bps. Restore the interface with "
+            f"'openarm-can-cli -i {port} can_configure' and verify motor IDs and "
+            f"internal 5 Mbps baudrate before retrying:\n{output.strip()}"
         )
-    print(f"OpenArm {side}: J1-J8 responded on {port}.")
+    print(
+        f"OpenArm {side}: J1-J8 responded on {port} at configured "
+        f"CAN-FD {bitrate}/{dbitrate} bps."
+    )
 
 
 __all__ = ["RobotSetupOptions", "run_robot_setup"]

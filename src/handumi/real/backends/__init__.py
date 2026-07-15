@@ -48,13 +48,20 @@ def make_real_backend(
 
         return PiperBackend.from_config(runtime=runtime, rig_config=rig_config)
     if robot == "openarmv1":
+        from handumi.real.openarm_gripper_calibration import (
+            user_openarm_gripper_calibration_path,
+        )
         from handumi.real.openarm_can import (
             OpenArmCanEnvironment,
             load_openarm_settings,
         )
 
         return OpenArmCanEnvironment(
-            load_openarm_settings(rig_config, runtime.config.real_options),
+            load_openarm_settings(
+                rig_config,
+                runtime.config.real_options,
+                user_openarm_gripper_calibration_path(),
+            ),
             active_sides=active_sides,
             joint_limits={
                 name: (float(lower), float(upper))

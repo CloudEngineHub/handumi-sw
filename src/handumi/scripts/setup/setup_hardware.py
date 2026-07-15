@@ -34,7 +34,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--skip-can-map",
         action="store_true",
-        help="Use the existing rig.yaml CAN mapping instead of the replug wizard.",
+        help="Use the existing rig.yaml CAN mapping instead of the mapping wizard.",
     )
     parser.add_argument(
         "--skip-can-repair",
@@ -84,6 +84,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Explicitly run the vendor mechanical-zero procedure; this moves motors.",
     )
+    parser.add_argument(
+        "--openarm-zero-side",
+        choices=("right", "left", "both"),
+        default="both",
+        help="Arm(s) calibrated by --calibrate-openarm-zero (default: both).",
+    )
+    parser.add_argument(
+        "--controller-tcp-calibration",
+        type=Path,
+        default=None,
+        help="Use an explicit Controller-to-TCP calibration file.",
+    )
     return parser.parse_args(argv)
 
 
@@ -105,6 +117,7 @@ def main() -> None:
             skip_can_repair=args.skip_can_repair,
             skip_motor_check=args.skip_openarm_motor_check,
             calibrate_openarm_zero=args.calibrate_openarm_zero,
+            openarm_zero_side=args.openarm_zero_side,
         )
     )
     print("Robot transport listo.")
@@ -124,7 +137,10 @@ def main() -> None:
         prepare_pico_adb_session(skip_adb_check=args.skip_adb_check)
         print("PICO listo por USB/ADB.")
 
-    calibration_path, _ = calibration_path_for_robot_device(args.robot, args.device)
+    default_calibration_path, _ = calibration_path_for_robot_device(
+        args.robot, args.device
+    )
+    calibration_path = args.controller_tcp_calibration or default_calibration_path
     if not calibration_path.exists():
         raise SystemExit(
             f"Missing {args.robot}/{args.device} Controller->TCP calibration: "
@@ -133,7 +149,10 @@ def main() -> None:
         )
 
     print("\nSetup listo. Prueba:")
-    print(f"  uv run handumi-teleop-real --device {args.device} --robot {args.robot}")
+    command = f"  uv run handumi-teleop-real --device {args.device} --robot {args.robot}"
+    if args.controller_tcp_calibration is not None:
+        command += f" --controller-tcp-calibration {calibration_path}"
+    print(command)
 
 
 def ensure_feetech_calibration(args: argparse.Namespace) -> None:

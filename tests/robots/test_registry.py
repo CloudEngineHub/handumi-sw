@@ -17,15 +17,29 @@ def test_openarm_uses_configured_arm_joint_names_not_left_prefix():
 
     assert runtime.arm_joint_names("left")[0] == "openarm_left_joint1"
     assert runtime.arm_joint_names("right")[0] == "openarm_right_joint1"
-    assert runtime.config.default_home_pose == "down"
-    assert runtime.home_q("hands_up")[3] == 2.0
-    assert runtime.home_q("hands_up")[10] == 2.0
     assert runtime.arm_joint_indices("left") == [0, 1, 2, 3, 4, 5, 6, 14]
     assert runtime.arm_joint_indices("right") == [7, 8, 9, 10, 11, 12, 13, 15]
     assert runtime.finger_joints == {
         "left": (GripperJointRuntime(index=14, closed_value=0.0, open_value=0.044),),
         "right": (GripperJointRuntime(index=15, closed_value=0.0, open_value=0.044),),
     }
+
+
+def test_openarm_arms_90_pose_bends_both_elbows_to_pi_over_two():
+    runtime = load_embodiment("openarmv1")
+    q = runtime.home_q("arms_90")
+
+    np.testing.assert_allclose(q[[3, 10]], np.pi / 2, atol=1e-7)
+    assert runtime.config.default_home_pose == "forward_open"
+
+
+def test_openarm_default_pose_spreads_elbows_and_points_tcp_forward():
+    runtime = load_embodiment("openarmv1")
+    q = runtime.home_q()
+
+    np.testing.assert_allclose(q[[1, 8]], [-np.pi / 9, np.pi / 9], atol=1e-7)
+    np.testing.assert_allclose(q[[2, 9]], [np.pi / 18, -np.pi / 18], atol=1e-7)
+    np.testing.assert_allclose(q[[3, 10]], np.pi / 2, atol=1e-7)
 
 
 def test_openarm_gripper_mapping_matches_urdf_convention():

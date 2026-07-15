@@ -472,23 +472,31 @@ def run_openarm_can_wizard(
     input_fn: Callable[[str], str] = input,
     print_fn: Callable[[str], None] = print,
 ) -> tuple[str, str]:
-    print_fn("OpenArm CAN wizard: map RIGHT first, then LEFT.")
-    right = identify_can_by_replug(
-        "derecho",
-        sys_class_net=sys_class_net,
-        timeout_s=timeout_s,
-        poll_s=poll_s,
-        input_fn=input_fn,
-        print_fn=print_fn,
+    del timeout_s, poll_s  # OpenArm uses explicit can0/can1 selection, not replugging.
+    interfaces = list_can_interfaces(sys_class_net)
+    if len(interfaces) < 2:
+        detected = ", ".join(interfaces) or "ninguna"
+        raise SystemExit(
+            "OpenArm v1 requires two CAN interfaces. "
+            f"Detected: {detected}. Connect both adapters and retry."
+        )
+    choices = ", ".join(interfaces)
+    print_fn(f"OpenArm CAN interfaces detected: {choices}")
+    print_fn(
+        "Indica el lado fisico de cada interfaz; no es necesario desconectar cables."
     )
-    left = identify_can_by_replug(
-        "izquierdo",
-        sys_class_net=sys_class_net,
-        timeout_s=timeout_s,
-        poll_s=poll_s,
-        input_fn=input_fn,
-        print_fn=print_fn,
-    )
+    right_name = input_fn(f"CAN del brazo derecho ({choices}): ").strip()
+    left_name = input_fn(f"CAN del brazo izquierdo ({choices}): ").strip()
+    for side, name in (("derecho", right_name), ("izquierdo", left_name)):
+        if name not in interfaces:
+            raise SystemExit(
+                f"CAN del brazo {side} invalido: {name or '<vacio>'}. "
+                f"Opciones: {choices}."
+            )
+    if right_name == left_name:
+        raise SystemExit("OpenArm left and right must use different CAN interfaces.")
+    right = interfaces[right_name]
+    left = interfaces[left_name]
     save_openarm_can_mapping(
         rig_config=rig_config,
         left_port=left.name,
@@ -498,7 +506,10 @@ def run_openarm_can_wizard(
         left_usb_path=left.sysfs_path,
         right_usb_path=right.sysfs_path,
     )
-    print_fn(f"Saved OpenArm CAN mapping in {rig_config}.")
+    print_fn(
+        f"Saved OpenArm CAN mapping in {rig_config}: "
+        f"right={right.name}, left={left.name}."
+    )
     return left.name, right.name
 
 

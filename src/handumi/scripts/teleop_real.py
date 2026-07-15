@@ -77,7 +77,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--home-pose",
         default=None,
-        help="Named safe pose from the robot YAML (OpenArm: down or hands_up).",
+        help="Named safe pose from the robot YAML (OpenArm: forward_open, arms_90, down).",
     )
     parser.add_argument("--side", choices=SIDE_CHOICES, default="both")
     parser.add_argument("--fps", type=int, default=30)
@@ -428,11 +428,13 @@ def main() -> None:
         log.info("Stopping.")
     finally:
         space_listener.close()
-        real_env.close()
-        if grippers is not None:
-            grippers.close()
-        if tracker_started:
-            tracker.stop()
+        try:
+            real_env.close()
+        finally:
+            if grippers is not None:
+                grippers.close()
+            if tracker_started:
+                tracker.stop()
 
 
 if __name__ == "__main__":
