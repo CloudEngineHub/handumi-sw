@@ -52,6 +52,11 @@ All derived results are labeled `KINEMATIC_INFERRED`. Contact becomes
 provided. Center of pressure stays unavailable unless a force plate or
 pressure insole supplies the required measurements.
 
+Use `handumi-record --rerun` for the synchronized live body view, or
+`handumi-view-trajectory` for recorded episodes. See
+[Body and Trajectory Visualization](visualization.md) for entity paths,
+provenance colors, invalid/stale-clearing rules, and headless `.rrd` export.
+
 ## Limitations
 
 The default segment coefficients are a population prior and can be biased by

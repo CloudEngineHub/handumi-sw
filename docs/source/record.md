@@ -35,6 +35,10 @@ Use `--device pico` for PICO. Add `--push-to-hub` only after confirming the pilo
 
 To record canonical full-body CoM/contact estimates, supply a measured body
 profile. See [Body Tracking and Kinematic CoM](workflows/body_tracking.md).
+With `--rerun`, the aligned body/CoM frame stored in each row is visualized
+beside the unchanged controller, camera, gripper, and recorder-status views.
+See [Body and Trajectory Visualization](workflows/visualization.md) for live
+layers, masks, colors, and offline replay.
 
 Do not connect or configure a robot arm for this step. A target embodiment can
 be selected later during conversion or replay without modifying the raw

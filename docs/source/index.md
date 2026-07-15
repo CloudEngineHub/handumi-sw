@@ -16,6 +16,7 @@ teleoperation
 record
 workflows/datasets
 workflows/body_tracking
+workflows/visualization
 troubleshooting
 ```
 

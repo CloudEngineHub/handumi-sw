@@ -98,8 +98,7 @@ from handumi.tracking.pico import (
 )
 from handumi.tracking.transforms import HandumiWorldCalibration, Pose
 from handumi.utils.speech import log_say
-from handumi.utils.trajectory import TrajectoryTrail
-from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
+from handumi.visualization.controller_trajectory import initialize_rerun
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,10 +108,6 @@ logging.basicConfig(
 log = logging.getLogger("handumi.record")
 
 ROBOT_CONFIG_DIR = Path("configs/robots")
-_RERUN_TRAIL_SECONDS = 10.0
-_RERUN_CHART_WINDOW_S = 20.0
-
-
 class _EscapeStopListener:
     """Turn terminal Escape into the recorder's graceful stop event."""
 
@@ -316,119 +311,42 @@ class _RecordingRerun:
     """Live Rerun stream owned by the recorder (never opens another device)."""
 
     def __init__(self, cam_names: list[str], fps: int) -> None:
-        import rerun as rr
-        import rerun.blueprint as rrb
-        import rerun.datatypes as rdt
-
-        self.rr = rr
-        self.trails = {
-            "left": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
-            "right": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
-        }
-        self.raw_trails = {
-            "left": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
-            "right": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
-        }
-        self._healthy = True
-        rr.init("handumi_record", spawn=True)
-        rr.log("tracking", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
-        for path, name, color in (
-            ("observation.feetech.left_width_mm", "left_width_mm", LEFT_COLOR),
-            ("observation.feetech.right_width_mm", "right_width_mm", RIGHT_COLOR),
-        ):
-            rr.log(path, rr.SeriesLines(colors=[[*color, 255]], widths=[2.5], names=[name]), static=True)
-
-        corners = [[sx * 0.75, sy * 0.75, sz * 0.4]
-                   for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
-        rr.log("tracking/bounds", rr.Points3D(corners, colors=[[128, 100, 100, 90]] * 8, radii=0.004), static=True)
-        recent = rrb.VisibleTimeRanges(rrb.VisibleTimeRange(
-            timeline="log_time",
-            range=rdt.TimeRange(
-                start=rdt.TimeRangeBoundary.cursor_relative(seconds=-_RERUN_CHART_WINDOW_S),
-                end=rdt.TimeRangeBoundary.cursor_relative(seconds=0.0),
-            ),
-        ))
-        chart = rrb.TimeSeriesView(
-            origin="/",
-            contents=["/observation.feetech.left_width_mm", "/observation.feetech.right_width_mm"],
-            name="gripper_width_mm",
-            axis_y=rrb.ScalarAxis(range=(0.0, 90.0)),
-            time_ranges=recent,
-            plot_legend=rrb.Corner2D.LeftTop,
+        self.stream = initialize_rerun(
+            "handumi_record",
+            cam_names,
+            fps=fps,
+            spawn=True,
+            recorder_status=True,
+            include_quality=True,
+            on_error=self._on_error,
         )
-        right = chart if not cam_names else rrb.Vertical(
-            rrb.Horizontal(*[
-                rrb.Spatial2DView(origin=f"/observation.images.{name}", name=name)
-                for name in cam_names
-            ]),
-            chart,
-            row_shares=[3, 2],
-        )
-        status = rrb.TextDocumentView(
-            origin="/recording",
-            contents=["/recording/status"],
-            name="recording_status",
-        )
-        rr.send_blueprint(rrb.Blueprint(
-            rrb.Vertical(
-                rrb.Horizontal(
-                    rrb.Spatial3DView(origin="/tracking", name="controller_trajectory",
-                                       background=rrb.Background(color=[*BACKGROUND_COLOR, 255])),
-                    right,
-                    column_shares=[2, 3],
-                ),
-                status,
-                row_shares=[10, 1],
-            ),
-            rrb.BlueprintPanel(state="collapsed"),
-            rrb.SelectionPanel(state="collapsed"),
-            rrb.TimePanel(state="collapsed"),
-        ), make_active=True, make_default=True)
         self.set_status("READY", "Waiting to start the first episode")
+
+    @staticmethod
+    def _on_error(exc: BaseException) -> None:
+        log.error("Rerun failed; disabling live view while recording continues: %s", exc)
 
     def set_status(self, state: str, detail: str) -> None:
         """Show the current recorder state as a persistent operator flag."""
-        self.rr.log(
-            "recording/status",
-            self.rr.TextDocument(
-                f"# {state}\n\n{detail}", media_type="text/markdown"
-            ),
-        )
+        if self.stream is not None:
+            self.stream.set_status(state, detail)
 
-    def log(self, cam_frames: dict, sample: ControllerPairSample, widths: GripperWidths) -> None:
+    def log(
+        self,
+        cam_frames: dict,
+        sample: ControllerPairSample,
+        widths: GripperWidths,
+        *,
+        body_frame: CanonicalBodyFrame | None = None,
+    ) -> None:
         """Log a frame without allowing a viewer problem to stop recording."""
-        if not self._healthy:
-            return
-        rr = self.rr
-        try:
-            # ``cam_frames`` also contains camera-health scalar fields. Only
-            # image entries belong in Rerun's image archetype.
-            for key, frame in cam_frames.items():
-                if key.startswith("observation.images."):
-                    rr.log(key, rr.Image(frame).compress(jpeg_quality=75))
-            rr.log("observation.feetech.left_width_mm", rr.Scalars(float(widths.left_mm)))
-            rr.log("observation.feetech.right_width_mm", rr.Scalars(float(widths.right_mm)))
-            for side, tcp, raw, color, tracked in (
-                ("left", sample.left_tcp_pose, sample.left_controller_pose, LEFT_COLOR, sample.left_tracked),
-                ("right", sample.right_tcp_pose, sample.right_controller_pose, RIGHT_COLOR, sample.right_tracked),
-            ):
-                if not tracked:
-                    continue
-                trail = self.trails[side]
-                trail.append(tcp[:3])
-                rr.log(f"tracking/{side}/tcp", rr.Points3D([tcp[:3]], colors=[color], radii=0.012))
-                if len(points := trail.points()) >= 2:
-                    rr.log(f"tracking/{side}/trail", rr.LineStrips3D([points], colors=[color], radii=0.003))
-                raw_trail = self.raw_trails[side]
-                raw_trail.append(raw[:3])
-                rr.log(f"tracking/{side}/raw", rr.Points3D([raw[:3]], colors=[[*color, 90]], radii=0.007))
-                if len(raw_points := raw_trail.points()) >= 2:
-                    rr.log(f"tracking/{side}/raw_trail", rr.LineStrips3D(
-                        [raw_points], colors=[[*color, 90]], radii=0.0015
-                    ))
-        except Exception:
-            self._healthy = False
-            log.exception("Rerun failed; disabling live view while recording continues.")
+        if self.stream is not None:
+            self.stream.log_frame(
+                cam_frames,
+                sample,
+                widths,
+                body_frame=body_frame,
+            )
 
 
 def record_episode(
@@ -626,7 +544,8 @@ def record_episode(
                 dataset.clear_episode_buffer()
                 break
         if rerun is not None:
-            rerun.log(cam_frames, sample, widths)
+            # This is the same aligned, already-estimated frame written below.
+            rerun.log(cam_frames, sample, widths, body_frame=body_frame)
         dataset.add_frame(
             {
                 **cam_frames,

@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from handumi.body.model import canonical_body_features
-
 if TYPE_CHECKING:
     from handumi.tracking.transforms import Pose
 
@@ -61,6 +59,13 @@ TRACKING_VALIDITY_NAMES: tuple[str, ...] = (
     "connected",
     "streaming",
 )
+
+
+def canonical_body_features() -> dict[str, dict[str, Any]]:
+    """Load optional body feature definitions without a package import cycle."""
+    from handumi.body.model import canonical_body_features as _features
+
+    return _features()
 
 
 def raw_state_feature() -> dict[str, Any]:

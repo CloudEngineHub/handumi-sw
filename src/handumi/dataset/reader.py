@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +76,8 @@ class RawEpisode:
     signals: dict[str, np.ndarray]
     body: CanonicalBodyEpisode | None = None
     tracking_sidecars: tuple[Path, ...] = ()
+    images: dict[str, np.ndarray] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def handumi_metadata(info_or_root: dict[str, Any] | str | Path) -> dict[str, Any]:
@@ -147,7 +149,7 @@ def load_raw_episode(
     revision: str | None = None,
     download_videos: bool = False,
 ) -> RawEpisode:
-    """Load state and non-image HandUMI diagnostics without decoding videos."""
+    """Load one validated episode, optionally decoding its recorded cameras."""
     dataset = open_dataset(
         ref,
         repo_id=repo_id,
@@ -201,6 +203,7 @@ def load_raw_episode(
                 )
             body_signals[key] = array
     body = CanonicalBodyEpisode(body_signals) if body_signals else None
+    images = _decode_episode_images(dataset, len(states)) if download_videos else {}
     dataset_root = Path(getattr(dataset, "root", root or "."))
     sidecars = discover_tracking_sidecars(dataset_root, episode_index=episode)
     return RawEpisode(
@@ -209,7 +212,49 @@ def load_raw_episode(
         signals=signals,
         body=body,
         tracking_sidecars=sidecars,
+        images=images,
+        metadata=dict(info) if isinstance(info, dict) else {},
     )
+
+
+def _decode_episode_images(dataset: Any, frame_count: int) -> dict[str, np.ndarray]:
+    """Decode available LeRobot image/video features without a second parser."""
+    table = dataset.hf_dataset
+    feature_keys = set(getattr(dataset, "features", {}) or {})
+    feature_keys.update(getattr(table, "column_names", ()))
+    image_keys = sorted(
+        key for key in feature_keys if str(key).startswith("observation.images.")
+    )
+    decoded: dict[str, np.ndarray] = {}
+    for key in image_keys:
+        frames: list[np.ndarray] = []
+        for index in range(frame_count):
+            row = dataset[index]
+            if key not in row:
+                frames = []
+                break
+            value = row[key]
+            if hasattr(value, "detach"):
+                value = value.detach().cpu().numpy()
+            elif hasattr(value, "numpy"):
+                value = value.numpy()
+            else:
+                value = np.asarray(value)
+            image = np.asarray(value)
+            if image.ndim == 3 and image.shape[0] in (1, 3, 4):
+                image = np.moveaxis(image, 0, -1)
+            if image.ndim not in (2, 3):
+                frames = []
+                break
+            if np.issubdtype(image.dtype, np.floating):
+                image = np.clip(image, 0.0, 1.0)
+                image = np.rint(image * 255.0).astype(np.uint8)
+            elif image.dtype != np.uint8:
+                image = np.clip(image, 0, 255).astype(np.uint8)
+            frames.append(image)
+        if frames:
+            decoded[key] = np.stack(frames)
+    return decoded
 
 
 def normalize_raw_signals(

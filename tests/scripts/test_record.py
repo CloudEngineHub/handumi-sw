@@ -551,6 +551,12 @@ class RecordEpisodeTrackingGateTest(unittest.TestCase):
     def test_aligned_body_frame_runs_estimator_before_dataset_write(self):
         dataset = _FakeDataset()
         estimator = _FakeBodyEstimator()
+        rendered = []
+
+        class _FakeRerun:
+            def log(self, cam_frames, sample, widths, *, body_frame=None):
+                rendered.append(body_frame)
+
         n_frames, status = record_episode(
             dataset=dataset,
             cameras=[],
@@ -570,15 +576,20 @@ class RecordEpisodeTrackingGateTest(unittest.TestCase):
             start_threshold=0.75,
             tracking_sidecar=_FakeTrackingSidecar(),
             body_estimator=estimator,
+            rerun=_FakeRerun(),
         )
         self.assertEqual(status, "recorded")
         self.assertEqual(estimator.calls, n_frames)
+        self.assertEqual(len(rendered), n_frames)
         self.assertTrue(n_frames > 0)
         for frame in dataset.frames:
             np.testing.assert_allclose(
                 frame["observation.body.whole_com"], [0.1, 0.2, 0.3]
             )
             self.assertEqual(frame["observation.body.whole_com_valid"][0], 1)
+        for frame in rendered:
+            np.testing.assert_allclose(frame.whole_com, [0.1, 0.2, 0.3])
+            self.assertEqual(frame.whole_com_valid[0], 1)
 
 
 class BuildObservationTest(unittest.TestCase):

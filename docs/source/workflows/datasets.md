@@ -5,6 +5,19 @@ replay, then run automated validation and inspect the captured signals.
 
 ## 1. Replay and Inspect
 
+Inspect the synchronized raw controllers, optional body/CoM, cameras, and
+diagnostics before robot-specific replay:
+
+```bash
+handumi-view-trajectory \
+  --repo-id your-name/handumi-demo \
+  --root outputs/datasets/handumi-demo \
+  --episode 0 --video
+```
+
+See [Body and Trajectory Visualization](visualization.md) for headless export,
+decimation, and controller-only compatibility.
+
 Choose the target robot explicitly. Piper is a currently available example:
 
 ```bash

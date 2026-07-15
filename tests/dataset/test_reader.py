@@ -9,6 +9,7 @@ from handumi.dataset.raw import (
 )
 from handumi.dataset.reader import (
     _compose_pose7,
+    _decode_episode_images,
     normalize_raw_signals,
     validate_raw_state_metadata,
 )
@@ -120,3 +121,23 @@ def test_rejects_previous_handumi_tracking_layout():
 
     with pytest.raises(ValueError, match="Re-record"):
         validate_raw_state_metadata(info)
+
+
+def test_optional_video_decode_uses_dataset_rows_and_normalizes_chw_float():
+    class _Table:
+        column_names = ["observation.images.left_wrist"]
+
+    class _Dataset:
+        hf_dataset = _Table()
+        features = {"observation.images.left_wrist": {"dtype": "video"}}
+
+        def __getitem__(self, index):
+            image = np.zeros((3, 4, 5), dtype=np.float32)
+            image[1] = index / 2
+            return {"observation.images.left_wrist": image}
+
+    decoded = _decode_episode_images(_Dataset(), 3)
+
+    assert decoded["observation.images.left_wrist"].shape == (3, 4, 5, 3)
+    assert decoded["observation.images.left_wrist"].dtype == np.uint8
+    assert decoded["observation.images.left_wrist"][2, 0, 0, 1] == 255

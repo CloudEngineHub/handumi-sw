@@ -17,6 +17,7 @@
 - [Teleoperation](docs/source/teleoperation.md)
 - [Record demonstrations](docs/source/record.md)
 - [Quality assurance](docs/source/workflows/datasets.md)
+- [Body and trajectory visualization](docs/source/workflows/visualization.md)
 - [Troubleshooting](docs/source/troubleshooting.md)
 - [Add a new robot embodiment](docs/source/development/new_embodiment.md)
 
