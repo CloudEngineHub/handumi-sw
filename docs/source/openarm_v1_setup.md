@@ -1,6 +1,6 @@
 # OpenArm v1 Hardware Setup
 
-Ultima modificacion: 2026-07-15 18:32:28 -05 -0500
+Ultima modificacion: 2026-07-15 18:53:06 -05 -0500
 
 This procedure prepares two physical OpenArm v1 arms for HandUMI real
 teleoperation. It follows the official
@@ -274,8 +274,13 @@ uv run handumi-pico-camera \
   --camera /dev/video2 \
   --input-format mjpeg \
   --input-size 1280x720 \
-  --fps 30
+  --fps 30 \
+  --eye-y-offset 48
 ```
+
+The default `--eye-y-offset 48` moves the complete image slightly downward in
+both eyes. Use `0` for a centered image, a larger positive value to lower it
+further, or a negative value to raise it.
 
 When the terminal prints that Remote Vision is ready, open XRoboToolkit and use:
 

@@ -51,6 +51,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--bitrate", type=int, default=None)
     parser.add_argument(
+        "--eye-y-offset",
+        type=int,
+        default=48,
+        help=(
+            "Vertical image offset per eye in pixels; positive moves the view "
+            "down (default: 48)."
+        ),
+    )
+    parser.add_argument(
         "--skip-adb",
         action="store_true",
         help="Do not create adb reverse 13579 and adb forward 12345.",
@@ -69,6 +78,7 @@ def bridge_from_args(args: argparse.Namespace) -> PicoRemoteVisionBridge:
         input_height=height,
         input_fps=args.fps,
         bitrate=args.bitrate,
+        eye_y_offset=args.eye_y_offset,
         setup_adb=not args.skip_adb,
     )
 

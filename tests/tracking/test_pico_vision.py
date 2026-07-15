@@ -83,6 +83,25 @@ def test_single_camera_command_duplicates_one_view_for_both_eyes():
     assert "hstack=inputs=2" in graph
 
 
+def test_positive_eye_offset_moves_view_down_before_stereo_duplication():
+    command = build_camera_ffmpeg_command(
+        camera=Path("/dev/video2"),
+        input_format="mjpeg",
+        input_width=1280,
+        input_height=720,
+        input_fps=30,
+        output_width=2560,
+        output_height=720,
+        output_fps=30,
+        bitrate=4_000_000,
+        eye_y_offset=48,
+    )
+
+    graph = command[command.index("-filter_complex") + 1]
+    assert "pad=1280:768:0:48:black,crop=1280:720:0:0[eye]" in graph
+    assert graph.index("[eye]split=2") > graph.index("crop=1280:720")
+
+
 def test_three_camera_command_builds_context_hands_grid():
     command = build_camera_ffmpeg_command(
         camera=Path("/dev/video2"),

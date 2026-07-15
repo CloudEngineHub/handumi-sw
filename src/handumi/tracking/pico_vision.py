@@ -164,10 +164,21 @@ def build_camera_ffmpeg_command(
     output_height: int,
     output_fps: int,
     bitrate: int,
+    eye_y_offset: int = 0,
 ) -> list[str]:
     """Build the direct V4L2-to-stereo-H264 pipeline used by Remote Vision."""
     eye_width = max(2, output_width // 2)
     output_width = eye_width * 2
+    eye_y_offset = max(-output_height + 1, min(output_height - 1, eye_y_offset))
+    padded_height = output_height + abs(eye_y_offset)
+    pad_y = max(eye_y_offset, 0)
+    crop_y = max(-eye_y_offset, 0)
+    shift_filter = (
+        f"pad={eye_width}:{padded_height}:0:{pad_y}:black,"
+        f"crop={eye_width}:{output_height}:0:{crop_y}"
+        if eye_y_offset
+        else "null"
+    )
     cameras = [camera]
     if left_camera is not None:
         cameras.append(left_camera)
@@ -195,7 +206,8 @@ def build_camera_ffmpeg_command(
         filter_graph = (
             f"[0:v]scale={eye_width}:{output_height}:"
             "force_original_aspect_ratio=decrease,"
-            f"pad={eye_width}:{output_height}:(ow-iw)/2:(oh-ih)/2:black[eye];"
+            f"pad={eye_width}:{output_height}:(ow-iw)/2:(oh-ih)/2:black"
+            f"[eye_centered];[eye_centered]{shift_filter}[eye];"
             "[eye]split=2[left_eye][right_eye];"
             "[left_eye][right_eye]hstack=inputs=2,"
             f"scale={output_width}:{output_height},fps={output_fps}[stereo]"
@@ -235,7 +247,8 @@ def build_camera_ffmpeg_command(
             [
                 *filters,
                 *overlays,
-                f"[{previous}]split=2[left_eye][right_eye]",
+                f"[{previous}]{shift_filter}[eye]",
+                "[eye]split=2[left_eye][right_eye]",
                 "[left_eye][right_eye]hstack=inputs=2,"
                 f"scale={output_width}:{output_height},fps={output_fps}[stereo]",
             ]
@@ -357,6 +370,7 @@ class PicoRemoteVisionBridge:
         input_height: int = 720,
         input_fps: int = 30,
         bitrate: int | None = None,
+        eye_y_offset: int = 48,
         command_host: str = "0.0.0.0",
         command_port: int = PICO_VISION_COMMAND_PORT,
         stream_host: str = "127.0.0.1",
@@ -371,6 +385,7 @@ class PicoRemoteVisionBridge:
         self.input_height = input_height
         self.input_fps = input_fps
         self.bitrate = bitrate
+        self.eye_y_offset = int(eye_y_offset)
         self.command_host = command_host
         self.command_port = command_port
         self.stream_host = stream_host
@@ -547,6 +562,7 @@ class PicoRemoteVisionBridge:
             output_height=height,
             output_fps=fps,
             bitrate=bitrate,
+            eye_y_offset=self.eye_y_offset,
         )
         log.info(
             "Streaming %s to PICO as stereo %dx%d@%d H.264.",
