@@ -332,6 +332,7 @@ def _episode_parquet_row(
     dataset_to_index: int,
     fps: int,
     video_keys: list[str],
+    source_video_refs: dict[int, dict[str, dict[str, float | int]]],
     chunks_size: int = CHUNKS_SIZE,
 ) -> dict[str, Any]:
     """Build one row for the episodes meta parquet."""
@@ -350,9 +351,19 @@ def _episode_parquet_row(
     }
 
     for vk in video_keys:
-        src_chunk, src_file = chunk_and_file(ep.source_episode_index, chunks_size)
-        from_ts = 0.0
-        to_ts = float(episode_length - 1) / fps
+        source_ref = source_video_refs.get(ep.source_episode_index, {}).get(vk)
+        if source_ref is None:
+            src_chunk, src_file = chunk_and_file(ep.source_episode_index, chunks_size)
+            from_ts = 0.0
+            to_ts = float(episode_length) / fps
+        else:
+            src_chunk = int(source_ref["chunk_index"])
+            src_file = int(source_ref["file_index"])
+            from_ts = float(source_ref["from_timestamp"])
+            to_ts = min(
+                float(source_ref["to_timestamp"]),
+                from_ts + float(episode_length) / fps,
+            )
         row[f"videos/{vk}/chunk_index"] = src_chunk
         row[f"videos/{vk}/file_index"] = src_file
         row[f"videos/{vk}/from_timestamp"] = from_ts
@@ -394,12 +405,44 @@ def _episode_parquet_row(
 # ---------------------------------------------------------------------------
 
 
+def _load_source_video_refs(
+    source_root: Path,
+    video_keys: list[str],
+) -> dict[int, dict[str, dict[str, float | int]]]:
+    """Load per-episode video file/range references from LeRobot metadata."""
+    refs: dict[int, dict[str, dict[str, float | int]]] = {}
+    episode_files = sorted((source_root / "meta" / "episodes").glob("chunk-*/*.parquet"))
+    for path in episode_files:
+        frame = pd.read_parquet(path)
+        for _, row in frame.iterrows():
+            episode_index = int(row["episode_index"])
+            episode_refs = refs.setdefault(episode_index, {})
+            for key in video_keys:
+                prefix = f"videos/{key}"
+                required = (
+                    f"{prefix}/chunk_index",
+                    f"{prefix}/file_index",
+                    f"{prefix}/from_timestamp",
+                    f"{prefix}/to_timestamp",
+                )
+                if not all(column in frame.columns for column in required):
+                    continue
+                episode_refs[key] = {
+                    "chunk_index": int(row[required[0]]),
+                    "file_index": int(row[required[1]]),
+                    "from_timestamp": float(row[required[2]]),
+                    "to_timestamp": float(row[required[3]]),
+                }
+    return refs
+
+
 def _copy_video_files(
     *,
     source_root: Path,
     output_root: Path,
     video_keys: list[str],
     episodes: list[EpisodeResult],
+    source_video_refs: dict[int, dict[str, dict[str, float | int]]],
     chunks_size: int = CHUNKS_SIZE,
 ) -> tuple[int, int]:
     """Copy video files from source to output root."""
@@ -407,36 +450,46 @@ def _copy_video_files(
     copied = 0
     missing = 0
 
+    requested: set[tuple[str, int, int]] = set()
     for ep in episodes:
-        src_chunk, src_file = chunk_and_file(ep.source_episode_index, chunks_size)
-        dst_chunk, dst_file = chunk_and_file(ep.episode_index, chunks_size)
-
         for vk in video_keys:
-            src_path = (
-                source_root
-                / "videos"
-                / vk
-                / f"chunk-{src_chunk:03d}"
-                / f"file-{src_file:03d}.mp4"
-            )
-            dst_path = (
-                output_root
-                / "videos"
-                / vk
-                / f"chunk-{dst_chunk:03d}"
-                / f"file-{dst_file:03d}.mp4"
-            )
-            if not src_path.exists():
-                missing += 1
-                print(
-                    f"  WARNING: missing source video {src_path.relative_to(source_root)}",
-                    flush=True,
+            source_ref = source_video_refs.get(ep.source_episode_index, {}).get(vk)
+            if source_ref is None:
+                src_chunk, src_file = chunk_and_file(
+                    ep.source_episode_index,
+                    chunks_size,
                 )
-                continue
-            dst_path.parent.mkdir(parents=True, exist_ok=True)
-            if not dst_path.exists():
-                shutil.copy2(src_path, dst_path)
-                copied += 1
+            else:
+                src_chunk = int(source_ref["chunk_index"])
+                src_file = int(source_ref["file_index"])
+            requested.add((vk, src_chunk, src_file))
+
+    for vk, src_chunk, src_file in sorted(requested):
+        src_path = (
+            source_root
+            / "videos"
+            / vk
+            / f"chunk-{src_chunk:03d}"
+            / f"file-{src_file:03d}.mp4"
+        )
+        dst_path = (
+            output_root
+            / "videos"
+            / vk
+            / f"chunk-{src_chunk:03d}"
+            / f"file-{src_file:03d}.mp4"
+        )
+        if not src_path.exists():
+            missing += 1
+            print(
+                f"  WARNING: missing source video {src_path.relative_to(source_root)}",
+                flush=True,
+            )
+            continue
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        if not dst_path.exists():
+            shutil.copy2(src_path, dst_path)
+            copied += 1
 
     return copied, missing
 
@@ -499,6 +552,7 @@ def write_dataset(
         source_info=source_info,
         explicit=handumi_metadata,
     )
+    source_video_refs = _load_source_video_refs(source_root, video_keys)
 
     # ------------------------------------------------------------------
     # 1. Write data parquet (one per episode)
@@ -568,6 +622,7 @@ def write_dataset(
                 dataset_to_index=global_frame_cursor + T,
                 fps=fps,
                 video_keys=video_keys,
+                source_video_refs=source_video_refs,
                 chunks_size=chunks_size,
             )
         )
@@ -655,6 +710,7 @@ def write_dataset(
         output_root=output_root,
         video_keys=video_keys,
         episodes=episodes,
+        source_video_refs=source_video_refs,
         chunks_size=chunks_size,
     )
 

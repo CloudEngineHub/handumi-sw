@@ -2,6 +2,7 @@ from argparse import Namespace
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from handumi.scripts.replay.replay_in_sim import (
     _metadata_tcp_calibration,
@@ -303,6 +304,23 @@ calibration:
     pose = load_robot_from_table(path)
 
     np.testing.assert_allclose(pose, [0.3, 0.0, 0.1, 0.0, 0.0, 0.0, 1.0])
+
+
+def test_load_robot_from_table_rejects_wrong_robot(tmp_path: Path):
+    path = tmp_path / "deployment.yaml"
+    path.write_text(
+        """\
+robot: axol
+calibration:
+  robot_from_table:
+    position: [0.3, 0.0, 0.1]
+    quaternion: [0.0, 0.0, 0.0, 1.0]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="declares robot 'axol'; expected 'piper'"):
+        load_robot_from_table(path, expected_robot="piper")
 
 
 def test_absolute_table_parser_defaults_prepare_start_and_align_tools():

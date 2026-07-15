@@ -519,7 +519,11 @@ def _pose7_from_mapping(value: object, *, name: str) -> np.ndarray:
     return np.concatenate([position, quaternion]).astype(np.float32)
 
 
-def load_robot_from_table(path: Path) -> np.ndarray:
+def load_robot_from_table(
+    path: Path,
+    *,
+    expected_robot: str | None = None,
+) -> np.ndarray:
     """Load ``T_robot_world_table`` from a deployment calibration YAML."""
     if not path.exists():
         raise SystemExit(
@@ -529,6 +533,13 @@ def load_robot_from_table(path: Path) -> np.ndarray:
     import yaml
 
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if expected_robot is not None:
+        declared_robot = data.get("robot")
+        if declared_robot != expected_robot:
+            raise SystemExit(
+                f"Deployment calibration {path} declares robot "
+                f"{declared_robot!r}; expected {expected_robot!r}."
+            )
     if data.get("verified") is not True:
         print(
             f"[replay] warning: deployment calibration {path} is not marked "
@@ -804,7 +815,10 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         deployment_path = args.deployment_calibration or (
             DEFAULT_DEPLOYMENT_CALIBRATION_DIR / f"{args.robot}_table.yaml"
         )
-        robot_from_table = load_robot_from_table(deployment_path)
+        robot_from_table = load_robot_from_table(
+            deployment_path,
+            expected_robot=args.robot,
+        )
         print(
             "[replay] robot_from_table: "
             f"translation=[{robot_from_table[0]:.4f}, {robot_from_table[1]:.4f}, "
