@@ -1,6 +1,6 @@
 # Teleoperation
 
-Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
+Ultima modificacion: 2026-07-15 18:32:28 -05 -0500
 
 HandUMI produces robot-agnostic live tool poses and gripper commands. A selected
 robot embodiment maps those commands to its kinematics; an optional hardware
@@ -105,35 +105,32 @@ handumi-teleop-real --device meta --robot piper --side right
 
 :::{dropdown} Example: physical OpenArm v1
 
-Install the optional backend, then run the guided setup:
+Install the optional backend, then follow the complete
+[OpenArm v1 Hardware Setup](openarm_v1_setup.md). The guided setup detects
+`can0`/`can1`, asks which physical side each interface controls, configures
+CAN-FD at 1/5 Mbps, and requires J1-J8 to respond on both arms.
+
+For example:
 
 ```bash
 uv sync --extra openarm
-handumi-setup-hardware --robot openarmv1 --device meta
+handumi-setup-hardware --robot openarmv1 --device pico \
+  --skip-feetech-map --skip-feetech-calibration \
+  --controller-tcp-calibration /absolute/path/to/pico_controller_tcp.yaml
 ```
 
-The wizard maps the right adapter first and the left adapter second, configures
-CAN-FD at 1/5 Mbps, verifies J1-J8 without enabling motion, reuses complete
-Feetech calibration, and refuses real teleoperation until the OpenArm tool has
-an explicit Controller-to-TCP calibration.
-
-Mechanical-zero calibration moves the robot and is never automatic:
+Mechanical-zero calibration remains explicit and runs one selected arm at a
+time. Start real validation with the right arm and reduced translation:
 
 ```bash
-handumi-setup-hardware --robot openarmv1 --device meta \
-  --skip-can-map --skip-feetech-map --skip-feetech-calibration \
-  --calibrate-openarm-zero
-```
-
-Start with the right arm, reduced translation, and the down pose:
-
-```bash
-handumi-teleop-real --device meta --robot openarmv1 --side right \
-  --home-pose down --translation-scale 0.25 --space-start
+handumi-teleop-real --device pico --robot openarmv1 --side right \
+  --home-pose forward_open --translation-scale 0.25 --space-start
 ```
 
 Validate right, then left, before using `--side both`. Keep the emergency stop
-reachable during every moving step.
+reachable during every moving step. The PICO calibration is shared at
+`configs/calibration/pico_controller_tcp.yaml`; pass an explicit path only to
+override that canonical file.
 :::
 
 ### Safety
