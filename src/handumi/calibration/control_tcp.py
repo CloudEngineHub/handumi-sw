@@ -21,7 +21,6 @@ import pandas as pd
 import yaml
 from scipy.spatial.transform import Rotation
 
-from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
 from handumi.robots.utils import IDENTITY_POSE7, pose_mul, quat_normalize
 
 DEFAULT_PARQUET = Path("pico_recording/data/chunk-000/file-000.parquet")
@@ -160,6 +159,12 @@ def load_episode_poses(
     *,
     column: str | None = None,
 ) -> np.ndarray:
+    # Keep dataset loading lazy: tracking providers import this module for the
+    # calibration dataclass, while the dataset reader imports tracking types.
+    # Importing the raw schema at module load time therefore creates a clean-
+    # interpreter cycle for the standalone calibration CLI.
+    from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
+
     if not parquet.exists():
         raise SystemExit(missing_dataset_message(parquet))
     df = pd.read_parquet(parquet)
