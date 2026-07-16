@@ -19,6 +19,7 @@ from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
     _RecordingRerun,
     _body_calibration_from_workspace,
+    _wait_for_enter,
     _capture_sources_metadata,
     _default_output_dir,
     _EscapeStopListener,
@@ -462,6 +463,27 @@ class EscapeStopListenerTest(unittest.TestCase):
             listener.stop()
             os.close(master_fd)
             os.close(slave_fd)
+
+
+class WaitForEnterTest(unittest.TestCase):
+    def test_returns_true_when_newline_arrives(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            os.write(write_fd, b"\n")
+            self.assertTrue(_wait_for_enter(threading.Event(), "start", fd=read_fd))
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
+    def test_returns_false_when_stop_is_already_set(self):
+        read_fd, write_fd = os.pipe()
+        stop = threading.Event()
+        stop.set()
+        try:
+            self.assertFalse(_wait_for_enter(stop, "start", fd=read_fd))
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
 
 
 class WaitForTrackingTest(unittest.TestCase):

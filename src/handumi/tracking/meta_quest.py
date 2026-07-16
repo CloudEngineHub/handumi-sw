@@ -59,6 +59,7 @@ from handumi.tracking.transforms import (
     Pose,
     WorkspaceCalibration,
     apply_mounting_offset,
+    quat_rotate,
     unity_pose_to_handumi,
 )
 
@@ -158,6 +159,29 @@ def workspace_from_hmd(hmd: HmdState) -> WorkspaceCalibration:
     """Build a workspace reset that re-centers on the current Quest HMD pose."""
     reference = unity_pose_to_handumi(hmd.position, hmd.quaternion)
     return WorkspaceCalibration.from_reference(reference)
+
+
+def level_workspace_from_hmd(hmd: HmdState) -> WorkspaceCalibration:
+    """Re-center on the HMD while preserving the Quest Stage gravity axis.
+
+    The legacy reset uses the full inverse HMD orientation. That is useful for
+    controller-only relative motion, but it tilts a Stage-space body and floor
+    whenever the wearer looks up or down. Body-enabled recording removes only
+    heading and translation so source Z remains vertical.
+    """
+    reference = unity_pose_to_handumi(hmd.position, hmd.quaternion)
+    forward = quat_rotate(reference.quaternion, (1.0, 0.0, 0.0))
+    horizontal = forward[:2]
+    if float(np.linalg.norm(horizontal)) <= 1e-9:
+        yaw = 0.0
+    else:
+        yaw = float(np.arctan2(horizontal[1], horizontal[0]))
+    half_yaw = 0.5 * yaw
+    level_reference = Pose(
+        reference.position,
+        (0.0, 0.0, np.sin(half_yaw), np.cos(half_yaw)),
+    )
+    return WorkspaceCalibration.from_reference(level_reference)
 
 
 def pose_to_pose7(pose: Pose) -> np.ndarray:
@@ -928,6 +952,7 @@ class MetaQuestTrackingProvider:
         config: MetaQuestConfig,
         calibration: ControllerTcpCalibration,
         reset_workspace_on_x: bool = True,
+        level_workspace_on_reset: bool = False,
     ) -> None:
         self.config = config
         self.calibration = calibration
@@ -938,6 +963,7 @@ class MetaQuestTrackingProvider:
         # When False, controller buttons cannot reset the workspace (for
         # example, handumi-teleop-sim owns its anchoring behavior).
         self.reset_workspace_on_x = reset_workspace_on_x
+        self.level_workspace_on_reset = level_workspace_on_reset
         self._prev_reset = False
 
     def start(self) -> None:
@@ -999,7 +1025,12 @@ class MetaQuestTrackingProvider:
             and frame.hmd.tracked
             and (reset_edge or not self.workspace_set)
         ):
-            self.workspace = workspace_from_hmd(frame.hmd)
+            workspace_factory = (
+                level_workspace_from_hmd
+                if self.level_workspace_on_reset
+                else workspace_from_hmd
+            )
+            self.workspace = workspace_factory(frame.hmd)
             self.workspace_set = True
             log.info("Workspace %s on HMD pose.", "reset" if reset_edge else "initialized")
 

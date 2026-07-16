@@ -21,6 +21,7 @@ from handumi.tracking.meta_quest import (
     MetaQuestConfig,
     MetaQuestReceiver,
     controller_pose_in_workspace,
+    level_workspace_from_hmd,
     workspace_from_hmd,
 )
 from handumi.tracking.transforms import (
@@ -137,6 +138,25 @@ class CalibrationHelpersTest(unittest.TestCase):
         ws = workspace_from_hmd(hmd)
         ref = unity_pose_to_handumi(hmd.position, hmd.quaternion)
         self.assertTrue(np.allclose(ws.apply(ref).as_matrix(), np.eye(4), atol=1e-9))
+
+    def test_level_workspace_recenters_without_tilting_stage(self):
+        angle = np.deg2rad(55.0)
+        hmd = HmdState(
+            tracked=True,
+            position=np.array([0.3, 1.2, -0.4]),
+            quaternion=np.array(
+                [np.sin(angle / 2.0), 0.0, 0.0, np.cos(angle / 2.0)]
+            ),
+        )
+        ws = level_workspace_from_hmd(hmd)
+        ref = unity_pose_to_handumi(hmd.position, hmd.quaternion)
+
+        np.testing.assert_allclose(ws.apply(ref).position, np.zeros(3), atol=1e-9)
+        np.testing.assert_allclose(
+            ws.workspace_from_quest.as_matrix()[:3, 2],
+            np.array([0.0, 0.0, 1.0]),
+            atol=1e-9,
+        )
 
 
 if __name__ == "__main__":

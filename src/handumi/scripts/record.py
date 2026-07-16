@@ -158,6 +158,29 @@ class _EscapeStopListener:
             self._original = None
 
 
+def _wait_for_enter(
+    stop_event: threading.Event,
+    prompt: str,
+    *,
+    fd: int | None = None,
+) -> bool:
+    """Wait for a newline while remaining responsive to graceful-stop signals."""
+    input_fd = sys.stdin.fileno() if fd is None else fd
+    print(prompt, end="", flush=True)
+    while not stop_event.is_set():
+        readable, _, _ = select.select([input_fd], [], [], 0.1)
+        if not readable:
+            continue
+        value = os.read(input_fd, 1)
+        if value == b"":
+            print()
+            return False
+        if value in (b"\n", b"\r"):
+            return True
+    print()
+    return False
+
+
 def build_features(
     cam_names: list[str],
     cam_width: int,
@@ -892,6 +915,7 @@ def main() -> None:
         args,
         calibration,
         reset_workspace_on_x=body_estimator is None,
+        level_workspace_on_reset=body_estimator is not None,
     )
     if args.session_calibration is not None:
         set_workspace = getattr(tracker, "set_workspace_from_device_pose", None)
@@ -1009,7 +1033,11 @@ def main() -> None:
                 if action == "finish":
                     break
             elif args.start_button == "enter":
-                input(f"  Press ENTER to start recording episode {ep_num} ...")
+                if not _wait_for_enter(
+                    stop_event,
+                    f"  Press ENTER to start recording episode {ep_num} ...",
+                ):
+                    break
             elif args.device == "pico":
                 if not wait_for_start_button(
                     getattr(tracker, "xrt"),
@@ -1216,7 +1244,11 @@ def main() -> None:
 
 
 def build_tracker(
-    args: argparse.Namespace, calibration, *, reset_workspace_on_x: bool = True
+    args: argparse.Namespace,
+    calibration,
+    *,
+    reset_workspace_on_x: bool = True,
+    level_workspace_on_reset: bool = False,
 ) -> TrackingProvider:
     if args.device == "pico":
         transport = "wifi" if args.pico_wifi else "adb"
@@ -1237,7 +1269,10 @@ def build_tracker(
         packet_queue_size=base.packet_queue_size,
     )
     return MetaQuestTrackingProvider(
-        config=config, calibration=calibration, reset_workspace_on_x=reset_workspace_on_x
+        config=config,
+        calibration=calibration,
+        reset_workspace_on_x=reset_workspace_on_x,
+        level_workspace_on_reset=level_workspace_on_reset,
     )
 
 
