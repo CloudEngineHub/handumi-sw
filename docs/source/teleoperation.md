@@ -106,7 +106,7 @@ handumi-teleop-real --device meta --robot piper --side right
 :::{dropdown} Example: physical OpenArm v1
 
 Install the optional backend, then follow the complete
-[OpenArm v1 Hardware Setup](openarm_v1_setup.md). The guided setup detects
+[OpenArm v1 Hardware Setup](real/openarm_v1_setup.md). The guided setup detects
 `can0`/`can1`, asks which physical side each interface controls, configures
 CAN-FD at 1/5 Mbps, and requires J1-J8 to respond on both arms.
 
