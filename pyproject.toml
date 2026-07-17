@@ -88,6 +88,7 @@ packages = ["src/handumi"]
 "assets/openarm" = "handumi/assets/openarm"
 "assets/piper" = "handumi/assets/piper"
 "assets/trlc-dk1" = "handumi/assets/trlc-dk1"
+"assets/yam" = "handumi/assets/yam"
 "configs/rig.example.yaml" = "handumi/configs/rig.example.yaml"
 "configs/robots" = "handumi/configs/robots"
 "configs/calibration" = "handumi/configs/calibration"

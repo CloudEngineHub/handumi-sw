@@ -9,7 +9,7 @@ from handumi.robots.registry import (
 
 
 def test_robot_names_are_discovered_from_yaml_configs():
-    assert {"axol", "openarmv1", "piper", "trlc_dk1"}.issubset(
+    assert {"axol", "openarmv1", "piper", "trlc_dk1", "yam"}.issubset(
         set(EMBODIMENT_NAMES)
     )
 
@@ -167,6 +167,43 @@ def test_trlc_dk1_gripper_mapping_matches_urdf_convention():
 
     runtime.set_finger_positions(q, {"left": 1.0, "right": 0.0})
     np.testing.assert_allclose(q[finger_indices], [0.001, 0.001, -0.045, -0.045])
+
+
+def test_yam_bimanual_layout_and_forward_home():
+    runtime = load_embodiment("yam")
+
+    assert runtime.arm_joint_names("left") == [
+        f"left_joint{i}" for i in range(1, 7)
+    ]
+    assert runtime.arm_joint_names("right") == [
+        f"right_joint{i}" for i in range(1, 7)
+    ]
+    assert runtime.arm_joint_indices("left") == list(range(6))
+    assert runtime.arm_joint_indices("right") == list(range(8, 14))
+    assert runtime.config.default_home_pose == "forward_open"
+    assert runtime.config.replay_max_joint_delta == 0.35
+
+    left, right = runtime.solver_cls().fk_pose7(runtime.home_q())
+    np.testing.assert_allclose(left[0], -0.30, atol=1e-5)
+    np.testing.assert_allclose(right[0], 0.30, atol=1e-5)
+    np.testing.assert_allclose(left[1:3], right[1:3], atol=1e-6)
+    np.testing.assert_allclose(left[1:3], [0.5092962, 0.4375029], atol=1e-5)
+
+
+def test_yam_linear_4310_gripper_mapping_and_visual_meshes():
+    runtime = load_embodiment("yam")
+    finger_indices = [6, 7, 14, 15]
+
+    np.testing.assert_allclose(runtime.home_q()[finger_indices], 0.0)
+    q = runtime.home_q()
+    runtime.set_finger_positions(q, {"left": 0.0, "right": 1.0})
+    np.testing.assert_allclose(q[finger_indices], [-0.04695, -0.04695, 0.0, 0.0])
+    runtime.set_finger_positions(q, {"left": 1.0, "right": 0.0})
+    np.testing.assert_allclose(q[finger_indices], [0.0, 0.0, -0.04695, -0.04695])
+
+    urdf = runtime.load_urdf(load_meshes=True)
+    assert urdf.scene is not None
+    assert len(urdf.scene.geometry) == 19
 
 
 def test_legacy_ee_links_are_derived_from_arms():

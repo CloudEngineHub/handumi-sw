@@ -113,6 +113,8 @@ Existing references:
 - [Piper configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/piper.yaml)
 - [Axol configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/axol.yaml)
 - [OpenArm v1 configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/openarmv1.yaml)
+- `configs/robots/yam.yaml` for two namespaced copies of an upstream
+  monomanual model with separately mapped parallel-gripper joints.
 - `configs/robots/trlc_dk1.yaml` for a namespaced bimanual model with two
   prismatic finger joints per side.
 

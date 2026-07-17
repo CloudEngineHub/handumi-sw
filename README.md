@@ -36,7 +36,8 @@ flowchart LR
     D --> E[Piper]
     D --> F[OpenArm v1]
     D --> G[TRLC-DK1]
-    D --> H[Other bimanual arms with parallel grippers]
+    D --> H[YAM]
+    D --> I[Other bimanual arms with parallel grippers]
 ```
 
 Raw captures remain robot-agnostic. After collecting data with HandUMI, the same
@@ -55,6 +56,7 @@ embodiments can be added without changing the capture format.
 | Piper | [Repository](https://github.com/agilexrobotics/piper_ros) | ![Bimanual Piper](docs/images/bipiper.png) |
 | OpenArm v1 | [Repository](https://github.com/enactic/openarm) | ![Bimanual OpenArm v1](docs/images/openarm.jpg) |
 | TRLC-DK1 | [Repository](https://github.com/robot-learning-co/trlc-dk1) | ![Bimanual TRLC-DK1](docs/images/biTRLC.png) |
+| YAM | [Repository](https://github.com/i2rt-robotics/i2rt) | ![Bimanual I2RT YAM](docs/images/biyam.png) |
 
 Axol (`axol`) is also available for bimanual kinematic replay in simulation.
 Its catalog preview will be added when an official project image is available.
@@ -65,7 +67,7 @@ extend this list.
 
 - Tracking: PICO through XRoboToolkit and Meta Quest through
   [HandUMI Quest App](https://github.com/robonet-ai/handumi-quest-app).
-- Robot models and simulation: Piper, OpenArm v1, TRLC-DK1, and Axol.
+- Robot models and simulation: Piper, OpenArm v1, TRLC-DK1, Axol, and YAM.
 - Real-robot teleoperation: AgileX Piper and OpenArm v1 through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
 
