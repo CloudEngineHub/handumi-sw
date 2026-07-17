@@ -939,6 +939,10 @@ def main() -> None:
         laptop_cam_name="laptop",
     )
     cam_names = [spec["name"] for spec in camera_specs]
+    # Rerun may launch an external viewer process. Spawn it before OpenCV opens
+    # V4L descriptors so that viewer lifetime cannot keep cameras busy after
+    # the recorder exits.
+    rerun = _RecordingRerun(cam_names, args.fps) if args.rerun else None
     cameras = connect_cameras(
         camera_specs,
         fps=args.cam_fps,
@@ -946,7 +950,6 @@ def main() -> None:
         height=args.cam_height,
         zero_non_laptop=False,
     )
-    rerun = _RecordingRerun(cam_names, args.fps) if args.rerun else None
 
     log.info("--- Feetech setup ---")
     gripper_pair = connect_feetech(args)
