@@ -53,10 +53,10 @@ embodiments can be added without changing the capture format.
 
 | Bimanual | Repository | Preview |
 |---|---|---|
-| AgileX PiPER | [Repository](https://github.com/agilexrobotics/piper_ros) | ![Bimanual AgileX PiPER](docs/images/bipiper.png) |
-| OpenArm | [Repository](https://github.com/enactic/openarm) | ![Bimanual OpenArm](docs/images/openarm.jpg) |
-| TRLC-DK1 | [Repository](https://github.com/robot-learning-co/trlc-dk1) | ![Bimanual TRLC-DK1](docs/images/biTRLC.png) |
-| I2RT YAM | [Repository](https://github.com/i2rt-robotics/i2rt) | ![Bimanual I2RT YAM](assets/yam/biYAM.png) |
+| AgileX PiPER | [Repository](https://github.com/agilexrobotics/piper_ros) | ![Bimanual AgileX PiPER](docs/images/bipiper-preview.png) |
+| OpenArm | [Repository](https://github.com/enactic/openarm) | ![Bimanual OpenArm](docs/images/openarm-preview.png) |
+| TRLC-DK1 | [Repository](https://github.com/robot-learning-co/trlc-dk1) | ![Bimanual TRLC-DK1](docs/images/biTRLC-preview.png) |
+| I2RT YAM | [Repository](https://github.com/i2rt-robotics/i2rt) | ![Bimanual I2RT YAM](docs/images/biYAM-preview.png) |
 
 **More embodiments coming soon.** See
 [Add a new robot embodiment](https://robonet-ai.github.io/handumi-sw/development/new_embodiment.html)
