@@ -5,8 +5,8 @@ from unittest import mock
 import numpy as np
 import pytest
 
-from handumi.real.openarm_can import load_openarm_settings
-from handumi.real.openarm_gripper_calibration import (
+from handumi.real.openarm import load_openarm_settings
+from handumi.real.openarm.gripper_calibration import (
     OpenArmGripperLimits,
     load_openarm_gripper_limits,
     save_openarm_gripper_limits,

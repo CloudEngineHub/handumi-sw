@@ -4,15 +4,15 @@ from unittest import mock
 
 import numpy as np
 
-from handumi.real.piper_can import (
+from handumi.real.piper import (
     PiperCanEnvironment,
     PiperCanSettings,
     PiperJointStreamer,
     load_piper_can_settings,
     piper_mdeg_to_q,
     q_to_piper_mdeg,
-    step_mdeg_toward,
 )
+from handumi.real.piper.driver import step_mdeg_toward
 from handumi.robots.registry import RobotRealConfig, load_robot_config
 
 

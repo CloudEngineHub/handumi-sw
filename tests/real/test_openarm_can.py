@@ -5,7 +5,7 @@ from unittest import mock
 
 import numpy as np
 
-from handumi.real.openarm_can import (
+from handumi.real.openarm import (
     OpenArmCanEnvironment,
     OpenArmCanSettings,
     OpenArmSdkSide,
@@ -119,7 +119,7 @@ def test_sdk_side_discards_cold_feedback_before_startup_pose():
         side_effect=[np.zeros(7), np.zeros(7), actual, actual, actual, actual]
     )
 
-    with mock.patch("handumi.real.openarm_can.time.sleep"):
+    with mock.patch("handumi.real.openarm.driver.time.sleep"):
         measured = side.read_startup_q()
 
     np.testing.assert_allclose(measured, actual)

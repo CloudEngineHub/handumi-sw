@@ -16,8 +16,8 @@ from handumi.feetech.calibration import (
 )
 from handumi.feetech.setup import ensure_feetech_serial_permissions, run_feetech_wizard
 from handumi.calibration.control_tcp import calibration_path_for_robot_device
-from handumi.real.backends import REAL_BACKEND_NAMES
-from handumi.real.backends.setup import RobotSetupOptions, run_robot_setup
+from handumi.real.registry import REAL_BACKEND_NAMES
+from handumi.real.setup import RobotSetupOptions, run_robot_setup
 from handumi.real.can_setup import ensure_rig_config
 from handumi.scripts.setup import calibrate_grippers, home_servos
 from handumi.tracking.pico import prepare_pico_adb_session

@@ -13,13 +13,13 @@ import numpy as np
 
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.real.can_setup import ensure_can_fd_interfaces_ready
-from handumi.real.openarm_can import (
+from handumi.real.openarm.driver import (
     GRIPPER_RECV_CAN_ID,
     GRIPPER_SEND_CAN_ID,
     load_openarm_settings,
     require_openarm_can,
 )
-from handumi.real.openarm_gripper_calibration import (
+from handumi.real.openarm.gripper_calibration import (
     OpenArmGripperLimits,
     save_openarm_gripper_limits,
     user_openarm_gripper_calibration_path,

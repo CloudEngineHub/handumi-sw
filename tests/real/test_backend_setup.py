@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 
-from handumi.real.backends.setup import (
+from handumi.real.setup import (
     RobotSetupOptions,
     _check_openarm_motors,
     _run_openarm_zero_calibration,
@@ -16,7 +16,7 @@ from handumi.real.backends.setup import (
 def test_openarm_motor_check_uses_read_only_parameter_queries():
     output = "\n".join(f"MOTOR ID: 0x{motor:x}" for motor in range(1, 9))
     with mock.patch(
-        "handumi.real.backends.setup.subprocess.run",
+        "handumi.real.setup.subprocess.run",
         return_value=subprocess.CompletedProcess([], 0, stdout=output, stderr=""),
     ) as run:
         _check_openarm_motors("right", "can0")
@@ -32,7 +32,7 @@ def test_openarm_motor_check_rejects_any_missing_response():
     output += "\n[!] NO RESPONSE FROM MOTOR"
     with (
         mock.patch(
-            "handumi.real.backends.setup.subprocess.run",
+            "handumi.real.setup.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, stdout=output, stderr=""),
         ),
         pytest.raises(SystemExit, match="diagnostic failed"),
@@ -41,7 +41,7 @@ def test_openarm_motor_check_rejects_any_missing_response():
 
 
 def test_openarm_zero_calibration_uses_active_python_and_installed_v1_script():
-    with mock.patch("handumi.real.backends.setup.subprocess.run") as run:
+    with mock.patch("handumi.real.setup.subprocess.run") as run:
         _run_openarm_zero_calibration(
             "right_arm",
             "can1",
@@ -78,17 +78,17 @@ def test_openarm_setup_calibrates_only_selected_physical_side():
     executable = "/usr/bin/openarm-can-zero-position-calibration"
 
     with (
-        mock.patch("handumi.real.backends.setup.shutil.which") as which,
-        mock.patch("handumi.real.backends.setup.require_openarm_can"),
+        mock.patch("handumi.real.setup.shutil.which") as which,
+        mock.patch("handumi.real.setup.require_openarm_can"),
         mock.patch(
-            "handumi.real.backends.setup.load_openarm_settings",
+            "handumi.real.setup.load_openarm_settings",
             return_value=settings,
         ),
-        mock.patch("handumi.real.backends.setup.load_robot_config"),
-        mock.patch("handumi.real.backends.setup.ensure_can_fd_interfaces_ready"),
+        mock.patch("handumi.real.setup.load_robot_config"),
+        mock.patch("handumi.real.setup.ensure_can_fd_interfaces_ready"),
         mock.patch("builtins.input", return_value="CALIBRATE RIGHT"),
         mock.patch(
-            "handumi.real.backends.setup._run_openarm_zero_calibration"
+            "handumi.real.setup._run_openarm_zero_calibration"
         ) as calibrate,
     ):
         which.side_effect = lambda name: (

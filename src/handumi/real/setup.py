@@ -14,8 +14,8 @@ from handumi.real.can_setup import (
     run_openarm_can_wizard,
     run_piper_can_wizard,
 )
-from handumi.real.openarm_can import load_openarm_settings, require_openarm_can
-from handumi.real.piper_can import load_piper_can_settings
+from handumi.real.openarm.driver import load_openarm_settings, require_openarm_can
+from handumi.real.piper.driver import load_piper_can_settings
 from handumi.robots.registry import load_robot_config
 
 

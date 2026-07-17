@@ -1,10 +1,9 @@
-"""Optional OpenArm v1 backend using the official ``openarm_can`` bindings."""
+"""OpenArm SDK driver, settings, and streaming for real HandUMI teleop."""
 
 from __future__ import annotations
 
 import importlib
 import logging
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +12,8 @@ from typing import Any, Callable, Protocol
 
 import numpy as np
 import yaml
+
+from handumi.real.streamer import JointStreamer, step_toward
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,8 @@ JOINT_LIMIT_SNAP_TOLERANCE_RAD = 1e-4
 
 @dataclass(frozen=True)
 class OpenArmCanSettings:
+    """Resolved OpenArm SDK teleop settings from robot defaults + local rig."""
+
     left_port: str = "can1"
     right_port: str = "can0"
     enable_fd: bool = True
@@ -90,18 +93,14 @@ def load_openarm_settings(
         home_tolerance_rad=float(control.get("home_tolerance_rad", 0.05)),
         watchdog_timeout_s=float(control.get("watchdog_timeout_s", 0.15)),
         following_error_rad=float(control.get("following_error_rad", 0.35)),
-        gripper_closed_position_rad=float(
-            gripper.get("closed_position_rad", 0.0)
-        ),
+        gripper_closed_position_rad=float(gripper.get("closed_position_rad", 0.0)),
         gripper_open_position_rad=float(
             gripper.get("open_position_rad", -1.0471975511965976)
         ),
         left_gripper_closed_position_rad=calibrated_value(
             "left", "closed_position_rad"
         ),
-        left_gripper_open_position_rad=calibrated_value(
-            "left", "open_position_rad"
-        ),
+        left_gripper_open_position_rad=calibrated_value("left", "open_position_rad"),
         right_gripper_closed_position_rad=calibrated_value(
             "right", "closed_position_rad"
         ),
@@ -127,9 +126,7 @@ class OpenArmSide(Protocol):
     port: str
 
     def read_q(self) -> np.ndarray: ...
-
     def send(self, q: np.ndarray, gripper_opening: float) -> None: ...
-
     def close(self) -> None: ...
 
 
@@ -176,9 +173,6 @@ class OpenArmSdkSide:
 
     def read_q(self) -> np.ndarray:
         self.arm.refresh_all()
-        # CAN-FD responses can reach the USB adapter in separate batches.
-        # Give all J1-J7 state frames time to queue before draining them;
-        # otherwise untouched Motor objects still look like valid zeros.
         time.sleep(0.002)
         self.arm.recv_all(2_000)
         motors = self.arm.get_arm().get_motors()
@@ -217,9 +211,6 @@ class OpenArmSdkSide:
             for kp, kd, target in zip(self.kp, self.kd, q, strict=True)
         ]
         self.arm.get_arm().mit_control_all(params)
-        # HandUMI uses 0=closed and 1=open.  openarm_can >=1.2.6 expects the
-        # raw J8 motor target; on OpenArm v1, closed is 0 rad and open is
-        # -60 degrees on both arms (the official zero-calibration convention).
         opening = float(np.clip(gripper_opening, 0.0, 1.0))
         motor_position = self.gripper_closed_position_rad + opening * (
             self.gripper_open_position_rad - self.gripper_closed_position_rad
@@ -235,7 +226,7 @@ class OpenArmSdkSide:
 SideFactory = Callable[..., OpenArmSide]
 
 
-class OpenArmJointStreamer:
+class OpenArmJointStreamer(JointStreamer):
     """Velocity-limited latest-target streamer with a stale-command hold."""
 
     def __init__(
@@ -244,14 +235,12 @@ class OpenArmJointStreamer:
         settings: OpenArmCanSettings,
         initial_q: dict[str, np.ndarray],
     ) -> None:
+        super().__init__(
+            command_rate_hz=settings.command_rate_hz,
+            thread_name="openarm-sdk-streamer",
+        )
         self.arms = arms
         self.settings = settings
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run, name="openarm-can", daemon=True
-        )
-        self._error: BaseException | None = None
         self._targets = {side: q.copy() for side, q in initial_q.items()}
         self._commanded = {side: q.copy() for side, q in initial_q.items()}
         self._feedback = {side: q.copy() for side, q in initial_q.items()}
@@ -259,9 +248,6 @@ class OpenArmJointStreamer:
         self._last_target_at = time.monotonic()
         self._max_speed = settings.max_joint_speed_rad_s
         self._waiting_for_targets = False
-
-    def start(self) -> None:
-        self._thread.start()
 
     def set_max_speed(self, value: float) -> None:
         with self._lock:
@@ -305,9 +291,6 @@ class OpenArmJointStreamer:
 
     def wait_until_targets(self, *, timeout_s: float, tolerance_rad: float) -> None:
         deadline = time.monotonic() + timeout_s
-        # A blocking home move intentionally keeps one target for several
-        # seconds. Do not let the stale-command watchdog cancel that target;
-        # it is meant for an interrupted live teleop stream.
         with self._lock:
             expected = {side: self._targets[side].copy() for side in self.arms}
             self._waiting_for_targets = True
@@ -358,18 +341,8 @@ class OpenArmJointStreamer:
                 self._waiting_for_targets = False
                 self._last_target_at = time.monotonic()
 
-    def raise_if_failed(self) -> None:
-        if self._error is not None:
-            raise RuntimeError("OpenArm command streamer failed") from self._error
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=2.0)
-        self.raise_if_failed()
-
     def _run(self) -> None:
-        period = 1.0 / self.settings.command_rate_hz
+        period = 1.0 / self.command_rate_hz
         next_tick = time.monotonic()
         try:
             while not self._stop.is_set():
@@ -383,12 +356,11 @@ class OpenArmJointStreamer:
                         self._targets = {
                             side: q.copy() for side, q in self._commanded.items()
                         }
-                    step = self._max_speed * period
+                    max_step = self._max_speed * period
                     commands = {
-                        side: self._commanded[side]
-                        + np.clip(
-                            self._targets[side] - self._commanded[side], -step, step
-                        )
+                        side: step_toward(
+                            self._commanded[side], self._targets[side], max_step
+                        ).astype(np.float32)
                         for side in self.arms
                     }
                     grippers = self._grippers.copy()
@@ -447,9 +419,7 @@ class OpenArmCanEnvironment:
         ports = {"left": self.settings.left_port, "right": self.settings.right_port}
         for side in self.active_sides:
             port = ports[side]
-            closed = getattr(
-                self.settings, f"{side}_gripper_closed_position_rad"
-            )
+            closed = getattr(self.settings, f"{side}_gripper_closed_position_rad")
             open_ = getattr(self.settings, f"{side}_gripper_open_position_rad")
             log.info("Connecting OpenArm %s on %s.", side, port)
             self.arms[side] = self.side_factory(
@@ -503,8 +473,6 @@ class OpenArmCanEnvironment:
                     f"OpenArm target {name}={scalar:.8f} is outside "
                     f"URDF limits [{lower:.8f}, {upper:.8f}]."
                 )
-            # IK and float32 conversion can differ from a decimal URDF
-            # limit by a few microradians. Snap only that numerical fringe.
             values[index] = np.clip(scalar, lower, upper)
         return values
 
@@ -554,11 +522,6 @@ class OpenArmCanEnvironment:
             )
         self.streamer.set_max_speed(self.settings.home_max_joint_speed_rad_s)
         try:
-            # For the collision-safe forward pose, establish shoulder/elbow
-            # lateral clearance while retaining the measured distal posture.
-            # Only after both arms are spread do we bend J4 toward 90 degrees.
-            # ``down`` and ``arms_90`` remain exact diagnostic poses and skip
-            # this waypoint because their first three target joints are zero.
             if any(np.any(np.abs(target[:3]) > 1e-4) for target in targets.values()):
                 feedback = self.streamer.feedback()
                 clearance_targets = {
@@ -580,8 +543,6 @@ class OpenArmCanEnvironment:
                 )
             self.streamer.set_targets(
                 targets,
-                # Start from a deterministic, safe closed gripper. Live
-                # Feetech openings take over after startup.
                 {side: 0.0 for side in self.active_sides},
             )
             self.streamer.wait_until_targets(
@@ -604,11 +565,6 @@ class OpenArmCanEnvironment:
             try:
                 targets[side] = self._split_side_q(q, joint_names, side)
             except ValueError as exc:
-                # Do not clamp individual joints: that changes the solved arm
-                # posture and can create surprising Cartesian motion. Drop the
-                # whole unsafe arm target instead; the streamer keeps its last
-                # safe target and automatically resumes once IK returns inside
-                # the URDF limits. Rate-limit warnings during a sustained hold.
                 now = time.monotonic()
                 if now - self._last_limit_warning_at[side] >= 1.0:
                     log.warning(
@@ -631,7 +587,7 @@ class OpenArmCanEnvironment:
         if self.streamer is not None:
             try:
                 self.streamer.stop()
-            except BaseException as exc:  # still disable every arm
+            except BaseException as exc:
                 error = exc
         for side, arm in list(self.arms.items()):
             try:
@@ -646,9 +602,20 @@ class OpenArmCanEnvironment:
 
 __all__ = [
     "ARM_DOF",
+    "DEFAULT_KD",
+    "DEFAULT_KP",
+    "GRIPPER_RECV_CAN_ID",
+    "GRIPPER_SEND_CAN_ID",
+    "JOINT_LIMIT_SNAP_TOLERANCE_RAD",
     "OpenArmCanEnvironment",
     "OpenArmCanSettings",
     "OpenArmJointStreamer",
+    "OpenArmSdkSide",
+    "OpenArmSide",
+    "RECV_CAN_IDS",
+    "SEND_CAN_IDS",
+    "SIDES",
+    "SideFactory",
     "load_openarm_settings",
     "require_openarm_can",
 ]

@@ -44,10 +44,9 @@ from handumi.feetech.calibration import (
     user_calibration_path,
 )
 from handumi.feetech.setup import list_feetech_serial_ports
-from handumi.real.backends import REAL_BACKEND_NAMES, make_real_backend
+from handumi.real.registry import REAL_BACKEND_NAMES, make_real_backend
 from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
 from handumi.robots.registry import load_embodiment, resolve_home_q
-from handumi.scripts.record import build_tracker, connect_feetech
 from handumi.scripts.teleop_sim import (
     KeyboardSpaceListener,
     _enabled_sides,
@@ -270,6 +269,7 @@ def _apply_inactive_side_policy(
 def main() -> None:
     args = parse_args()
     _validate_args(args)
+    from handumi.scripts.record import build_tracker, connect_feetech
 
     log.info("Loading %s IK solver.", args.robot)
     runtime = load_embodiment(args.robot)
@@ -288,8 +288,6 @@ def main() -> None:
     )
     q = home_q.copy()
     log.info("Selected home pose: %s", home_pose_name)
-    actuated_names = list(runtime.robot.joints.actuated_names)
-
     log.info("Warming IK solver before touching hardware.")
     controller.warmup()
     _validate_feetech_ready(args)
@@ -321,9 +319,9 @@ def main() -> None:
         tracker_started = True
         grippers = connect_feetech(args)
 
-        real_env.prepare(repair=not args.skip_can_repair)
+        real_env.setup(repair=not args.skip_can_repair)
         real_env.connect()
-        real_env.home(home_q, actuated_names)
+        real_env.home(home_q)
 
         space_listener.start()
         if args.space_start:
@@ -350,7 +348,7 @@ def main() -> None:
             if not tracking_ok:
                 if tracking_lost_since is None:
                     tracking_lost_since = loop_start
-                    held = real_env.hold(q, actuated_names)
+                    held = real_env.hold(q)
                     controller.tracking_lost(held)
                     q = held
                     log.warning(
@@ -394,7 +392,7 @@ def main() -> None:
                         "Double clap detected; teleop reset, robot returning home slowly."
                     )
                     log_say("returning home", play_sounds=play_sounds)
-                    real_env.move_home(home_q, actuated_names)
+                    real_env.move_home(home_q)
                     log_say("teleop reset", play_sounds=play_sounds)
                     continue
                 start_sides = enabled_sides
@@ -416,7 +414,7 @@ def main() -> None:
                 "right": widths.right_normalized,
             }
             q = controller.step(source_poses, side_tracked, openings).q
-            real_env.command(q, actuated_names, openings)
+            real_env.write(q, openings)
             real_env.check_health()
 
             dt = time.perf_counter() - loop_start
@@ -429,7 +427,7 @@ def main() -> None:
     finally:
         space_listener.close()
         try:
-            real_env.close()
+            real_env.disconnect()
         finally:
             if grippers is not None:
                 grippers.close()
