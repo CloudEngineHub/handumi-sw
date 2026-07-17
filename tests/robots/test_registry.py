@@ -9,7 +9,9 @@ from handumi.robots.registry import (
 
 
 def test_robot_names_are_discovered_from_yaml_configs():
-    assert {"axol", "openarmv1", "piper"}.issubset(set(EMBODIMENT_NAMES))
+    assert {"axol", "openarmv1", "piper", "trlc_dk1"}.issubset(
+        set(EMBODIMENT_NAMES)
+    )
 
 
 def test_openarm_uses_configured_arm_joint_names_not_left_prefix():
@@ -84,6 +86,47 @@ def test_piper_mjcf_prefix_mapping_stays_in_robot_config():
 
     assert runtime.mjcf_actuator_name("left_joint1") == "izq_joint1"
     assert runtime.mjcf_actuator_name("right_joint8") == "der_joint8"
+
+
+def test_trlc_dk1_bimanual_layout_and_joint_mapping():
+    runtime = load_embodiment("trlc_dk1")
+
+    assert runtime.arm_joint_names("left") == [
+        f"left_joint{i}" for i in range(1, 7)
+    ]
+    assert runtime.arm_joint_names("right") == [
+        f"right_joint{i}" for i in range(1, 7)
+    ]
+    assert runtime.arm_joint_indices("left") == list(range(6))
+    assert runtime.arm_joint_indices("right") == list(range(8, 14))
+
+    solver = runtime.solver_cls()
+    left_pose7, right_pose7 = solver.fk_pose7(runtime.config.home_q)
+    np.testing.assert_allclose(left_pose7[[0, 2]], right_pose7[[0, 2]], atol=1e-6)
+    np.testing.assert_allclose(left_pose7[1] - right_pose7[1], 0.60, atol=1e-6)
+
+
+def test_trlc_dk1_visual_meshes_resolve_from_asset_root():
+    runtime = load_embodiment("trlc_dk1")
+    urdf = runtime.load_urdf(load_meshes=True)
+
+    assert urdf.scene is not None
+    # Each GLB contains several submeshes, so the resulting scene has more
+    # entries than the 18 visual elements referenced by the bimanual URDF.
+    assert len(urdf.scene.geometry) >= 18
+
+
+def test_trlc_dk1_gripper_mapping_matches_urdf_convention():
+    runtime = load_embodiment("trlc_dk1")
+    finger_indices = [6, 7, 14, 15]
+
+    np.testing.assert_allclose(runtime.config.home_q[finger_indices], 0.001)
+    q = runtime.config.home_q.copy()
+    runtime.set_finger_positions(q, {"left": 0.0, "right": 1.0})
+    np.testing.assert_allclose(q[finger_indices], [-0.045, -0.045, 0.001, 0.001])
+
+    runtime.set_finger_positions(q, {"left": 1.0, "right": 0.0})
+    np.testing.assert_allclose(q[finger_indices], [0.001, 0.001, -0.045, -0.045])
 
 
 def test_legacy_ee_links_are_derived_from_arms():

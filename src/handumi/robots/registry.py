@@ -235,7 +235,7 @@ class RobotRuntime:
 
 
 def yourdfpy_handler(pkg_root: str | Path):
-    """Resolve ``package://PKG/rest`` relative to a configured package root."""
+    """Resolve package and relative mesh paths from a configured asset root."""
 
     root = Path(pkg_root)
 
@@ -251,6 +251,11 @@ def yourdfpy_handler(pkg_root: str | Path):
                 if fallback.exists():
                     return str(fallback)
             return str(direct)
+        path = Path(fname)
+        if not path.is_absolute():
+            relative = root / path
+            if relative.exists():
+                return str(relative)
         return fname
 
     return h
