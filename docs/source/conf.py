@@ -56,15 +56,15 @@ html_theme_options = {
     },
     "icon_links": [
         {
-            "name": "GitHub",
-            "url": "https://github.com/robonet-ai/handumi-sw",
-            "icon": "fa-brands fa-square-github",
-            "type": "fontawesome",
-        },
-        {
             "name": "HandUMI Hardware",
             "url": "https://github.com/BrikHMP18/HandUMI",
             "icon": "fa-solid fa-microchip",
+            "type": "fontawesome",
+        },
+        {
+            "name": "HandUMI Software",
+            "url": "https://github.com/robonet-ai/handumi-sw",
+            "icon": "fa-brands fa-square-github",
             "type": "fontawesome",
         },
     ],

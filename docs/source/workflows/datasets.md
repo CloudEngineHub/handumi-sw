@@ -105,7 +105,7 @@ capture can be checked against another supported robot.
 ## 4. Convert and Check Target Motion
 
 Conversion creates a target-specific dataset while preserving the raw source.
-For BiPiper, use the validated `--piper` profile. It runs the same
+For Piper, use the validated `--piper` profile. It runs the same
 `absolute-table` solver as replay, validates `configs/calibration/piper_table.yaml`
 for the selected robot, and converts the replay result to physical Piper commands:
 
@@ -117,7 +117,7 @@ JAX_PLATFORMS=cpu handumi-convert \
   --output-repo-id your-name/handumi-demo-piper
 ```
 
-The BiPiper state has 14 physical commands: six replay arm joints in radians
+The Piper state has 14 physical commands: six replay arm joints in radians
 plus one gripper opening in meters per side. Its pairs are
 `observation.state[t] = command[t]` and `action[t] = command[t+1]`. The two
 mirrored URDF finger joints are reconstructed from the single opening only when

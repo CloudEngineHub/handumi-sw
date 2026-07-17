@@ -77,60 +77,15 @@ See [Add a New Robot Embodiment](development/new_embodiment.md) for the common
 interface used to add future manufacturers and models without changing the
 HandUMI capture workflow.
 
-:::{dropdown} Example: physical Piper arms
+Complete the hardware-specific preparation before commanding a physical robot:
 
-First complete the robot-independent
-[HandUMI Setup and Calibration](setup.md), then install the Piper backend and
-map its CAN adapters:
+- [Piper Hardware Setup](physical_robots/piper_setup.md)
+- [OpenArm v1 Hardware Setup](physical_robots/openarm_v1_setup.md)
 
-```bash
-uv sync --extra piper
-handumi-setup-hardware --robot piper --device meta \
-  --skip-feetech-map --skip-feetech-calibration
-handumi-teleop-real --device meta --robot piper
-```
+Both guides start with single-arm validation before enabling both arms.
 
-The CAN wizard maps the right Piper adapter first and the left adapter second,
-then stores that machine-local mapping under `robots.piper.can` in
-`configs/rig.yaml`. Use `--skip-can-map` only after verifying an existing
-mapping.
-
-Start with one arm:
-
-```bash
-handumi-teleop-real --device meta --robot piper --side right
-```
-:::
-
-:::{dropdown} Example: physical OpenArm v1
-
-Install the optional backend, then follow the complete
-[OpenArm v1 Hardware Setup](real/openarm_v1_setup.md). The guided setup detects
-`can0`/`can1`, asks which physical side each interface controls, configures
-CAN-FD at 1/5 Mbps, and requires J1-J8 to respond on both arms.
-
-For example:
-
-```bash
-uv sync --extra openarm
-handumi-setup-hardware --robot openarmv1 --device pico \
-  --skip-feetech-map --skip-feetech-calibration \
-  --controller-tcp-calibration /absolute/path/to/pico_controller_tcp.yaml
-```
-
-Mechanical-zero calibration remains explicit and runs one selected arm at a
-time. Start real validation with the right arm and reduced translation:
-
-```bash
-handumi-teleop-real --device pico --robot openarmv1 --side right \
-  --home-pose forward_open --translation-scale 0.25 --space-start
-```
-
-Validate right, then left, before using `--side both`. Keep the emergency stop
-reachable during every moving step. The PICO calibration is shared at
-`configs/calibration/pico_controller_tcp.yaml`; pass an explicit path only to
-override that canonical file.
-:::
+To stream the context and wrist cameras into a PICO headset independently of
+the selected robot, see [PICO Remote Vision](workflows/pico_remote_vision.md).
 
 ### Safety
 
@@ -139,3 +94,10 @@ Keep the workspace clear and an emergency stop accessible. Enforce joint, veloci
 To inspect an existing recording rather than live motion, continue with
 [Replay a Local Recording in Simulation](workflows/replay_in_sim.md), then run
 the checks in [Quality Assurance](workflows/datasets.md).
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+workflows/pico_remote_vision
+```

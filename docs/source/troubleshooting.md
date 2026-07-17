@@ -93,13 +93,12 @@ count without `Can't find` messages confirms that the visuals loaded.
 ## Piper CAN Is Down or BUS-OFF
 
 This applies only to physical Piper teleoperation. Check robot power and wiring,
-then rerun:
-
-```bash
-handumi-setup-hardware --robot piper --device meta \
-  --skip-feetech-map --skip-feetech-calibration
-```
+then follow the CAN checks in
+[Piper Hardware Setup](physical_robots/piper_setup.md#verify-can-and-troubleshoot-the-mapping).
 
 ## Piper Real Arms Do Not Start
 
-Test simulation first, verify both controllers are tracked, confirm CAN is up, and use `--side right` for the first hardware check.
+Test simulation first, verify both controllers are tracked, confirm CAN is up,
+and use `--side right` for the first hardware check. See
+[First real teleoperation](physical_robots/piper_setup.md#first-real-teleoperation)
+for the complete startup sequence.

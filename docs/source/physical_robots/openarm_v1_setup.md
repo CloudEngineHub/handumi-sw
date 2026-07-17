@@ -1,7 +1,5 @@
 # OpenArm v1 Hardware Setup
 
-Ultima modificacion: 2026-07-15 18:53:06 -05 -0500
-
 This procedure prepares two physical OpenArm v1 arms for HandUMI real
 teleoperation. It follows the official
 [OpenArm v1 motor configuration guide](https://docs.openarm.dev/1.0/software/setup/motor-config/)
@@ -248,79 +246,6 @@ If PICO tracking is lost, Space cannot anchor the arms until tracking recovers.
 The CAN streamer may still be sending hold commands; CAN traffic alone does not
 prove that teleoperation is anchored.
 
-## View real cameras inside the PICO
-
-HandUMI uses the same XRoboToolkit Remote Vision protocol as the deployment
-bridge in `wbcd-icra-2026-deployment`: commands travel through port `13579`
-and length-prefixed H.264 video travels through port `12345`. Over USB the
-directions are intentionally different:
-
-```text
-PICO command client -> adb reverse 13579 -> HandUMI bridge
-HandUMI H.264 sender -> adb forward 12345 -> PICO decoder
-```
-
-The bridge uses the existing `ZEDMINI` source in the XRoboToolkit app. It does
-not install or replace `video_source.yml`. This is an optional standalone
-context-camera experiment: it does not import the robot backend, enable CAN,
-or change the normal `handumi-teleop-real` command.
-
-Close XRoboToolkit before creating the tunnels because the running app normally
-owns device port `13579`. Also close OBS or any viewer that owns the selected
-camera. Test video without enabling the robot:
-
-```bash
-uv run handumi-pico-camera \
-  --camera /dev/video2 \
-  --input-format mjpeg \
-  --input-size 1280x720 \
-  --fps 30 \
-  --eye-y-offset 48
-```
-
-The default `--eye-y-offset 48` moves the complete image slightly downward in
-both eyes. Use `0` for a centered image, a larger positive value to lower it
-further, or a negative value to raise it.
-
-When the terminal prints that Remote Vision is ready, open XRoboToolkit and use:
-
-```text
-Remote Vision source: ZEDMINI
-Camera source IP: 127.0.0.1
-Listen: enabled
-```
-
-One camera is fitted into each eye without stretching its aspect ratio. Up to
-three cameras can use the deployment layout, with context in the center and
-wrist cameras at the sides:
-
-```bash
-uv run handumi-pico-camera \
-  --camera /dev/video2 \
-  --left-camera /dev/video4 \
-  --right-camera /dev/video6
-```
-
-After validating video alone, leave that terminal running and start normal
-teleoperation in another terminal. The camera process is robot-independent:
-
-```bash
-uv run handumi-teleop-real \
-  --device pico \
-  --robot openarmv1 \
-  --side both \
-  --home-pose forward_open \
-  --space-start \
-  --skip-feetech \
-  --controller-tcp-calibration configs/calibration/pico_controller_tcp.yaml
-```
-
-For three cameras add `--left-camera` and `--right-camera` to the standalone
-`handumi-pico-camera` process. It reads one frame from every configured camera
-before opening the stream, so a missing, busy, or incompatible camera fails
-without involving the robot. If the stream stops, teleoperation continues and
-the operator must decide whether remote operation remains safe.
-
 ## Troubleshooting
 
 | Symptom | Meaning and action |
@@ -333,4 +258,3 @@ the operator must decide whether remote operation remains safe.
 | `home timeout` | A joint did not enter the home tolerance. The exception reports side, joint, measured value, and target. |
 | Home is mechanically crooked | Recheck mechanical-zero calibration and assembly. Controller-to-TCP calibration is not used during startup home. |
 | Space does nothing | Confirm `PICO controller data is available`, both controls are tracked, the terminal is focused, and `--space-start` is present. |
-| Remote Vision connects but stays blank | Restart the bridge with the current code and press `Listen` again. Check `adb logcat` for decoder errors; XRoboToolkit requires 3-byte H.264 NALs to remain grouped inside the 4-byte Annex-B decoder unit. |
