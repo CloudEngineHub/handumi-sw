@@ -15,6 +15,7 @@ from handumi.scripts.teleop_sim import (
     _has_enabled_anchors,
     _load_calibration,
     parse_args,
+    _resolve_camera_usage,
     _sample_state,
     _selected_camera_names,
     _start_sides,
@@ -76,6 +77,43 @@ class TeleopSimCameraSelectionTest(unittest.TestCase):
             _selected_camera_names(context_camera=False),
             ["left_wrist", "right_wrist"],
         )
+
+
+class ResolveCameraUsageTest(unittest.TestCase):
+    def _args(self, **overrides) -> argparse.Namespace:
+        base = dict(
+            no_rerun=False,
+            context_camera=False,
+            cam_ids=None,
+            skip_cameras=False,
+        )
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_rerun_enabled_leaves_cameras_untouched(self):
+        args = self._args(no_rerun=False, skip_cameras=False)
+        _resolve_camera_usage(args)
+        self.assertFalse(args.skip_cameras)
+
+    def test_no_rerun_auto_skips_cameras(self):
+        args = self._args(no_rerun=True, skip_cameras=False)
+        _resolve_camera_usage(args)
+        self.assertTrue(args.skip_cameras)
+
+    def test_no_rerun_with_skip_cameras_is_a_noop(self):
+        args = self._args(no_rerun=True, skip_cameras=True)
+        _resolve_camera_usage(args)
+        self.assertTrue(args.skip_cameras)
+
+    def test_no_rerun_with_context_camera_is_rejected(self):
+        args = self._args(no_rerun=True, context_camera=True)
+        with self.assertRaisesRegex(SystemExit, "only shown in Rerun"):
+            _resolve_camera_usage(args)
+
+    def test_no_rerun_with_explicit_cam_ids_is_rejected(self):
+        args = self._args(no_rerun=True, cam_ids=[0, 2])
+        with self.assertRaisesRegex(SystemExit, "only shown in Rerun"):
+            _resolve_camera_usage(args)
 
 
 class LoadCalibrationTest(unittest.TestCase):

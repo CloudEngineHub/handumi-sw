@@ -364,6 +364,26 @@ def _clear_enabled_anchors(
         anchors[side] = None
 
 
+def _resolve_camera_usage(args: argparse.Namespace) -> None:
+    """Cameras only ever appear in Rerun, so tie their lifecycle to it.
+
+    Without Rerun, connecting cameras just occupies devices for nothing:
+    disable them automatically. Camera-selection flags with --no-rerun are
+    almost certainly a mistake, so fail loudly instead of silently ignoring
+    them.
+    """
+    if not args.no_rerun:
+        return
+    if args.context_camera or args.cam_ids is not None:
+        raise SystemExit(
+            "Cameras are only shown in Rerun. Remove --no-rerun, or drop "
+            "--context-camera/--workspace-camera and --cam-ids."
+        )
+    if not args.skip_cameras:
+        log.info("Rerun disabled; skipping cameras (they are only shown in Rerun).")
+        args.skip_cameras = True
+
+
 def _load_calibration(args: argparse.Namespace):
     from handumi.calibration.control_tcp import ControllerTcpCalibration
 
@@ -565,6 +585,7 @@ def main() -> None:
     if args.auto_start_delay_s <= 0.0:
         raise SystemExit("--auto-start-delay-s must be greater than zero.")
 
+    _resolve_camera_usage(args)
     calibration = _load_calibration(args)
     # Keep controller buttons from changing the tracking workspace during sim
     # teleop. Gripper double-clap and optional Space are the only start inputs.
