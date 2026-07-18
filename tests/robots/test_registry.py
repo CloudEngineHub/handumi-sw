@@ -156,17 +156,18 @@ def test_trlc_dk1_visual_meshes_resolve_from_asset_root():
     assert len(urdf.scene.geometry) >= 18
 
 
-def test_trlc_dk1_gripper_mapping_matches_urdf_convention():
+def test_trlc_dk1_gripper_mapping_avoids_visual_finger_overlap():
     runtime = load_embodiment("trlc_dk1")
     finger_indices = [6, 7, 14, 15]
 
+    assert runtime.config.gripper_max_width_m == 0.082
     np.testing.assert_allclose(runtime.config.home_q[finger_indices], 0.001)
     q = runtime.config.home_q.copy()
     runtime.set_finger_positions(q, {"left": 0.0, "right": 1.0})
-    np.testing.assert_allclose(q[finger_indices], [-0.045, -0.045, 0.001, 0.001])
+    np.testing.assert_allclose(q[finger_indices], [-0.040, -0.040, 0.001, 0.001])
 
     runtime.set_finger_positions(q, {"left": 1.0, "right": 0.0})
-    np.testing.assert_allclose(q[finger_indices], [0.001, 0.001, -0.045, -0.045])
+    np.testing.assert_allclose(q[finger_indices], [0.001, 0.001, -0.040, -0.040])
 
 
 def test_yam_bimanual_layout_and_forward_home():
