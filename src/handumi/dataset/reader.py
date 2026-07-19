@@ -17,6 +17,30 @@ from handumi.dataset.raw import (
 from handumi.dataset.writer import info_path, load_info
 
 
+def _import_lerobot_dataset() -> Any:
+    """Import LeRobotDataset, raising a diagnostic error on failure.
+
+    ``lerobot`` itself may be installed while a *dependency* it pulls in
+    transitively (e.g. torch, or one of torch's CUDA shared libraries) is
+    missing or corrupted. Reporting that as "LeRobot is not installed" is
+    misleading and sends users to re-run a command that won't fix anything,
+    so we only use that message when lerobot truly can't be found.
+    """
+    try:
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    except ImportError as exc:
+        if isinstance(exc, ModuleNotFoundError) and exc.name == "lerobot":
+            raise RuntimeError(
+                "LeRobot is not installed. Install project dependencies with: uv sync"
+            ) from exc
+        raise RuntimeError(
+            "LeRobot is installed but failed to import, most likely because one "
+            "of its dependencies (e.g. torch or a CUDA shared library) is "
+            f"missing or corrupted: {exc!r}. Try: uv sync --reinstall"
+        ) from exc
+    return LeRobotDataset
+
+
 def dataset_root_from_repo_id(repo_id: str) -> Path:
     """Default local cache directory for a Hugging Face dataset repo id."""
     repo_name = repo_id.rstrip("/").split("/")[-1]
@@ -442,12 +466,7 @@ def open_dataset(
 
     resolved = _resolve_ref(ref, repo_id=repo_id, root=root, revision=revision)
 
-    try:
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    except ImportError as exc:
-        raise RuntimeError(
-            "LeRobot is not installed. Install project dependencies with: uv sync"
-        ) from exc
+    LeRobotDataset = _import_lerobot_dataset()
 
     if episodes is not None:
         resolved_episodes = episodes
@@ -482,12 +501,7 @@ def download_dataset(
         revision=revision,
     )
 
-    try:
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    except ImportError as exc:
-        raise RuntimeError(
-            "LeRobot is not installed. Install project dependencies with: uv sync"
-        ) from exc
+    LeRobotDataset = _import_lerobot_dataset()
 
     dataset = LeRobotDataset(
         repo_id=resolved.repo_id,
