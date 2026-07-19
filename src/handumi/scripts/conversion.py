@@ -52,6 +52,11 @@ from handumi.calibration.control_tcp import (
     load_controller_tcp_calibration,
 )
 from handumi.dataset.reader import dataset_root_from_repo_id, handumi_metadata
+from handumi.dataset.canonical import (
+    canonical_joint_layout,
+    canonicalize_joint_trajectory,
+    raw_state_gripper_widths_m,
+)
 from handumi.dataset.raw import (
     LEFT_GRIPPER_INDEX,
     LEFT_POSE_SLICE,
@@ -116,6 +121,20 @@ def build_parser() -> argparse.ArgumentParser:
             "(e.g. NONHUMAN-RESEARCH/handumi-dataset-v2-piper). "
             "The local output directory is always outputs/datasets/<output-repo-name>."
         ),
+    )
+    ds.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Local output dataset directory. Defaults to outputs/datasets/"
+            "<output-repo-name>."
+        ),
+    )
+    ds.add_argument(
+        "--resume",
+        action="store_true",
+        help="Append newly processed episodes to an existing output directory.",
     )
     ds.add_argument(
         "--revision",
@@ -358,6 +377,26 @@ def _deployment_calibration_metadata(args: argparse.Namespace) -> dict[str, Any]
         "path": str(path),
         "sha256": hashlib.sha256(raw).hexdigest(),
     }
+
+
+def _write_calibration_catalog(output_root: Path, args: argparse.Namespace) -> None:
+    if args.raw_controller_debug:
+        return
+    selection = getattr(args, "controller_tcp_selection", None)
+    if selection is None:
+        return
+    calibration_dir = output_root / "meta" / "calibrations"
+    calibration_dir.mkdir(parents=True, exist_ok=True)
+    (calibration_dir / "000000.json").write_text(
+        json.dumps(
+            {
+                "calibration_id": 0,
+                "type": "controller_tcp",
+                "metadata": selection.metadata,
+            },
+            indent=4,
+        )
+    )
 
 
 def _parse_episode_list(value: str | None, max_episodes: int) -> list[int]:
@@ -788,20 +827,32 @@ def _solve_with_replay_pipeline(
     return solve_replay_episode(replay_args)
 
 
+def _canonical_command_states_from_rollout(
+    rollout: dict[str, np.ndarray],
+    *,
+    runtime,
+) -> np.ndarray:
+    """Return YAML-derived arm joints plus one logical gripper width per side."""
+    qpos = np.asarray(rollout["qpos"], dtype=np.float32)
+    openings = rollout.get("gripper_normalized")
+    return canonicalize_joint_trajectory(
+        qpos,
+        runtime=runtime,
+        gripper_normalized=None
+        if openings is None
+        else np.asarray(openings, dtype=np.float32),
+    )
+
+
 def _piper_command_states_from_rollout(
     rollout: dict[str, np.ndarray],
     *,
     actuated_names: list[str] | tuple[str, ...],
     gripper_max_width_m: float,
 ) -> np.ndarray:
-    """Return two Piper 6-DoF arms plus one physical opening per gripper."""
+    """Backward-compatible Piper helper kept for older callers/tests."""
     qpos = np.asarray(rollout["qpos"], dtype=np.float32)
     openings = np.asarray(rollout["gripper_normalized"], dtype=np.float32)
-    if openings.shape != (len(qpos), 2):
-        raise ValueError(
-            "Piper conversion requires replay gripper_normalized with shape "
-            f"({len(qpos)}, 2), got {openings.shape}."
-        )
     names = list(actuated_names)
     arm_indices = {
         side: [names.index(f"{side}_joint{joint}") for joint in range(1, 7)]
@@ -822,14 +873,8 @@ def _output_joint_names(
     args: argparse.Namespace,
     runtime,
 ) -> list[str]:
-    if args.piper:
-        return [
-            *(f"left_joint{joint}.pos" for joint in range(1, 7)),
-            "left_gripper.width_m",
-            *(f"right_joint{joint}.pos" for joint in range(1, 7)),
-            "right_gripper.width_m",
-        ]
-    return [f"{name}.pos" for name in runtime.robot.joints.actuated_names]
+    del args
+    return canonical_joint_layout(runtime).names
 
 
 def process_episode(
@@ -884,12 +929,11 @@ def process_episode(
                 "Replay-parity solver returned "
                 f"{len(qpos)} frames for {len(states)} source frames."
             )
-        if getattr(args, "piper", False):
-            runtime = load_embodiment("piper")
-            joint_array = _piper_command_states_from_rollout(
+        if hasattr(args, "embodiment"):
+            runtime = load_embodiment(args.embodiment)
+            joint_array = _canonical_command_states_from_rollout(
                 rollout,
-                actuated_names=runtime.robot.joints.actuated_names,
-                gripper_max_width_m=runtime.config.gripper_max_width_m,
+                runtime=runtime,
             )
         else:
             joint_array = qpos
@@ -921,10 +965,20 @@ def process_episode(
             }
         )
     else:
-        joint_array, _ = solve_joint_trajectory_from_raw_states(
+        qpos, _ = solve_joint_trajectory_from_raw_states(
             args=args,
             states=states,
         )
+        if hasattr(args, "embodiment"):
+            runtime = load_embodiment(args.embodiment)
+            joint_array = canonicalize_joint_trajectory(
+                qpos,
+                runtime=runtime,
+                gripper_widths_m=raw_state_gripper_widths_m(states),
+                fallback_gripper=getattr(args, "gripper", 1.0),
+            )
+        else:
+            joint_array = qpos
     states = joint_array[:-1]               # t = 0 … T-2
     actions = joint_array[1:]               # t = 1 … T-1
 
@@ -934,6 +988,8 @@ def process_episode(
         actions=actions,
         task=task,
         source_episode_index=source_episode_index,
+        calibration_id=-1 if getattr(args, "raw_controller_debug", False) else 0,
+        source_kind=0,
     )
 
 
@@ -980,10 +1036,13 @@ def _write_converted_dataset_readme(
     info = json.loads((output_root / "meta" / "info.json").read_text())
     handumi_info = info.get("handumi", {})
     layout = str(handumi_info.get("state_layout", "full_sim_qpos"))
-    if layout == "bipiper_6dof_plus_gripper_width_m_per_side":
+    if layout in {
+        "bipiper_6dof_plus_gripper_width_m_per_side",
+        "yaml_arm_joints_plus_logical_gripper_width_m",
+    }:
         representation = (
-            "Each side stores six replay arm joints in radians and one physical "
-            "gripper opening in meters."
+            "Each side stores YAML-declared arm joints in radians and, when "
+            "present, one physical gripper opening in meters."
         )
     else:
         representation = "The state uses the selected embodiment joint layout."
@@ -1026,7 +1085,7 @@ def main() -> None:
     output_repo_id = args.output_repo_id or _default_output_repo_id(
         source_repo_id, args.embodiment
     )
-    output_root = dataset_root_from_repo_id(output_repo_id)
+    output_root = args.output_dir or dataset_root_from_repo_id(output_repo_id)
 
     print(f"Source  : {source_root}  ({source_repo_id})")
     print(f"Output  : {output_root}  ({output_repo_id})")
@@ -1069,6 +1128,18 @@ def main() -> None:
         episode_indices = _parse_episode_list(args.episodes, total_source_episodes)
     except ValueError as exc:
         parser.error(str(exc))
+    if args.resume:
+        existing_info = output_root / "meta" / "info.json"
+        if existing_info.exists():
+            existing_episodes = int(
+                json.loads(existing_info.read_text()).get("total_episodes", 0)
+            )
+            if existing_episodes > 0:
+                episode_indices = episode_indices[existing_episodes:]
+                print(
+                    "Resume: skipping "
+                    f"{existing_episodes} existing output episode(s)."
+                )
 
     print(
         f"Source episodes: {total_source_episodes}  "
@@ -1179,30 +1250,21 @@ def main() -> None:
         robot_type=robot_type,
         joint_names=joint_names,
         fps=dataset_fps,
+        resume=args.resume,
         handumi_metadata={
             "conversion_source": args.source,
             "retarget_mode": args.retarget_mode,
             "compose_source": args.compose_source,
             "translation_scale": float(args.translation_scale),
-            "replay_qpos_parity": (
-                args.retarget_mode == "absolute-table" and not args.piper
-            ),
+            "replay_qpos_parity": False,
             "replay_arm_qpos_parity": args.retarget_mode == "absolute-table",
-            "state_layout": (
-                "bipiper_6dof_plus_gripper_width_m_per_side"
-                if args.piper
-                else "full_sim_qpos"
-            ),
-            "gripper_representation": (
-                {
-                    "type": "opening_width",
-                    "unit": "m",
-                    "max_width_m": float(runtime.config.gripper_max_width_m),
-                    "source": "recorded Feetech normalized",
-                }
-                if args.piper
-                else None
-            ),
+            "state_layout": "yaml_arm_joints_plus_logical_gripper_width_m",
+            "gripper_representation": {
+                "type": "opening_width",
+                "unit": "m",
+                "max_width_m": float(runtime.config.gripper_max_width_m),
+                "source": "recorded Feetech normalized or raw HandUMI width",
+            },
             "deployment_calibration": _deployment_calibration_metadata(args),
             "absolute_orientation": args.absolute_orientation,
             "initial_solve_iterations": int(args.initial_solve_iterations),
@@ -1213,7 +1275,11 @@ def main() -> None:
             "controller_device": args.controller_device,
             "raw_controller_debug": bool(args.raw_controller_debug),
             "controller_tcp_calibration": (
-                args.controller_tcp_selection.metadata
+                {
+                    "calibration_id": 0,
+                    "path": "meta/calibrations/000000.json",
+                    "sha256": args.controller_tcp_selection.metadata.get("sha256"),
+                }
                 if not args.raw_controller_debug
                 else None
             ),
@@ -1227,6 +1293,7 @@ def main() -> None:
             "converted_source_episodes": len(results),
         },
     )
+    _write_calibration_catalog(output_root, args)
     _write_converted_dataset_readme(
         output_root,
         repo_id=output_repo_id,

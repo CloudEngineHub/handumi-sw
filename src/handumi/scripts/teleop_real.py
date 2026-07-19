@@ -30,8 +30,6 @@ import os
 import time
 from pathlib import Path
 
-import numpy as np
-
 from handumi.calibration.control_tcp import (
     calibration_path_for_robot_device,
     load_controller_tcp_calibration,

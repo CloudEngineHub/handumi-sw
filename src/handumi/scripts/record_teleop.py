@@ -5,10 +5,10 @@ This recorder is the data-capture sibling of ``handumi-teleop-real``.  The
 operator still drives the robot with HandUMI tracking and real gripper widths,
 but every LeRobot row stores robot joints directly:
 
-* ``observation.state`` is the robot feedback/configuration read from the real
-  backend for this control tick.
-* ``action`` is the joint command produced by the HandUMI teleop controller and
-  sent to the robot on that same tick.
+* ``observation.state`` is the canonical robot feedback/configuration read from
+  the real backend for this control tick.
+* ``action`` is the next canonical joint command produced by the HandUMI teleop
+  controller, matching the temporal pairing used by ``conversion.py``.
 
 Those columns intentionally differ.  The action is the policy target; the
 observation is what the robot reports or schedules after transport/backend
@@ -32,14 +32,8 @@ from handumi.calibration.control_tcp import (
     calibration_path_for_robot_device,
     load_controller_tcp_calibration,
 )
-from handumi.cameras import (
-    build_camera_specs,
-    connect_cameras,
-    disconnect_cameras,
-    read_camera_samples,
-    resolve_camera_ids,
-)
 from handumi.config import DEFAULT_RIG_CONFIG
+from handumi.dataset.canonical import canonical_joint_layout, canonicalize_command
 from handumi.dataset.raw import (
     HANDUMI_CAPTURE_SCHEMA,
     camera_health_features,
@@ -52,17 +46,9 @@ from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
 from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.scripts.record import (
     _EscapeStopListener,
-    _camera_arg,
-    _capture_sources_metadata,
-    _recording_tcp_calibration_metadata,
     _robot_metadata,
-    _selected_camera_names,
-    _update_info_json,
-    _validate_finalized_lerobot_dataset,
-    _validate_unique_camera_ids,
     _wait_for_clap,
     _wait_for_tracking,
-    _write_dataset_readme,
     build_tracker,
     connect_feetech,
 )
@@ -76,7 +62,6 @@ from handumi.scripts.teleop_real import (
 from handumi.scripts.teleop_sim import KeyboardSpaceListener, _sample_state
 from handumi.synchronization import (
     SustainedHealthGate,
-    capture_timing_frame,
     synchronized_gripper_frame,
 )
 from handumi.teleop.core import TeleopController
@@ -169,16 +154,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--task", type=str, default="HandUMI real teleop recording")
     p.add_argument("--repo-id", type=str, default="local/handumi_teleop_dataset")
     p.add_argument("--output-dir", type=Path, default=None)
+    p.add_argument("--resume", action="store_true")
     p.add_argument("--translation-scale", type=float, default=1.0)
     p.add_argument("--space-start", action="store_true")
     p.add_argument("--no-sounds", action="store_true")
-    p.add_argument("--push-to-hub", action="store_true")
-    p.add_argument("--dataset-license", default="other")
-    p.add_argument("--no-video", action="store_true")
-    p.add_argument("--vcodec", type=str, default="h264")
     p.add_argument("--sync-lag-s", type=float, default=0.04)
     p.add_argument("--max-sync-skew-s", type=float, default=0.06)
-    p.add_argument("--camera-stale-timeout-s", type=float, default=0.25)
     p.add_argument("--gripper-stale-timeout-s", type=float, default=0.10)
     p.add_argument("--sensor-loss-timeout-s", type=float, default=1.0)
     p.add_argument("--feetech-sample-hz", type=float, default=100.0)
@@ -186,26 +167,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--skip-can-repair", action="store_true")
     p.add_argument("--rig-config", type=Path, default=DEFAULT_RIG_CONFIG)
     p.add_argument("--controller-tcp-calibration", type=Path, default=None)
-
-    p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
-    p.add_argument("--wrist-cameras", action="store_true")
-    p.add_argument("--workspace-camera", action="store_true")
-    only_camera = p.add_mutually_exclusive_group()
-    only_camera.add_argument(
-        "--only-left-camera",
-        "--only-left-cameras",
-        dest="only_left_camera",
-        action="store_true",
-    )
-    only_camera.add_argument(
-        "--only-right-camera",
-        "--only-right-cameras",
-        dest="only_right_camera",
-        action="store_true",
-    )
-    p.add_argument("--cam-width", type=int, default=640)
-    p.add_argument("--cam-height", type=int, default=480)
-    p.add_argument("--cam-fps", type=int, default=30)
 
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
@@ -237,7 +198,6 @@ def _validate_args(args: argparse.Namespace) -> None:
     for name in (
         "sync_lag_s",
         "max_sync_skew_s",
-        "camera_stale_timeout_s",
         "gripper_stale_timeout_s",
         "sensor_loss_timeout_s",
         "feetech_sample_hz",
@@ -249,13 +209,11 @@ def _validate_args(args: argparse.Namespace) -> None:
 
 def record_episode(
     *,
-    dataset,
-    cameras: list,
-    cam_names: list[str],
     tracker: TrackingProvider,
     grippers: FeetechGripperSampler | FeetechGripperPair | None,
     real_env,
     controller: TeleopController,
+    runtime,
     home_q: np.ndarray,
     enabled_sides: tuple[str, ...],
     space_listener: KeyboardSpaceListener,
@@ -263,18 +221,15 @@ def record_episode(
     episode_time_s: float,
     fps: int,
     task: str,
-    cam_width: int,
-    cam_height: int,
     stop_event: threading.Event,
     play_sounds: bool,
     initial_start_sides: tuple[str, ...],
     sync_lag_s: float,
     max_sync_skew_s: float,
-    camera_stale_timeout_s: float,
     gripper_stale_timeout_s: float,
     sensor_loss_timeout_s: float,
     tracking_loss_timeout_s: float,
-) -> tuple[int, str, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, int, str, np.ndarray]:
     interval = 1.0 / fps
     n_frames = 0
     start_t: float | None = None
@@ -287,6 +242,8 @@ def record_episode(
     max_sync_skew_ns = int(max_sync_skew_s * 1e9)
     sync_lag_ns = int(sync_lag_s * 1e9)
     q = controller.q.copy()
+    observations: list[np.ndarray] = []
+    commands: list[np.ndarray] = []
 
     while True:
         loop_start = time.perf_counter()
@@ -296,7 +253,8 @@ def record_episode(
 
         if stop_event.is_set():
             status = "interrupted"
-            dataset.clear_episode_buffer()
+            observations.clear()
+            commands.clear()
             break
         if start_t is not None and loop_start - start_t >= episode_time_s:
             break
@@ -313,7 +271,8 @@ def record_episode(
                 log_say("tracking lost", play_sounds=play_sounds)
             if loop_start - tracking_lost_since >= tracking_loss_timeout_s:
                 status = "tracking_lost"
-                dataset.clear_episode_buffer()
+                observations.clear()
+                commands.clear()
                 break
             recover = getattr(tracker, "recover", None)
             if callable(recover) and loop_start - last_recovery_attempt >= 3.0:
@@ -343,7 +302,8 @@ def record_episode(
                 q = controller.reset()
                 start_t = None
                 n_frames = 0
-                dataset.clear_episode_buffer()
+                observations.clear()
+                commands.clear()
                 log.info("Double clap detected; restarting episode from home.")
                 log_say("restart recording", play_sounds=play_sounds)
                 real_env.move_home(home_q)
@@ -371,16 +331,6 @@ def record_episode(
             continue
 
         target_time_ns = max(episode_start_ns, record_time_ns - sync_lag_ns)
-        cam_frames, camera_health = read_camera_samples(
-            cameras,
-            cam_names,
-            target_time_ns=target_time_ns,
-            record_time_ns=record_time_ns,
-            width=cam_width,
-            height=cam_height,
-            stale_timeout_s=camera_stale_timeout_s,
-            max_sync_skew_s=max_sync_skew_s,
-        )
         gripper_frame = synchronized_gripper_frame(
             grippers,
             target_time_ns=target_time_ns,
@@ -394,7 +344,6 @@ def record_episode(
             and abs(tracking_time_ns - target_time_ns) <= max_sync_skew_ns
         )
         sensor_health = {
-            **camera_health,
             "feetech": gripper_frame.healthy_for_gate,
             "tracking": tracking_sync_ok,
         }
@@ -405,26 +354,44 @@ def record_episode(
                 "Sensor health timed out: %s.",
                 ", ".join(sorted(timed_out_sensors)),
             )
-            dataset.clear_episode_buffer()
+            observations.clear()
+            commands.clear()
             break
 
-        dataset.add_frame(
-            {
-                **cam_frames,
-                **build_joint_frame(
-                    observation_q=observation_q,
-                    action_q=action_q,
-                    widths=gripper_frame.widths,
-                ),
-                **gripper_frame.frame,
-                **capture_timing_frame(target_time_ns, record_time_ns),
-                "task": task,
-            }
+        observations.append(
+            canonicalize_command(
+                observation_q,
+                runtime=runtime,
+                openings={
+                    "left": gripper_frame.widths.left_normalized,
+                    "right": gripper_frame.widths.right_normalized,
+                },
+            )
+        )
+        commands.append(
+            canonicalize_command(
+                action_q,
+                runtime=runtime,
+                openings={
+                    "left": gripper_frame.widths.left_normalized,
+                    "right": gripper_frame.widths.right_normalized,
+                },
+            )
         )
         n_frames += 1
         _sleep_until_next_tick(interval, loop_start)
 
-    return n_frames, status, q
+    if len(observations) < 2:
+        return (
+            np.empty((0, canonical_joint_layout(runtime).size), dtype=np.float32),
+            np.empty((0, canonical_joint_layout(runtime).size), dtype=np.float32),
+            n_frames,
+            status,
+            q,
+        )
+    states = np.asarray(observations[:-1], dtype=np.float32)
+    actions = np.asarray(commands[1:], dtype=np.float32)
+    return states, actions, len(states), status, q
 
 
 def main() -> None:
@@ -464,7 +431,6 @@ def main() -> None:
     )
     gripper_pair = None
     grippers = None
-    cameras: list[Any] = []
     tracker_started = False
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
 
@@ -495,57 +461,19 @@ def main() -> None:
         real_env.home(home_q)
         space_listener.start()
 
-        camera_names = _selected_camera_names(args)
-        cam_ids = resolve_camera_ids(
-            args.cam_ids,
-            args.rig_config,
-            camera_names=camera_names,
-        )
-        _validate_unique_camera_ids(camera_names, cam_ids)
-        camera_specs, _ = build_camera_specs(
-            cam_ids,
-            camera_names=camera_names,
-            laptop_camera=False,
-            laptop_cam_id=0,
-            laptop_cam_name="laptop",
-        )
-        cam_names = [spec["name"] for spec in camera_specs]
-        cameras = connect_cameras(
-            camera_specs,
-            fps=args.cam_fps,
-            width=args.cam_width,
-            height=args.cam_height,
-            zero_non_laptop=False,
-        )
+        from handumi.dataset import EpisodeResult, write_dataset
 
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-        use_videos = not args.no_video
-        dataset = LeRobotDataset.create(
-            repo_id=args.repo_id,
-            fps=args.fps,
-            root=args.output_dir,
-            robot_type=f"{args.robot}_teleop_real",
-            features=build_features(
-                cam_names,
-                args.cam_width,
-                args.cam_height,
-                use_videos,
-                runtime.joint_names,
-            ),
-            use_videos=use_videos,
-            image_writer_processes=0,
-            image_writer_threads=max(1, 4 * len(cam_names)),
-            vcodec=args.vcodec,
-        )
-        log.info("Dataset created at: %s", dataset.root)
+        layout = canonical_joint_layout(runtime)
+        existing_episodes = _existing_episode_count(args.output_dir) if args.resume else 0
+        results: list[EpisodeResult] = []
+        log.info("Recording vector dataset at: %s", args.output_dir)
 
         clap_detector = DoubleClapDetector()
         recorded = 0
         while (
             args.num_episodes <= 0 or recorded < args.num_episodes
         ) and not stop_event.is_set():
-            ep_num = dataset.num_episodes + 1
+            ep_num = existing_episodes + recorded + 1
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
             if not _wait_for_tracking(tracker, stop_event):
                 break
@@ -565,14 +493,12 @@ def main() -> None:
                     break
                 clap_detector = DoubleClapDetector()
             controller.reset()
-            n_frames, status, _ = record_episode(
-                dataset=dataset,
-                cameras=cameras,
-                cam_names=cam_names,
+            states, actions, n_frames, status, _ = record_episode(
                 tracker=tracker,
                 grippers=grippers,
                 real_env=real_env,
                 controller=controller,
+                runtime=runtime,
                 home_q=home_q,
                 enabled_sides=enabled_sides,
                 space_listener=space_listener,
@@ -580,14 +506,11 @@ def main() -> None:
                 episode_time_s=args.episode_time_s,
                 fps=args.fps,
                 task=args.task,
-                cam_width=args.cam_width,
-                cam_height=args.cam_height,
                 stop_event=stop_event,
                 play_sounds=play_sounds,
                 initial_start_sides=enabled_sides if not args.space_start else (),
                 sync_lag_s=args.sync_lag_s,
                 max_sync_skew_s=args.max_sync_skew_s,
-                camera_stale_timeout_s=args.camera_stale_timeout_s,
                 gripper_stale_timeout_s=args.gripper_stale_timeout_s,
                 sensor_loss_timeout_s=args.sensor_loss_timeout_s,
                 tracking_loss_timeout_s=args.tracking_loss_timeout_s,
@@ -599,12 +522,20 @@ def main() -> None:
             }:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
-                dataset.clear_episode_buffer()
                 if status == "interrupted":
                     break
                 real_env.move_home(home_q)
                 continue
-            dataset.save_episode()
+            results.append(
+                EpisodeResult(
+                    episode_index=recorded,
+                    states=states,
+                    actions=actions,
+                    task=args.task,
+                    calibration_id=-1,
+                    source_kind=1,
+                )
+            )
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
             log_say(
@@ -613,15 +544,38 @@ def main() -> None:
             )
             real_env.move_home(home_q)
 
-        _finalize_dataset(
-            dataset,
-            args=args,
-            camera_specs=camera_specs,
-            cameras=cameras,
-            grippers=grippers,
-            runtime=runtime,
-        )
-        log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
+        if results:
+            write_dataset(
+                output_root=args.output_dir,
+                source_root=args.output_dir,
+                source_info={"features": {}, "handumi": {}},
+                episodes=results,
+                robot_type=runtime.config.kind,
+                joint_names=layout.names,
+                fps=args.fps,
+                resume=args.resume,
+                handumi_metadata={
+                    "recording_device": args.device,
+                    "capture_schema": HANDUMI_CAPTURE_SCHEMA,
+                    "state_layout": "yaml_arm_joints_plus_logical_gripper_width_m",
+                    "state_semantics": "real_robot_joint_feedback",
+                    "action_semantics": "next_step_teleop_joint_command",
+                    "observation_action_alignment": (
+                        "observation.state[t] is canonical backend feedback; "
+                        "action[t] is the next recorded teleop command."
+                    ),
+                    "source_kind_ids": {"converted": 0, "teleop": 1, "unknown": -1},
+                    "calibration_id_semantics": (
+                        "-1 means no per-episode calibration artifact is referenced"
+                    ),
+                    "sync_lag_s": args.sync_lag_s,
+                    "max_sync_skew_s": args.max_sync_skew_s,
+                    "joint_names": layout.names,
+                    "target_robot": _robot_metadata(args.robot),
+                    "repo_id": args.repo_id,
+                },
+            )
+        log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, args.output_dir)
     finally:
         escape_listener.stop()
         space_listener.close()
@@ -632,7 +586,6 @@ def main() -> None:
                 grippers.stop()
             if gripper_pair is not None:
                 gripper_pair.close()
-            disconnect_cameras(cameras)
             if tracker_started:
                 tracker.stop()
             log_say("Exiting", play_sounds=play_sounds, blocking=True)
@@ -654,61 +607,13 @@ def _load_required_calibration(args: argparse.Namespace):
     return load_controller_tcp_calibration(path)
 
 
-def _finalize_dataset(
-    dataset,
-    *,
-    args: argparse.Namespace,
-    camera_specs: list[dict[str, object]],
-    cameras: list[object | None],
-    grippers: object | None,
-    runtime,
-) -> None:
-    dataset.finalize()
-    root = Path(dataset.root)
-    robot_metadata = _robot_metadata(args.robot)
-    calibration_metadata, _ = _recording_tcp_calibration_metadata(
-        robot_metadata=robot_metadata,
-        device=args.device,
-        explicit_path=args.controller_tcp_calibration,
-    )
-    updated_info = _update_info_json(
-        root,
-        {
-            "recording_device": args.device,
-            "capture_schema": HANDUMI_CAPTURE_SCHEMA,
-            "state_semantics": "real_robot_joint_feedback",
-            "action_semantics": "handumi_teleop_joint_command",
-            "observation_action_alignment": (
-                "observation.state is backend.read(...) before write; action is "
-                "the TeleopController command sent on the same row"
-            ),
-            "sync_lag_s": args.sync_lag_s,
-            "max_sync_skew_s": args.max_sync_skew_s,
-            "joint_names": list(runtime.joint_names),
-            "target_robot": robot_metadata,
-            "controller_tcp_calibration": calibration_metadata,
-            "cameras": [
-                {"name": spec["name"], "index_or_path": spec["id"]}
-                for spec in camera_specs
-            ],
-            "sources": _capture_sources_metadata(camera_specs, cameras, grippers),
-        },
-    )
-    if updated_info is not None:
-        dataset.meta.info = updated_info
-    card_kwargs = _write_dataset_readme(
-        root,
-        repo_id=args.repo_id,
-        task=args.task,
-        license_id=args.dataset_license,
-    )
-    _validate_finalized_lerobot_dataset(root)
-    if args.push_to_hub:
-        dataset.push_to_hub(
-            license=args.dataset_license,
-            tags=["HandUMI", args.robot, "real-teleop"],
-            **card_kwargs,
-        )
+def _existing_episode_count(root: Path) -> int:
+    info_path = Path(root) / "meta" / "info.json"
+    if not info_path.exists():
+        return 0
+    import json
+
+    return int(json.loads(info_path.read_text()).get("total_episodes", 0))
 
 
 def _default_output_dir() -> Path:

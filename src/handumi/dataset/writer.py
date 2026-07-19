@@ -48,7 +48,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +155,8 @@ class EpisodeResult:
     actions: np.ndarray
     task: str
     source_episode_index: int = -1
+    calibration_id: int = -1
+    source_kind: int = 0
 
     def __post_init__(self) -> None:
         if self.source_episode_index < 0:
@@ -262,6 +264,12 @@ def _build_info_json(
     features["episode_index"] = {"dtype": "int64", "shape": [1], "names": None}
     features["index"] = {"dtype": "int64", "shape": [1], "names": None}
     features["task_index"] = {"dtype": "int64", "shape": [1], "names": None}
+    features["calibration_id"] = {"dtype": "int64", "shape": [1], "names": None}
+    features["source_kind"] = {
+        "dtype": "int64",
+        "shape": [1],
+        "names": ["converted=0, teleop=1, unknown=-1"],
+    }
 
     info = {
         "codebase_version": "v3.0",
@@ -292,6 +300,8 @@ def _build_stats_json(
     all_episode_indices: np.ndarray,
     all_global_indices: np.ndarray,
     all_task_indices: np.ndarray,
+    all_calibration_ids: np.ndarray,
+    all_source_kinds: np.ndarray,
     video_features: dict[str, Any],
 ) -> dict[str, Any]:
     """Compute global statistics across all episodes."""
@@ -310,6 +320,8 @@ def _build_stats_json(
         ("episode_index", all_episode_indices),
         ("index", all_global_indices),
         ("task_index", all_task_indices),
+        ("calibration_id", all_calibration_ids),
+        ("source_kind", all_source_kinds),
     ):
         stats[key] = _scalar_stats(vals)
 
@@ -342,6 +354,7 @@ def _episode_parquet_row(
 
     row: dict[str, Any] = {
         "episode_index": ep.episode_index,
+        "source_episode_index": ep.source_episode_index,
         "tasks": [ep.task],
         "length": episode_length,
         "data/chunk_index": chunk_idx,
@@ -385,6 +398,8 @@ def _episode_parquet_row(
     ei_arr = np.full(episode_length, ep.episode_index, dtype=np.int64)
     gi_arr = np.arange(dataset_from_index, dataset_to_index, dtype=np.int64)
     ti_arr = np.zeros(episode_length, dtype=np.int64)
+    ci_arr = np.full(episode_length, ep.calibration_id, dtype=np.int64)
+    sk_arr = np.full(episode_length, ep.source_kind, dtype=np.int64)
 
     for col_prefix, arr in (
         ("timestamp", ts_arr),
@@ -392,6 +407,8 @@ def _episode_parquet_row(
         ("episode_index", ei_arr),
         ("index", gi_arr),
         ("task_index", ti_arr),
+        ("calibration_id", ci_arr),
+        ("source_kind", sk_arr),
     ):
         ep_stats = _scalar_stats(arr)
         for stat_name, val in ep_stats.items():
@@ -494,6 +511,62 @@ def _copy_video_files(
     return copied, missing
 
 
+def _load_existing_episode_results(root: Path) -> list[EpisodeResult]:
+    """Load already-written vector episodes for ``--resume`` workflows."""
+
+    root = Path(root)
+    episodes_dir = root / "meta" / "episodes"
+    tasks_path = root / "meta" / "tasks.parquet"
+    if not episodes_dir.exists() or not tasks_path.exists():
+        return []
+
+    tasks_df = pd.read_parquet(tasks_path)
+    task_by_index = {
+        int(row["task_index"]): str(task)
+        for task, row in tasks_df.iterrows()
+    }
+
+    results: list[EpisodeResult] = []
+    for meta_path in sorted(episodes_dir.glob("chunk-*/*.parquet")):
+        meta_df = pd.read_parquet(meta_path)
+        for _, row in meta_df.sort_values("episode_index").iterrows():
+            episode_index = int(row["episode_index"])
+            data_path = (
+                root
+                / "data"
+                / f"chunk-{int(row['data/chunk_index']):03d}"
+                / f"file-{int(row['data/file_index']):03d}.parquet"
+            )
+            data = pd.read_parquet(data_path)
+            task_index = int(data["task_index"].iloc[0]) if len(data) else 0
+            calibration_id = (
+                int(data["calibration_id"].iloc[0])
+                if "calibration_id" in data and len(data)
+                else -1
+            )
+            source_kind = (
+                int(data["source_kind"].iloc[0])
+                if "source_kind" in data and len(data)
+                else -1
+            )
+            results.append(
+                EpisodeResult(
+                    episode_index=episode_index,
+                    source_episode_index=int(
+                        row.get("source_episode_index", episode_index)
+                    ),
+                    states=np.stack(data["observation.state"].to_numpy()).astype(
+                        np.float32
+                    ),
+                    actions=np.stack(data["action"].to_numpy()).astype(np.float32),
+                    task=task_by_index.get(task_index, "task"),
+                    calibration_id=calibration_id,
+                    source_kind=source_kind,
+                )
+            )
+    return sorted(results, key=lambda ep: ep.episode_index)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -510,6 +583,7 @@ def write_dataset(
     fps: int,
     handumi_metadata: dict[str, Any] | None = None,
     chunks_size: int = CHUNKS_SIZE,
+    resume: bool = False,
 ) -> None:
     """Write a complete LeRobot v3.0 dataset to ``output_root``.
 
@@ -540,6 +614,15 @@ def write_dataset(
     output_root = Path(output_root)
     source_root = Path(source_root)
     output_root.mkdir(parents=True, exist_ok=True)
+    if resume:
+        existing = _load_existing_episode_results(output_root)
+        if existing:
+            offset = len(existing)
+            episodes = [
+                replace(ep, episode_index=offset + i)
+                for i, ep in enumerate(episodes)
+            ]
+            episodes = [*existing, *episodes]
 
     # Collect video feature definitions from source info.json
     video_features: dict[str, Any] = {
@@ -564,6 +647,8 @@ def write_dataset(
     all_episode_indices_list: list[np.ndarray] = []
     all_global_indices_list: list[np.ndarray] = []
     all_task_indices_list: list[np.ndarray] = []
+    all_calibration_ids_list: list[np.ndarray] = []
+    all_source_kinds_list: list[np.ndarray] = []
 
     # Build task index map
     task_to_idx: dict[str, int] = {}
@@ -592,6 +677,8 @@ def write_dataset(
         )
         task_idx_val = task_to_idx[ep.task]
         task_indices = np.full(T, task_idx_val, dtype=np.int64)
+        calibration_ids = np.full(T, ep.calibration_id, dtype=np.int64)
+        source_kinds = np.full(T, ep.source_kind, dtype=np.int64)
 
         rows = {
             "observation.state": list(ep.states),
@@ -601,6 +688,8 @@ def write_dataset(
             "episode_index": episode_indices,
             "index": global_indices,
             "task_index": task_indices,
+            "calibration_id": calibration_ids,
+            "source_kind": source_kinds,
         }
         df = pd.DataFrame(rows)
         df.to_parquet(data_dir / f"file-{file_idx:03d}.parquet", index=False)
@@ -613,6 +702,8 @@ def write_dataset(
         all_episode_indices_list.append(episode_indices)
         all_global_indices_list.append(global_indices)
         all_task_indices_list.append(task_indices)
+        all_calibration_ids_list.append(calibration_ids)
+        all_source_kinds_list.append(source_kinds)
 
         episode_rows.append(
             _episode_parquet_row(
@@ -688,6 +779,8 @@ def write_dataset(
         all_episode_indices = np.concatenate(all_episode_indices_list)
         all_global_indices = np.concatenate(all_global_indices_list)
         all_task_indices = np.concatenate(all_task_indices_list)
+        all_calibration_ids = np.concatenate(all_calibration_ids_list)
+        all_source_kinds = np.concatenate(all_source_kinds_list)
 
         stats = _build_stats_json(
             all_states=all_states,
@@ -697,6 +790,8 @@ def write_dataset(
             all_episode_indices=all_episode_indices,
             all_global_indices=all_global_indices,
             all_task_indices=all_task_indices,
+            all_calibration_ids=all_calibration_ids,
+            all_source_kinds=all_source_kinds,
             video_features=video_features,
         )
         with open(meta_dir / "stats.json", "w") as fh:
