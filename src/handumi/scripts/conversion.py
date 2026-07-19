@@ -2,10 +2,17 @@
 """Convert a raw HandUMI LeRobot dataset to robot-specific joint angles.
 
 The script loads raw HandUMI controller states (``observation.state``), applies
-the same optional controller->TCP calibration and local-relative retargeting
-used by ``replay_in_sim.py``, then writes a LeRobot v3.0 dataset whose
+the same optional controller->TCP calibration and IK retargeting used by
+``replay_in_sim.py``, then writes a LeRobot v3.0 dataset whose
 ``observation.state`` and ``action`` columns contain physical robot joint
 values.
+
+``--retarget-mode`` defaults to ``auto`` and is resolved with the exact same
+rule ``handumi-replay-in-sim`` uses, identically for every embodiment: when
+the source dataset was recorded in the calibrated table workspace, conversion
+solves through the replay pipeline (``absolute-table``) for exact qpos
+parity; otherwise it falls back to ``local-relative``. No embodiment gets a
+different default or a separate code path.
 
 All video streams are preserved unchanged (the last frame of each episode is
 dropped from the parquet data to produce ``action = state[t+1]``, but the
@@ -26,6 +33,10 @@ Usage
         --embodiment piper \
         --output-repo-id NONHUMAN-RESEARCH/my-piper-dataset \
         --push-to-hub
+
+Both commands above resolve their retarget mode the same way: auto-detected
+from the source dataset's ``tracking_workspace`` metadata. Pass an explicit
+``--retarget-mode`` to override it for any embodiment.
 """
 
 from __future__ import annotations
@@ -194,19 +205,13 @@ def build_parser() -> argparse.ArgumentParser:
     # Embodiment selection
     # ------------------------------------------------------------------
     emb = parser.add_argument_group("Embodiment")
-    embodiment_selection = emb.add_mutually_exclusive_group()
-    embodiment_selection.add_argument(
+    emb.add_argument(
         "--embodiment",
         choices=EMBODIMENT_NAMES,
         default=None,
-        help="Target robot embodiment (default: axol).",
-    )
-    embodiment_selection.add_argument(
-        "--piper",
-        action="store_true",
         help=(
-            "Validated BiPiper profile: use the piper embodiment and the exact "
-            "absolute-table IK pipeline used by handumi-replay-in-sim."
+            "Target robot embodiment (default: axol). Retarget-mode resolution "
+            "is identical for every embodiment; see --retarget-mode."
         ),
     )
 
@@ -247,11 +252,14 @@ def build_parser() -> argparse.ArgumentParser:
     ik.add_argument("--max-reach", type=float, default=None)
     ik.add_argument(
         "--retarget-mode",
-        choices=("local-relative", "anchored", "absolute-table"),
-        default=None,
+        choices=("auto", "local-relative", "anchored", "absolute-table"),
+        default="auto",
         help=(
-            "Retargeting mode shared with replay_in_sim.py. Defaults to "
-            "absolute-table for --piper and local-relative otherwise."
+            "Retargeting mode shared with replay_in_sim.py. auto selects "
+            "absolute-table when the source dataset declares a calibrated "
+            "table workspace, otherwise local-relative -- the same rule "
+            "handumi-replay-in-sim applies, and applied identically for "
+            "every embodiment (no embodiment gets a different default)."
         ),
     )
     ik.add_argument(
@@ -333,27 +341,14 @@ def _resolve_cli_profile(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
 ) -> None:
-    """Resolve robot-specific conversion defaults before loading any data."""
-    if args.piper:
-        args.embodiment = "piper"
-        if args.retarget_mode not in (None, "absolute-table"):
-            parser.error("--piper requires --retarget-mode absolute-table.")
-        args.retarget_mode = "absolute-table"
-    else:
-        args.embodiment = args.embodiment or "axol"
-        args.retarget_mode = args.retarget_mode or "local-relative"
+    """Resolve CLI defaults that do not require the source dataset.
 
-    if args.retarget_mode == "absolute-table":
-        path = args.deployment_calibration or (
-            Path("configs/calibration") / f"{args.embodiment}_table.yaml"
-        )
-        from handumi.scripts.replay.replay_in_sim import load_robot_from_table
-
-        try:
-            load_robot_from_table(path, expected_robot=args.embodiment)
-        except SystemExit as exc:
-            parser.error(str(exc))
-        args.deployment_calibration = path
+    This only picks the target embodiment and validates numeric thresholds.
+    ``--retarget-mode auto`` is resolved later by ``_resolve_retarget_mode``,
+    once the source dataset's metadata is available, using the exact same
+    rule for every embodiment.
+    """
+    args.embodiment = args.embodiment or "axol"
 
     if args.initial_solve_iterations < 1:
         parser.error("--initial-solve-iterations must be >= 1.")
@@ -365,6 +360,44 @@ def _resolve_cli_profile(
         parser.error("--max-ik-rotation-error-deg must be > 0.")
     if args.table_clearance_warning_m <= 0.0:
         parser.error("--table-clearance-warning-m must be > 0.")
+
+
+def _resolve_retarget_mode(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    source_info: dict[str, Any],
+) -> None:
+    """Resolve ``--retarget-mode auto`` with the same rule replay uses.
+
+    Every embodiment goes through this identical rule: ``absolute-table``
+    (exact replay-solver parity) when the source dataset declares a
+    calibrated table workspace, ``local-relative`` otherwise. No embodiment
+    is special-cased here.
+    """
+    from handumi.scripts.replay.replay_in_sim import (
+        _resolved_retarget_mode as resolve_replay_retarget_mode,
+    )
+
+    requested = args.retarget_mode
+    args.retarget_mode = resolve_replay_retarget_mode(args, source_info)
+    if requested == "auto":
+        workspace = handumi_metadata(source_info).get("tracking_workspace")
+        print(
+            f"Retarget mode: auto -> {args.retarget_mode} "
+            f"(tracking_workspace={workspace!r})"
+        )
+
+    if args.retarget_mode == "absolute-table":
+        from handumi.scripts.replay.replay_in_sim import load_robot_from_table
+
+        path = args.deployment_calibration or (
+            Path("configs/calibration") / f"{args.embodiment}_table.yaml"
+        )
+        try:
+            load_robot_from_table(path, expected_robot=args.embodiment)
+        except SystemExit as exc:
+            parser.error(str(exc))
+        args.deployment_calibration = path
 
 
 def _deployment_calibration_metadata(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -1105,6 +1138,7 @@ def main() -> None:
         validate_raw_state_metadata(source_info)
     except ValueError as exc:
         parser.error(str(exc))
+    _resolve_retarget_mode(parser, args, source_info)
     if not args.raw_controller_debug:
         try:
             args.controller_tcp_selection = _resolve_conversion_tcp_calibration(
