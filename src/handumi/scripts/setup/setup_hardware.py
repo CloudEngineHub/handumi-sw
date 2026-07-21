@@ -96,11 +96,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Use an explicit Controller-to-TCP calibration file.",
     )
+    parser.add_argument(
+        "--check-only",
+        "--check",
+        dest="check_only",
+        action="store_true",
+        help="Print the read-only readiness checklist without changing hardware.",
+    )
     return parser.parse_args(argv)
 
 
 def main() -> None:
     args = parse_args()
+    if args.check_only:
+        from handumi.scripts.doctor import run_doctor
+
+        run_doctor(args.rig_config, robot=args.robot, device=args.device)
+        return
     ensure_rig_config(args.rig_config)
 
     if not args.skip_feetech_map:
@@ -153,6 +165,9 @@ def main() -> None:
     if args.controller_tcp_calibration is not None:
         command += f" --controller-tcp-calibration {calibration_path}"
     print(command)
+    from handumi.scripts.doctor import run_doctor
+
+    run_doctor(args.rig_config, robot=args.robot, device=args.device)
 
 
 def ensure_feetech_calibration(args: argparse.Namespace) -> None:
