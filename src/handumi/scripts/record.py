@@ -48,6 +48,15 @@ from handumi.cameras import (
     resolve_camera_ids,
 )
 from handumi.config import DEFAULT_RIG_CONFIG
+from handumi.dataset.capture import (
+    CAMERA_STALE_TIMEOUT_S,
+    FEETECH_SAMPLE_HZ,
+    GRIPPER_STALE_TIMEOUT_S,
+    MAX_SYNC_SKEW_S,
+    SENSOR_LOSS_TIMEOUT_S,
+    SYNC_LAG_S,
+    TRACKING_LOSS_TIMEOUT_S,
+)
 from handumi.dataset.raw import (
     HANDUMI_CAPTURE_SCHEMA,
     HANDUMI_STATE_SEMANTICS,
@@ -376,12 +385,12 @@ def record_episode(
     finish_button: str,
     start_threshold: float,
     clap_detector: DoubleClapDetector | None = None,
-    tracking_loss_timeout_s: float = 1.0,
-    sync_lag_s: float = 0.04,
-    max_sync_skew_s: float = 0.06,
-    camera_stale_timeout_s: float = 0.25,
-    gripper_stale_timeout_s: float = 0.10,
-    sensor_loss_timeout_s: float = 1.0,
+    tracking_loss_timeout_s: float = TRACKING_LOSS_TIMEOUT_S,
+    sync_lag_s: float = SYNC_LAG_S,
+    max_sync_skew_s: float = MAX_SYNC_SKEW_S,
+    camera_stale_timeout_s: float = CAMERA_STALE_TIMEOUT_S,
+    gripper_stale_timeout_s: float = GRIPPER_STALE_TIMEOUT_S,
+    sensor_loss_timeout_s: float = SENSOR_LOSS_TIMEOUT_S,
     rerun: _RecordingRerun | None = None,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
@@ -615,30 +624,30 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--tracking-loss-timeout-s",
         type=float,
-        default=1.0,
+        default=TRACKING_LOSS_TIMEOUT_S,
         help="Discard an episode when either controller remains untracked for this long.",
     )
     p.add_argument(
         "--sync-lag-s",
         type=float,
-        default=0.04,
+        default=SYNC_LAG_S,
         help="Capture rows this far behind real time so native sensor buffers can align.",
     )
     p.add_argument(
         "--max-sync-skew-s",
         type=float,
-        default=0.06,
+        default=MAX_SYNC_SKEW_S,
         help="Maximum source-to-row timestamp difference considered healthy.",
     )
-    p.add_argument("--camera-stale-timeout-s", type=float, default=0.25)
-    p.add_argument("--gripper-stale-timeout-s", type=float, default=0.10)
+    p.add_argument("--camera-stale-timeout-s", type=float, default=CAMERA_STALE_TIMEOUT_S)
+    p.add_argument("--gripper-stale-timeout-s", type=float, default=GRIPPER_STALE_TIMEOUT_S)
     p.add_argument(
         "--sensor-loss-timeout-s",
         type=float,
-        default=1.0,
+        default=SENSOR_LOSS_TIMEOUT_S,
         help="Discard after a camera or encoder remains unhealthy for this long.",
     )
-    p.add_argument("--feetech-sample-hz", type=float, default=100.0)
+    p.add_argument("--feetech-sample-hz", type=float, default=FEETECH_SAMPLE_HZ)
     p.add_argument("--no-video", action="store_true")
     p.add_argument(
         "--rerun",

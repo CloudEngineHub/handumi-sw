@@ -2,11 +2,14 @@ import unittest
 
 import numpy as np
 
+from handumi.dataset.capture import FEETECH_SAMPLE_HZ, SYNC_LAG_S
 from handumi.feetech import GripperWidths
 from handumi.scripts.record_teleop import (
+    PICO_TRACKING_MODE,
     build_features,
     build_joint_frame,
     joint_state_feature,
+    parse_args,
 )
 
 
@@ -24,6 +27,22 @@ def _widths() -> GripperWidths:
 
 
 class TeleopRecordSchemaTest(unittest.TestCase):
+    def test_operational_defaults_are_constants_not_cli_flags(self):
+        args = parse_args(["--device", "pico"])
+
+        self.assertEqual(args.pico_mode, PICO_TRACKING_MODE)
+        self.assertTrue(args.pico_adb)
+        self.assertFalse(args.pico_wifi)
+        self.assertFalse(args.skip_feetech)
+        self.assertFalse(args.space_start)
+        self.assertEqual(args.sync_lag_s, SYNC_LAG_S)
+        self.assertEqual(args.feetech_sample_hz, FEETECH_SAMPLE_HZ)
+
+        with self.assertRaises(SystemExit):
+            parse_args(["--device", "pico", "--skip-feetech"])
+        with self.assertRaises(SystemExit):
+            parse_args(["--device", "pico", "--pico-wifi"])
+
     def test_joint_state_feature_uses_robot_joint_names(self):
         self.assertEqual(
             joint_state_feature(["left_joint1", "left_joint2"]),

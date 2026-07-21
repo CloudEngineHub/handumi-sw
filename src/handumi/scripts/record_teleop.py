@@ -1,18 +1,37 @@
 #!/usr/bin/env python3
 """Record joint-level real-robot teleoperation demonstrations.
 
-This recorder is the data-capture sibling of ``handumi-teleop-real``.  The
-operator still drives the robot with HandUMI tracking and real gripper widths,
-but every LeRobot row stores robot joints directly:
+This is the recording sibling of ``handumi-teleop-real``. The operator drives
+the real robot with HandUMI tracking and Feetech gripper widths, while each
+LeRobot row stores canonical robot joints directly:
 
-* ``observation.state`` is the canonical robot feedback/configuration read from
-  the real backend for this control tick.
-* ``action`` is the next canonical joint command produced by the HandUMI teleop
-  controller, matching the temporal pairing used by ``conversion.py``.
+* ``observation.state`` is the robot feedback read from the real backend.
+* ``action`` is the next joint command produced by the teleop controller.
 
-Those columns intentionally differ.  The action is the policy target; the
-observation is what the robot reports or schedules after transport/backend
-latency and vendor-side smoothing.
+Before recording, controller->TCP calibration and Feetech calibration must be
+available. Episodes start with a double clap, and PICO tracking uses ADB.
+
+Examples
+--------
+::
+
+    uv run handumi-record-teleop --device pico --robot piper
+    uv run handumi-record-teleop --device pico --robot openarmv1
+    uv run handumi-record-teleop --device pico --robot piper --side right
+    uv run handumi-record-teleop --device pico --robot piper \
+        --output-dir outputs/my_dataset --resume
+
+Common options:
+
+* ``--device``        pico|meta tracking device.
+* ``--robot``         Registered real backend, for example piper or openarmv1.
+* ``--side``          left|right|both enabled arms.
+* ``--fps``           Recording/control frequency in Hz.
+* ``--episode-time-s`` Maximum episode duration in seconds.
+* ``--num-episodes``  Number of episodes to record; 0 means until stopped.
+* ``--task``          Task description stored in the dataset.
+* ``--output-dir``    Destination directory; defaults to outputs/teleop_<date>.
+* ``--resume``        Append episodes to an existing dataset.
 """
 
 from __future__ import annotations
@@ -34,6 +53,14 @@ from handumi.calibration.control_tcp import (
 )
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset.canonical import canonical_joint_layout, canonicalize_command
+from handumi.dataset.capture import (
+    FEETECH_SAMPLE_HZ,
+    GRIPPER_STALE_TIMEOUT_S,
+    MAX_SYNC_SKEW_S,
+    SENSOR_LOSS_TIMEOUT_S,
+    SYNC_LAG_S,
+    TRACKING_LOSS_TIMEOUT_S,
+)
 from handumi.dataset.raw import (
     HANDUMI_CAPTURE_SCHEMA,
     camera_health_features,
@@ -77,6 +104,20 @@ logging.basicConfig(
 log = logging.getLogger("handumi.record_teleop")
 
 SIDE_CHOICES = ("left", "right", "both")
+DEFAULT_TRANSLATION_SCALE = 1.0
+SPACE_START_ENABLED = False
+PLAY_SOUNDS = True
+REPAIR_CAN_ON_SETUP = True
+RIG_CONFIG_PATH = DEFAULT_RIG_CONFIG
+CONTROLLER_TCP_CALIBRATION_PATH = None
+FEETECH_PORT_OVERRIDE = None
+REQUIRE_FEETECH_GRIPPERS = True
+META_QUEST_IP_OVERRIDE = None
+META_TCP_PORT_OVERRIDE = None
+META_SYNC_PORT_OVERRIDE = None
+PICO_TRACKING_MODE = "mandos"
+PICO_USE_WIFI = False
+SKIP_ADB_CHECK = False
 
 
 def build_features(
@@ -155,32 +196,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--repo-id", type=str, default="local/handumi_teleop_dataset")
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument("--resume", action="store_true")
-    p.add_argument("--translation-scale", type=float, default=1.0)
-    p.add_argument("--space-start", action="store_true")
-    p.add_argument("--no-sounds", action="store_true")
-    p.add_argument("--sync-lag-s", type=float, default=0.04)
-    p.add_argument("--max-sync-skew-s", type=float, default=0.06)
-    p.add_argument("--gripper-stale-timeout-s", type=float, default=0.10)
-    p.add_argument("--sensor-loss-timeout-s", type=float, default=1.0)
-    p.add_argument("--feetech-sample-hz", type=float, default=100.0)
-    p.add_argument("--tracking-loss-timeout-s", type=float, default=1.0)
-    p.add_argument("--skip-can-repair", action="store_true")
-    p.add_argument("--rig-config", type=Path, default=DEFAULT_RIG_CONFIG)
-    p.add_argument("--controller-tcp-calibration", type=Path, default=None)
+    args = p.parse_args(argv)
+    _apply_recording_defaults(args)
+    return args
 
-    p.add_argument("--feetech-port", type=str, default=None)
-    p.add_argument("--skip-feetech", action="store_true")
-    p.add_argument("--quest-ip", type=str, default=None)
-    p.add_argument("--tcp-port", type=int, default=None)
-    p.add_argument("--sync-port", type=int, default=None)
-    p.add_argument(
-        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
-    )
-    pico_transport = p.add_mutually_exclusive_group()
-    pico_transport.add_argument("--pico-adb", action="store_true")
-    pico_transport.add_argument("--pico-wifi", action="store_true")
-    p.add_argument("--skip-adb-check", action="store_true")
-    return p.parse_args(argv)
+
+def _apply_recording_defaults(args: argparse.Namespace) -> None:
+    args.translation_scale = DEFAULT_TRANSLATION_SCALE
+    args.space_start = SPACE_START_ENABLED
+    args.no_sounds = not PLAY_SOUNDS
+    args.sync_lag_s = SYNC_LAG_S
+    args.max_sync_skew_s = MAX_SYNC_SKEW_S
+    args.gripper_stale_timeout_s = GRIPPER_STALE_TIMEOUT_S
+    args.sensor_loss_timeout_s = SENSOR_LOSS_TIMEOUT_S
+    args.feetech_sample_hz = FEETECH_SAMPLE_HZ
+    args.tracking_loss_timeout_s = TRACKING_LOSS_TIMEOUT_S
+    args.skip_can_repair = not REPAIR_CAN_ON_SETUP
+    args.rig_config = RIG_CONFIG_PATH
+    args.controller_tcp_calibration = CONTROLLER_TCP_CALIBRATION_PATH
+    args.feetech_port = FEETECH_PORT_OVERRIDE
+    args.skip_feetech = not REQUIRE_FEETECH_GRIPPERS
+    args.quest_ip = META_QUEST_IP_OVERRIDE
+    args.tcp_port = META_TCP_PORT_OVERRIDE
+    args.sync_port = META_SYNC_PORT_OVERRIDE
+    args.pico_mode = PICO_TRACKING_MODE
+    args.pico_adb = not PICO_USE_WIFI
+    args.pico_wifi = PICO_USE_WIFI
+    args.skip_adb_check = SKIP_ADB_CHECK
 
 
 def _validate_args(args: argparse.Namespace) -> None:
@@ -190,11 +232,6 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--episode-time-s must be > 0.")
     if args.num_episodes < 0:
         raise SystemExit("--num-episodes must be >= 0.")
-    if args.skip_feetech and not args.space_start:
-        raise SystemExit(
-            "--skip-feetech disables double-clap; add --space-start so teleop "
-            "can begin."
-        )
     for name in (
         "sync_lag_s",
         "max_sync_skew_s",
@@ -600,8 +637,8 @@ def _load_required_calibration(args: argparse.Namespace):
     if not path.exists():
         raise SystemExit(
             f"Missing controller->TCP calibration: {path}\n"
-            "Run the TCP calibration before real teleop, or pass "
-            "--controller-tcp-calibration <path>."
+            "Run the TCP calibration for the configured robot/device before "
+            "real teleop."
         )
     log.info("controller->TCP calibration: %s", source)
     return load_controller_tcp_calibration(path)

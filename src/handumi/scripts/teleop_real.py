@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""Live HandUMI teleop for registered real-robot backends.
+"""Run live HandUMI teleop on a registered real-robot backend.
 
-This is the real-hardware sibling of ``handumi-teleop-sim``. The tracking and
-retargeting semantics are intentionally the same: the current HandUMI TCP pose
-is anchored to the robot home TCP, then relative controller motion drives the
-IK target. The one IK solution ``q`` is the source of truth; the selected lazy
-backend converts it to vendor commands and streams them over CAN.
+The controller TCP pose is anchored at the robot home TCP, then relative
+controller motion drives the IK target. The IK solution ``q`` is the source of
+truth; the selected backend converts it to hardware commands and streams them
+over CAN.
 
-Safety defaults:
+Safety behavior:
 
 * controller->TCP calibration is required;
-* both arms home slowly to the selected named pose before teleop;
-* arms stay at home until double-clap or explicit ``--space-start``;
-* a double-clap while teleop is active clears anchors and returns home.
+* the robot homes before teleop starts;
+* arms stay idle until double-clap or explicit ``--space-start``;
+* double-clap during teleop clears anchors and returns home.
 
-Usage
------
-::
+Examples:
 
     handumi-teleop-real --device pico --robot piper
     handumi-teleop-real --device pico --robot piper --space-start
@@ -29,6 +26,7 @@ import logging
 import os
 import time
 from pathlib import Path
+import numpy as np
 
 from handumi.calibration.control_tcp import (
     calibration_path_for_robot_device,
@@ -108,11 +106,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Machine-local Feetech, tracking, and robot CAN configuration.",
     )
 
-    # Feetech flags, same names as handumi-record and handumi-teleop-sim.
+    # Shared Feetech options.
     parser.add_argument("--feetech-port", type=str, default=None)
     parser.add_argument("--skip-feetech", action="store_true")
 
-    # Tracking flags, same names as handumi-record (shared build_tracker).
+    # Shared tracking options consumed by build_tracker.
     parser.add_argument("--quest-ip", type=str, default=None)
     parser.add_argument("--tcp-port", type=int, default=None)
     parser.add_argument("--sync-port", type=int, default=None)
@@ -173,12 +171,12 @@ def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> No
         missing_text = ", ".join(
             f"{side}={port or '<unset>'}" for side, port in missing.items()
         )
-        current_text = ", ".join(current) if current else "ninguno"
+        current_text = ", ".join(current) if current else "none"
         raise SystemExit(
             "Feetech port configured in rig.yaml is missing: "
             f"{missing_text}.\n"
-            f"Puertos Feetech actuales: {current_text}\n"
-            "Remapea Feetech sin tocar CAN/PICO:\n"
+            f"Current Feetech ports: {current_text}\n"
+            "Remap Feetech without touching CAN/PICO:\n"
             f"  uv run handumi-setup-hardware --robot {robot} --device pico "
             "--skip-can-map --skip-can-repair --skip-pico "
             "--force-feetech-calibration"
@@ -192,8 +190,8 @@ def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> No
     if denied:
         denied_text = ", ".join(f"{side}={port}" for side, port in denied.items())
         raise SystemExit(
-            f"No tengo permisos para abrir Feetech: {denied_text}.\n"
-            "Corre primero:\n"
+            f"Missing permission to open Feetech: {denied_text}.\n"
+            "Run first:\n"
             f"  uv run handumi-setup-hardware --robot {robot} --device pico "
             "--skip-can-map --skip-can-repair --skip-feetech-map --skip-pico"
         )

@@ -10,6 +10,7 @@ from typing import Any, Literal
 import numpy as np
 import yaml
 
+from handumi.dataset.capture import MAX_SYNC_SKEW_S
 from handumi.dataset.raw import (
     LEFT_GRIPPER_INDEX,
     LEFT_POSE_SLICE,
@@ -26,7 +27,7 @@ class EpisodeQualityConfig:
     max_bad_tracking_fraction: float = 0.01
     max_bad_sensor_fraction: float = 0.01
     max_bad_sync_fraction: float = 0.01
-    max_sync_error_ms: float = 60.0
+    max_sync_error_ms: float = MAX_SYNC_SKEW_S * 1000.0
     max_translation_speed_m_s: float = 5.0
     max_rotation_step_deg: float = 90.0
     max_pose_freeze_s: float = 1.0
