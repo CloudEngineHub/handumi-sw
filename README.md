@@ -26,6 +26,28 @@ handumi-record --help
 
 PICO support is installed by default. Use `bash install.sh --skip-xrt` for a Meta Quest-only workstation.
 
+## Install from GitHub
+
+HandUMI can also be installed directly from this repository:
+
+```bash
+pip install "handumi @ git+https://github.com/robonet-ai/handumi-sw.git"
+```
+
+Optional robot and simulation backends can be selected with extras:
+
+```bash
+pip install "handumi[sim,piper,openarm] @ git+https://github.com/robonet-ai/handumi-sw.git"
+```
+
+For reproducible environments, pin a branch, tag, or commit:
+
+```toml
+dependencies = [
+    "handumi @ git+https://github.com/robonet-ai/handumi-sw.git@main",
+]
+```
+
 ## Core Workflow
 
 ```mermaid
