@@ -13,6 +13,7 @@ def test_help_lists_common_workflow(capsys):
     assert "handumi doctor" in output
     assert "record" in output
     assert "convert" in output
+    assert "completion" in output
 
 
 def test_dispatch_forwards_remaining_arguments():

@@ -166,6 +166,27 @@ ensure_project_deps() {
   UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-600}" uv sync "${extras[@]}"
 }
 
+ensure_shell_completion() {
+  local activate_file="$VIRTUAL_ENV/bin/activate"
+  local activate_fish="$VIRTUAL_ENV/bin/activate.fish"
+  local marker="# HandUMI shell completion"
+
+  if [[ -f "$activate_file" ]] && ! grep -Fq "$marker" "$activate_file"; then
+    printf '\n%s\n' "$marker" >> "$activate_file"
+    printf '%s\n' 'if [ -n "${BASH_VERSION:-}" ]; then' >> "$activate_file"
+    printf '%s\n' '  eval "$(handumi completion bash)"' >> "$activate_file"
+    printf '%s\n' 'elif [ -n "${ZSH_VERSION:-}" ]; then' >> "$activate_file"
+    printf '%s\n' '  eval "$(handumi completion zsh)"' >> "$activate_file"
+    printf '%s\n' 'fi' >> "$activate_file"
+  fi
+
+  if [[ -f "$activate_fish" ]] && ! grep -Fq "$marker" "$activate_fish"; then
+    printf '\n%s\n' "$marker" >> "$activate_fish"
+    printf '%s\n' 'handumi completion fish | source' >> "$activate_fish"
+  fi
+  echo "==> Installed HandUMI shell completion for the virtual environment"
+}
+
 ensure_openarm_system_deps() {
   [[ "$ROBOT" == "openarmv1" ]] || return 0
   if command -v openarm-can-cli >/dev/null 2>&1 && \
@@ -211,6 +232,7 @@ fi
 ensure_venv
 ensure_openarm_system_deps
 ensure_project_deps
+ensure_shell_completion
 if [[ "$SKIP_XRT" -ne 1 ]]; then
   ensure_xrobotoolkit_python_package
 fi

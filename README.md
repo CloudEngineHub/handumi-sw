@@ -35,7 +35,9 @@ Edit `configs/rig.yaml` once with the local cameras, tracking device and robot
 profile. `handumi setup --check` prints the same read-only readiness checklist
 as `handumi doctor`; `handumi setup` runs the guided hardware setup. Existing
 workflows are grouped under the single `handumi` command; use `handumi --help`
-to see the final command tree.
+to see the final command tree. Bash, Zsh, and Fish completion is loaded when
+the virtual environment is activated, so `handumi re<Tab>` completes `record`
+and `replay`.
 
 ## Install from GitHub
 

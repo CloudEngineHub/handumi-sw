@@ -26,6 +26,9 @@ COMMANDS = {
         "handumi.scripts.replay.replay_in_sim", "Replay a dataset in simulation"
     ),
     ("convert",): Command("handumi.scripts.conversion", "Convert data to a robot"),
+    ("completion",): Command(
+        "handumi.scripts.completion", "Enable Bash, Zsh, or Fish completion"
+    ),
     ("teleop", "sim"): Command("handumi.scripts.teleop_sim", "Teleoperate in simulation"),
     ("teleop", "real"): Command("handumi.scripts.teleop_real", "Teleoperate a real robot"),
     ("camera", "pico"): Command("handumi.scripts.pico_camera", "Stream cameras to PICO"),
