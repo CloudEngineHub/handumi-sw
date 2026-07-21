@@ -26,6 +26,15 @@ from handumi.dataset.raw import (
     validate_raw_state_shape,
 )
 from handumi.dataset.reader import DatasetRef, dataset_root_from_repo_id
+from handumi.dataset.capture import (
+    CAMERA_STALE_TIMEOUT_S,
+    FEETECH_SAMPLE_HZ,
+    GRIPPER_STALE_TIMEOUT_S,
+    MAX_SYNC_SKEW_S,
+    SENSOR_LOSS_TIMEOUT_S,
+    SYNC_LAG_S,
+    TRACKING_LOSS_TIMEOUT_S,
+)
 from handumi.dataset.quality import (
     EpisodeQualityConfig,
     EpisodeQualityReport,
@@ -63,11 +72,14 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "CHUNKS_SIZE",
+    "CAMERA_STALE_TIMEOUT_S",
     "DatasetDownloadResult",
     "DatasetRef",
     "EpisodeResult",
     "EpisodeQualityConfig",
     "EpisodeQualityReport",
+    "FEETECH_SAMPLE_HZ",
+    "GRIPPER_STALE_TIMEOUT_S",
     "RawEpisode",
     "QualityFinding",
     "HANDUMI_RAW_IMAGE_KEYS",
@@ -75,8 +87,12 @@ __all__ = [
     "HANDUMI_RAW_STATE_SIZE",
     "LEFT_GRIPPER_INDEX",
     "LEFT_POSE_SLICE",
+    "MAX_SYNC_SKEW_S",
     "RIGHT_GRIPPER_INDEX",
     "RIGHT_POSE_SLICE",
+    "SENSOR_LOSS_TIMEOUT_S",
+    "SYNC_LAG_S",
+    "TRACKING_LOSS_TIMEOUT_S",
     "chunk_and_file",
     "dataset_root_from_repo_id",
     "download_dataset",
