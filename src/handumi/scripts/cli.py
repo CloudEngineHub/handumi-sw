@@ -30,8 +30,18 @@ COMMANDS = {
     ("completion",): Command(
         "handumi.scripts.completion", "Enable Bash, Zsh, or Fish completion"
     ),
-    ("teleop", "sim"): Command("handumi.scripts.teleop_sim", "Teleoperate in simulation"),
-    ("teleop", "real"): Command("handumi.scripts.teleop_real", "Teleoperate a real robot"),
+    ("teleop",): Command(
+        "handumi.scripts.teleop_sim",
+        "Teleoperate in simulation",
+    ),
+    ("teleop-real",): Command(
+        "handumi.scripts.teleop_real",
+        "Teleoperate a physical robot",
+    ),
+    ("teleop-record",): Command(
+        "handumi.scripts.teleop_record",
+        "Record real-robot teleoperation demonstrations",
+    ),
     ("camera", "pico"): Command("handumi.scripts.pico_camera", "Stream cameras to PICO"),
     ("calibrate", "grippers"): Command(
         "handumi.scripts.setup.calibrate_grippers", "Calibrate Feetech grippers"

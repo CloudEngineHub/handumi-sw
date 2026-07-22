@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """Run live HandUMI teleop on a registered real-robot backend.
 
 The controller TCP pose is anchored at the robot home TCP, then relative
@@ -15,11 +15,9 @@ Safety behavior:
 
 Examples:
 
-    handumi teleop real --device pico --robot piper
-    handumi teleop real --device pico --robot piper --space-start
+    handumi teleop-real --device pico --robot piper
+    handumi teleop-real --device pico --robot piper --space-start
 """
-
-from __future__ import annotations
 
 import argparse
 import logging
@@ -31,22 +29,21 @@ import numpy as np
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech.setup import list_feetech_serial_ports
 from handumi.real.registry import REAL_BACKEND_NAMES, make_real_backend
-from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
 from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.teleop.common import (
-    DEFAULT_JOINT_SMOOTHING_ALPHA,
+    DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
     DEFAULT_TELEOP_FPS,
     SIDE_CHOICES,
-    JointActionSmoother,
     KeyboardSpaceListener,
     TeleopLoopTimer,
+    TeleopMotionSmoother,
     enabled_sides as _enabled_sides,
     enabled_tracking_ok as _enabled_tracking_ok,
     latest_widths as _latest_widths,
-    sample_state as _sample_state,
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.session import TeleopSession
 from handumi.teleop.hardware import (
     load_required_controller_tcp_calibration as _load_required_calibration,
     validate_feetech_ports_exist,
@@ -61,10 +58,10 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s - %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("handumi.teleop_real")
+real_log = logging.getLogger("handumi.teleop_real")
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     show_advanced = "--help-advanced" in raw_argv
     raw_argv = [value for value in raw_argv if value != "--help-advanced"]
@@ -82,10 +79,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--side", choices=SIDE_CHOICES, default="both")
     parser.add_argument("--fps", type=int, default=DEFAULT_TELEOP_FPS)
     parser.add_argument(
-        "--joint-smoothing-alpha",
+        "--motion-smoothing-time-constant-s",
         type=float,
-        default=DEFAULT_JOINT_SMOOTHING_ALPHA,
-        help="Post-IK exponential smoothing alpha; 1 disables filtering.",
+        default=DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+        help=(
+            "Shared TCP-pose and joint-command low-pass time constant; "
+            "0 disables smoothing."
+        ),
     )
     parser.add_argument(
         "--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C."
@@ -156,13 +156,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(raw_argv)
 
 
-def _validate_args(args: argparse.Namespace) -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return _parse_real_args(argv)
+
+
+def _validate_real_args(args: argparse.Namespace) -> None:
     if args.fps <= 0:
         raise SystemExit("--fps must be > 0.")
     if args.duration_s < 0.0:
         raise SystemExit("--duration-s must be >= 0.")
-    if not 0.0 < args.joint_smoothing_alpha <= 1.0:
-        raise SystemExit("--joint-smoothing-alpha must be in (0, 1].")
+    if args.motion_smoothing_time_constant_s < 0.0:
+        raise SystemExit("--motion-smoothing-time-constant-s must be >= 0.")
     if args.skip_feetech and not args.space_start:
         raise SystemExit(
             "--skip-feetech disables double-clap; add --space-start so teleop can begin."
@@ -177,12 +181,12 @@ def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> No
     )
 
 
-def main() -> None:
-    args = parse_args()
-    _validate_args(args)
+def _run_real() -> None:
+    args = _parse_real_args()
+    _validate_real_args(args)
     from handumi.scripts.record import build_tracker, connect_feetech
 
-    log.info("Loading %s IK solver.", args.robot)
+    real_log.info("Loading %s IK solver.", args.robot)
     runtime = load_embodiment(args.robot)
     try:
         home_pose_name, home_q = resolve_home_q(
@@ -198,8 +202,8 @@ def main() -> None:
         translation_scale=args.translation_scale,
     )
     q = home_q.copy()
-    log.info("Selected home pose: %s", home_pose_name)
-    log.info("Warming IK solver before touching hardware.")
+    real_log.info("Selected home pose: %s", home_pose_name)
+    real_log.info("Warming IK solver before touching hardware.")
     controller.warmup()
     _validate_feetech_ready(args)
 
@@ -219,13 +223,14 @@ def main() -> None:
     clap = DoubleClapDetector()
     play_sounds = not args.no_sounds
     loop_timer = TeleopLoopTimer(args.fps)
-    command_smoother = JointActionSmoother(args.joint_smoothing_alpha)
+    motion_smoother = TeleopMotionSmoother(args.motion_smoothing_time_constant_s)
+    teleop_session = TeleopSession(controller, motion_smoother)
     episode_start: float | None = None
     frame = 0
     tracking_recovery = TrackingRecoveryPolicy()
 
     try:
-        log.info("Starting tracking before moving real arms.")
+        real_log.info("Starting tracking before moving real arms.")
         tracker.start()
         tracker_started = True
         grippers = connect_feetech(args)
@@ -233,17 +238,17 @@ def main() -> None:
         real_env.setup(repair=not args.skip_can_repair)
         real_env.connect()
         real_env.home(home_q)
-        command_smoother.reset(home_q)
+        motion_smoother.reset(home_q)
 
         space_listener.start()
         if args.space_start:
-            log.info(
+            real_log.info(
                 "Real %s is at home. Start idle arms with Space, or double clap "
                 "to start enabled arms.",
                 args.robot,
             )
         else:
-            log.info(
+            real_log.info(
                 "Real %s is at home. Double clap a gripper to start enabled arms.",
                 args.robot,
             )
@@ -271,9 +276,9 @@ def main() -> None:
                 if tracking_recovery.note_missing(loop_start):
                     held = real_env.hold(q)
                     controller.tracking_lost(held)
-                    command_smoother.reset(held)
+                    motion_smoother.reset(held)
                     q = held
-                    log.warning(
+                    real_log.warning(
                         "Tracking lost; pending motion cancelled at the current robot "
                         "command. Re-anchor after recovery."
                     )
@@ -281,34 +286,29 @@ def main() -> None:
                 recover = getattr(tracker, "recover", None)
                 if callable(recover) and tracking_recovery.should_recover(loop_start):
                     if recover():
-                        log.info(
+                        real_log.info(
                             "Tracking recovered; double clap or Space to re-anchor."
                         )
                         log_say("tracking recovered", play_sounds=play_sounds)
                 loop_timer.sleep(loop_start)
                 continue
             if tracking_recovery.lost:
-                log.info("Tracking stream is valid again; waiting for a fresh anchor.")
+                real_log.info("Tracking stream is valid again; waiting for a fresh anchor.")
             tracking_recovery.reset()
 
             widths = _latest_widths(grippers)
-            state = _sample_state(sample, widths)
-            source_poses: dict[str, np.ndarray] = dict(
-                zip(("left", "right"), raw_state_pose7_pair(state), strict=True)
-            )
-
             start_sides: tuple[str, ...] = ()
             if args.space_start and space_listener.consume_space():
                 start_sides = controller.idle_sides()
                 if start_sides:
-                    log.info("Space pressed; starting %s.", "/".join(start_sides))
+                    real_log.info("Space pressed; starting %s.", "/".join(start_sides))
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
                 if controller.active:
                     q = controller.reset()
-                    command_smoother.reset(home_q)
+                    motion_smoother.reset(home_q)
                     episode_start = None
                     frame = 0
-                    log.info(
+                    real_log.info(
                         "Double clap detected; teleop reset, robot returning home slowly."
                     )
                     log_say("returning home", play_sounds=play_sounds)
@@ -316,33 +316,33 @@ def main() -> None:
                     log_say("teleop reset", play_sounds=play_sounds)
                     continue
                 start_sides = enabled_sides
-                log.info("Double clap detected; starting %s.", "/".join(start_sides))
+                real_log.info("Double clap detected; starting %s.", "/".join(start_sides))
 
-            anchored_sides = controller.anchor(source_poses, side_tracked, start_sides)
+            teleop_frame = teleop_session.advance(
+                teleop_session.inputs(sample, widths),
+                now_s=loop_start,
+                start_sides=start_sides,
+            )
+            anchored_sides = teleop_frame.anchored_sides
             anchored_this_frame = bool(anchored_sides)
             for side in anchored_sides:
-                log.info("%s arm anchored; real robot follows from home.", side)
+                real_log.info("%s arm anchored; real robot follows from home.", side)
                 log_say(f"{side} anchored", play_sounds=play_sounds)
 
             if episode_start is None and anchored_this_frame:
                 episode_start = loop_start
                 frame = 0
-                log.info("Teleop timer started.")
+                real_log.info("Teleop timer started.")
 
-            openings = {
-                "left": widths.left_normalized,
-                "right": widths.right_normalized,
-            }
-            raw_q = controller.step(source_poses, side_tracked, openings).q
-            q = command_smoother.smooth(raw_q)
-            real_env.write(q, openings)
+            q = teleop_frame.q
+            real_env.write(q, teleop_frame.inputs.openings)
             real_env.check_health()
 
             loop_timer.sleep(loop_start)
             if episode_start is not None:
                 frame += 1
     except KeyboardInterrupt:
-        log.info("Stopping.")
+        real_log.info("Stopping.")
     finally:
         space_listener.close()
         try:
@@ -352,6 +352,10 @@ def main() -> None:
                 grippers.close()
             if tracker_started:
                 tracker.stop()
+
+
+def main() -> None:
+    _run_real()
 
 
 if __name__ == "__main__":

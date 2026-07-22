@@ -64,7 +64,7 @@ bimanual separation, table-to-robot transform, and IK errors.
 :::
 
 Offline playback of a dataset on physical arms is not currently exposed.
-`handumi teleop real` consumes live HandUMI motion and is not a recorded-dataset
+`handumi teleop-real` consumes live HandUMI motion and is not a recorded-dataset
 replay command.
 
 ## 2. Run Automated Validation

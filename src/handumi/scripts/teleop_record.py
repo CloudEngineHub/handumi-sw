@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
+
 """Record joint-level real-robot teleoperation demonstrations.
 
-This is the recording sibling of ``handumi-teleop-real``. The operator drives
+This is the recording sibling of ``handumi teleop-real``. The operator drives
 the real robot with HandUMI tracking and Feetech gripper widths, while each
 LeRobot row stores canonical robot joints directly:
 
@@ -9,16 +9,22 @@ LeRobot row stores canonical robot joints directly:
 * ``action`` is the next joint command produced by the teleop controller.
 
 Before recording, controller->TCP calibration and Feetech calibration must be
-available. Episodes start with a double clap, and PICO tracking uses ADB.
+available. Episode control matches ``handumi record --clap-control``:
+
+* double-squeeze right: start or stop/save the current episode
+* double-squeeze left while recording: discard and restart the same episode
+* ``Esc`` / ``Ctrl+C``: discard the active episode and stop
+
+PICO tracking uses ADB.
 
 Examples
 --------
 ::
 
-    uv run handumi-record-teleop --device pico --robot piper
-    uv run handumi-record-teleop --device pico --robot openarmv1
-    uv run handumi-record-teleop --device pico --robot piper --side right
-    uv run handumi-record-teleop --device pico --robot piper \
+    handumi teleop-record --device pico --robot piper
+    handumi teleop-record --device pico --robot openarmv1
+    handumi teleop-record --device pico --robot piper --side right
+    handumi teleop-record --device pico --robot piper \
         --output-dir outputs/my_dataset --resume
 
 Common options:
@@ -33,8 +39,6 @@ Common options:
 * ``--output-dir``    Destination directory; defaults to outputs/teleop_<date>.
 * ``--resume``        Append episodes to an existing dataset.
 """
-
-from __future__ import annotations
 
 import argparse
 import logging
@@ -64,7 +68,6 @@ from handumi.dataset.raw import (
 )
 from handumi.feetech import FeetechGripperPair, FeetechGripperSampler, GripperWidths
 from handumi.real.registry import REAL_BACKEND_NAMES, make_real_backend
-from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
 from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.scripts.record import (
     _EscapeStopListener,
@@ -80,17 +83,19 @@ from handumi.synchronization import (
 )
 from handumi.teleop.common import (
     DEFAULT_GRIPPER_SAMPLE_HZ,
+    DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
     DEFAULT_TELEOP_FPS,
     SIDE_CHOICES,
     KeyboardSpaceListener,
     TeleopLoopTimer,
+    TeleopMotionSmoother,
     enabled_sides as _enabled_sides,
     enabled_tracking_ok as _enabled_tracking_ok,
     latest_widths as _latest_widths,
-    sample_state as _sample_state,
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.session import TeleopSession
 from handumi.teleop.hardware import (
     load_required_controller_tcp_calibration as _load_required_calibration,
     validate_feetech_ready as _validate_feetech_ready,
@@ -105,11 +110,12 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s - %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("handumi.record_teleop")
+record_log = logging.getLogger("handumi.record_teleop")
 
 DEFAULT_TRANSLATION_SCALE = 1.0
 SPACE_START_ENABLED = False
 PLAY_SOUNDS = True
+MOTION_SMOOTHING_TIME_CONSTANT_S = DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S
 REPAIR_CAN_ON_SETUP = True
 RIG_CONFIG_PATH = DEFAULT_RIG_CONFIG
 CONTROLLER_TCP_CALIBRATION_PATH = None
@@ -184,15 +190,25 @@ def build_joint_frame(
     }
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description="Record real-robot HandUMI teleoperation demonstrations.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--device", choices=("pico", "meta"), required=True)
     p.add_argument("--robot", choices=REAL_BACKEND_NAMES, default="piper")
     p.add_argument("--home-pose", default=None)
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--fps", type=int, default=DEFAULT_TELEOP_FPS)
+    p.add_argument(
+        "--motion-smoothing-time-constant-s",
+        type=float,
+        default=MOTION_SMOOTHING_TIME_CONSTANT_S,
+        help=(
+            "Shared TCP-pose and joint-command low-pass time constant; "
+            "0 disables smoothing."
+        ),
+    )
     p.add_argument("--episode-time-s", type=float, default=60.0)
     p.add_argument("--num-episodes", type=int, default=10)
     p.add_argument("--task", type=str, default="HandUMI real teleop recording")
@@ -202,6 +218,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = p.parse_args(argv)
     _apply_recording_defaults(args)
     return args
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return _parse_record_args(argv)
 
 
 def _apply_recording_defaults(args: argparse.Namespace) -> None:
@@ -228,13 +248,15 @@ def _apply_recording_defaults(args: argparse.Namespace) -> None:
     args.skip_adb_check = SKIP_ADB_CHECK
 
 
-def _validate_args(args: argparse.Namespace) -> None:
+def _validate_record_args(args: argparse.Namespace) -> None:
     if args.fps <= 0:
         raise SystemExit("--fps must be > 0.")
     if args.episode_time_s <= 0:
         raise SystemExit("--episode-time-s must be > 0.")
     if args.num_episodes < 0:
         raise SystemExit("--num-episodes must be >= 0.")
+    if args.motion_smoothing_time_constant_s < 0.0:
+        raise SystemExit("--motion-smoothing-time-constant-s must be >= 0.")
     for name in (
         "sync_lag_s",
         "max_sync_skew_s",
@@ -270,6 +292,7 @@ def record_episode(
     gripper_stale_timeout_s: float,
     sensor_loss_timeout_s: float,
     tracking_loss_timeout_s: float,
+    motion_smoother: TeleopMotionSmoother | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, str, np.ndarray]:
     loop_timer = TeleopLoopTimer(fps)
     n_frames = 0
@@ -282,6 +305,10 @@ def record_episode(
     max_sync_skew_ns = int(max_sync_skew_s * 1e9)
     sync_lag_ns = int(sync_lag_s * 1e9)
     q = controller.q.copy()
+    if motion_smoother is None:
+        motion_smoother = TeleopMotionSmoother()
+    motion_smoother.reset(q)
+    teleop_session = TeleopSession(controller, motion_smoother)
     observations: list[np.ndarray] = []
     commands: list[np.ndarray] = []
 
@@ -307,7 +334,7 @@ def record_episode(
             tracking_recovery.reset()
             immediate_widths = _latest_widths(grippers)
             space_listener.consume_space()
-            clap_detector.update(
+            clap_detector.update_side(
                 immediate_widths.left_mm,
                 immediate_widths.right_mm,
                 loop_start,
@@ -319,8 +346,9 @@ def record_episode(
             if tracking_recovery.note_missing(loop_start):
                 held = real_env.hold(q)
                 controller.tracking_lost(held)
+                motion_smoother.reset(held)
                 q = held
-                log.warning("Tracking lost; robot command held and episode discarded.")
+                record_log.warning("Tracking lost; robot command held and episode discarded.")
                 log_say("tracking lost", play_sounds=play_sounds)
             if (
                 tracking_recovery.lost
@@ -333,53 +361,47 @@ def record_episode(
             recover = getattr(tracker, "recover", None)
             if callable(recover) and tracking_recovery.should_recover(loop_start):
                 if recover():
-                    log.info("Tracking recovered; double clap or Space to re-anchor.")
+                    record_log.info("Tracking recovered; double clap or Space to re-anchor.")
                     log_say("tracking recovered", play_sounds=play_sounds)
             loop_timer.sleep(loop_start)
             continue
         if tracking_recovery.lost:
-            log.info("Tracking stream recovered; waiting for a fresh anchor.")
+            record_log.info("Tracking stream recovered; waiting for a fresh anchor.")
         tracking_recovery.reset()
 
         observation_q = real_env.read(base_q=q)
         immediate_widths = _latest_widths(grippers)
-        state = _sample_state(sample, immediate_widths)
-        source_poses: dict[str, np.ndarray] = dict(
-            zip(("left", "right"), raw_state_pose7_pair(state), strict=True)
-        )
-
         start_sides = pending_start_sides
         pending_start_sides = ()
         if space_listener.consume_space():
             start_sides = controller.idle_sides()
-        if clap_detector.update(
+        clap_side = clap_detector.update_side(
             immediate_widths.left_mm, immediate_widths.right_mm, loop_start
-        ):
-            if controller.active:
-                q = controller.reset()
-                start_t = None
-                n_frames = 0
-                observations.clear()
-                commands.clear()
-                log.info("Double clap detected; restarting episode from home.")
-                log_say("restart recording", play_sounds=play_sounds)
-                real_env.move_home(home_q)
-                continue
+        )
+        if clap_side == "right":
+            if start_t is not None:
+                status = "recorded"
+                break
             start_sides = enabled_sides
+        elif clap_side == "left" and start_t is not None:
+            status = "repeat"
+            observations.clear()
+            commands.clear()
+            break
 
-        anchored = controller.anchor(source_poses, side_tracked, start_sides)
+        teleop_frame = teleop_session.advance(
+            teleop_session.inputs(sample, immediate_widths),
+            now_s=loop_start,
+            start_sides=start_sides,
+        )
+        anchored = teleop_frame.anchored_sides
         if anchored and start_t is None:
             start_t = loop_start
-            log.info("Teleop episode started after anchoring %s.", "/".join(anchored))
+            record_log.info("Teleop episode started after anchoring %s.", "/".join(anchored))
             log_say("recording episode", play_sounds=play_sounds)
 
-        openings = {
-            "left": immediate_widths.left_normalized,
-            "right": immediate_widths.right_normalized,
-        }
-        teleop_step = controller.step(source_poses, side_tracked, openings)
-        action_q = teleop_step.q
-        real_env.write(action_q, openings)
+        action_q = teleop_frame.q
+        real_env.write(action_q, teleop_frame.inputs.openings)
         real_env.check_health()
         q = action_q
 
@@ -407,7 +429,7 @@ def record_episode(
         _, timed_out_sensors = health_gate.update(sensor_health, record_time_ns)
         if timed_out_sensors:
             status = "sensor_unhealthy"
-            log.error(
+            record_log.error(
                 "Sensor health timed out: %s.",
                 ", ".join(sorted(timed_out_sensors)),
             )
@@ -451,15 +473,15 @@ def record_episode(
     return states, actions, len(states), status, q
 
 
-def main() -> None:
-    args = parse_args()
-    _validate_args(args)
+def _run_record() -> None:
+    args = _parse_record_args()
+    _validate_record_args(args)
     if args.output_dir is None:
         args.output_dir = _default_output_dir()
     play_sounds = not args.no_sounds
     stop_event = threading.Event()
 
-    log.info("Loading %s IK solver.", args.robot)
+    record_log.info("Loading %s IK solver.", args.robot)
     runtime = load_embodiment(args.robot)
     try:
         home_pose_name, home_q = resolve_home_q(
@@ -490,10 +512,11 @@ def main() -> None:
     grippers = None
     tracker_started = False
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
+    motion_smoother = TeleopMotionSmoother(args.motion_smoothing_time_constant_s)
 
     def _on_signal(signum, frame):
         del signum, frame
-        log.info("Signal received - discarding active episode and stopping ...")
+        record_log.info("Signal received - discarding active episode and stopping ...")
         stop_event.set()
 
     signal.signal(signal.SIGINT, _on_signal)
@@ -502,7 +525,7 @@ def main() -> None:
     escape_listener.start()
 
     try:
-        log.info("Starting tracking before moving real arms.")
+        record_log.info("Starting tracking before moving real arms.")
         tracker.start()
         tracker_started = True
         gripper_pair = connect_feetech(args)
@@ -514,7 +537,7 @@ def main() -> None:
 
         real_env.setup(repair=not args.skip_can_repair)
         real_env.connect()
-        log.info("Selected home pose: %s", home_pose_name)
+        record_log.info("Selected home pose: %s", home_pose_name)
         real_env.home(home_q)
         space_listener.start()
 
@@ -523,10 +546,11 @@ def main() -> None:
         layout = canonical_joint_layout(runtime)
         existing_episodes = _existing_episode_count(args.output_dir) if args.resume else 0
         results: list[EpisodeResult] = []
-        log.info("Recording vector dataset at: %s", args.output_dir)
+        record_log.info("Recording vector dataset at: %s", args.output_dir)
 
         clap_detector = DoubleClapDetector()
         recorded = 0
+        restart_active = False
         while (
             args.num_episodes <= 0 or recorded < args.num_episodes
         ) and not stop_event.is_set():
@@ -534,13 +558,15 @@ def main() -> None:
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
             if not _wait_for_tracking(tracker, stop_event):
                 break
-            log.info(
-                "--- Episode %d/%s: double clap%s to start ---",
-                ep_num,
-                ep_total,
-                " or Space" if args.space_start else "",
-            )
-            if not args.space_start:
+            record_log.info("--- Episode %d/%s ---", ep_num, ep_total)
+            if restart_active:
+                restart_active = False
+                record_log.info("  Restarting episode %d immediately ...", ep_num)
+            elif not args.space_start:
+                record_log.info(
+                    "  Double-squeeze right gripper to start episode %d ...",
+                    ep_num,
+                )
                 if not _wait_for_clap(
                     grippers,
                     clap_detector,
@@ -548,7 +574,12 @@ def main() -> None:
                     side="right",
                 ):
                     break
-                clap_detector = DoubleClapDetector()
+            else:
+                record_log.info(
+                    "  Press Space%s to start episode %d ...",
+                    " or double-squeeze right gripper" if not args.skip_feetech else "",
+                    ep_num,
+                )
             controller.reset()
             states, actions, n_frames, status, _ = record_episode(
                 tracker=tracker,
@@ -571,13 +602,20 @@ def main() -> None:
                 gripper_stale_timeout_s=args.gripper_stale_timeout_s,
                 sensor_loss_timeout_s=args.sensor_loss_timeout_s,
                 tracking_loss_timeout_s=args.tracking_loss_timeout_s,
+                motion_smoother=motion_smoother,
             )
+            if status == "repeat":
+                record_log.warning("Episode restart requested (%d frames discarded).", n_frames)
+                log_say("Restart recording", play_sounds=play_sounds)
+                real_env.move_home(home_q)
+                restart_active = True
+                continue
             if n_frames == 0 or status in {
                 "tracking_lost",
                 "sensor_unhealthy",
                 "interrupted",
             }:
-                log.warning("Episode discarded (%s, %d frames).", status, n_frames)
+                record_log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
                 if status == "interrupted":
                     break
@@ -594,7 +632,7 @@ def main() -> None:
                 )
             )
             recorded += 1
-            log.info("Episode %d saved (%d frames).", ep_num, n_frames)
+            record_log.info("Episode %d saved (%d frames).", ep_num, n_frames)
             log_say(
                 f"Episode {ep_num} saved, {n_frames} frames",
                 play_sounds=play_sounds,
@@ -632,7 +670,7 @@ def main() -> None:
                     "repo_id": args.repo_id,
                 },
             )
-        log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, args.output_dir)
+        record_log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, args.output_dir)
     finally:
         escape_listener.stop()
         space_listener.close()
@@ -659,6 +697,10 @@ def _existing_episode_count(root: Path) -> int:
 
 def _default_output_dir() -> Path:
     return Path("outputs") / f"teleop_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def main() -> None:
+    _run_record()
 
 
 if __name__ == "__main__":

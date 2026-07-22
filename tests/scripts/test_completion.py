@@ -7,8 +7,11 @@ def test_completes_root_commands():
     assert completion.completion_candidates(["re"]) == ["record", "replay"]
 
 
-def test_completes_nested_commands():
-    assert completion.completion_candidates(["teleop", ""]) == ["real", "sim"]
+def test_completes_teleop_options():
+    assert completion.completion_candidates(["teleop-"]) == [
+        "teleop-real",
+        "teleop-record",
+    ]
     assert completion.completion_candidates(["calibrate", "sp"]) == ["spatial"]
 
 

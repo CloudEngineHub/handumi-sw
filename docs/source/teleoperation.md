@@ -10,7 +10,7 @@ only after tracking, calibration, and motion mapping behave correctly.
 Select any supported robot model through `--robot`:
 
 ```bash
-handumi teleop sim --device meta --robot <robot_id> \
+handumi teleop --device meta --robot <robot_id> \
   --cameras left_wrist,right_wrist,workspace --space-start
 ```
 
@@ -18,14 +18,14 @@ For example, using the currently supported Piper embodiment:
 
 ```bash
 TARGET_ROBOT=piper
-handumi teleop sim --device meta --robot "$TARGET_ROBOT" \
+handumi teleop --device meta --robot "$TARGET_ROBOT" \
   --cameras left_wrist,right_wrist,workspace --space-start
 ```
 
 OpenArm v1 uses the same command and starts from its configured `home_q`:
 
 ```bash
-handumi teleop sim --device meta --robot openarmv1 \
+handumi teleop --device meta --robot openarmv1 \
   --space-start
 ```
 
@@ -36,7 +36,7 @@ is recorded. Use `--device pico` for PICO.
 Add a task scene with:
 
 ```bash
-handumi teleop sim --device meta --robot "$TARGET_ROBOT" --scene cube_in_box
+handumi teleop --device meta --robot "$TARGET_ROBOT" --scene cube_in_box
 ```
 
 `--cameras` accepts the logical names `left_wrist`, `right_wrist`, and
@@ -62,7 +62,7 @@ The general interface is:
 
 ```bash
 handumi setup --robot <robot_id> --device meta
-handumi teleop real --robot <robot_id> --device meta
+handumi teleop-real --robot <robot_id> --device meta
 ```
 
 | Robot | Live simulation | Real teleoperation |
@@ -84,12 +84,25 @@ Complete the hardware-specific preparation before commanding a physical robot:
 
 Both guides start with single-arm validation before enabling both arms.
 
+## Real Robot Recording
+
+Use `handumi teleop-record` when the real robot should be driven live and saved
+as a joint-level dataset:
+
+```bash
+handumi teleop-record --robot <robot_id> --device meta --output-dir outputs/my_dataset
+```
+
+This command has its own parser and operational defaults. It does not use
+`--record` on `handumi teleop`; the plain `handumi teleop` command is reserved
+for live simulation.
+
 To stream the context and wrist cameras into a PICO headset independently of
 the selected robot, see [PICO Remote Vision](workflows/pico_remote_vision.md).
 
 ### Safety
 
-Keep the workspace clear and an emergency stop accessible. Enforce joint, velocity, acceleration, workspace, and collision limits. Run `handumi teleop real --help` for backend-specific options.
+Keep the workspace clear and an emergency stop accessible. Enforce joint, velocity, acceleration, workspace, and collision limits. Run `handumi teleop-real --help` for backend-specific options.
 
 To inspect an existing recording rather than live motion, continue with
 [Replay a Local Recording in Simulation](workflows/replay_in_sim.md), then run

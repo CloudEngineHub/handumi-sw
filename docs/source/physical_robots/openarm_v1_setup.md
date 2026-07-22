@@ -211,7 +211,7 @@ only after both arms have lateral clearance from the center structure.
 For both arms, PICO, the collision-safe default pose, and no Feetech sensors:
 
 ```bash
-uv run handumi teleop real \
+uv run handumi teleop-real \
   --device pico \
   --robot openarmv1 \
   --side both \

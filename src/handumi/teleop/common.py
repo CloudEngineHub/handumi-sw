@@ -20,9 +20,14 @@ from handumi.tracking.transforms import Pose
 SIDE_CHOICES = ("left", "right", "both")
 # PICO's live tracking stream is 30 Hz.  Driving the control/CAN loop faster
 # only retransmits the same pose and can build command backlog on real arms.
-DEFAULT_TELEOP_FPS = 90
+DEFAULT_TELEOP_FPS = 60
 DEFAULT_GRIPPER_SAMPLE_HZ = 200.0
-DEFAULT_JOINT_SMOOTHING_ALPHA = 0.3
+DEFAULT_JOINT_SMOOTHING_ALPHA = 0.5
+# The same causal low-pass is applied to controller TCP poses and solved joint
+# commands in every live-teleop frontend.  This is deliberately expressed in
+# seconds (rather than "alpha per frame") so its behaviour does not change
+# when the tracking or rendering rate changes.
+DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S = 0.05
 
 
 class JointActionSmoother:
@@ -49,6 +54,126 @@ class JointActionSmoother:
         else:
             self._previous = self._previous + self.alpha * (current - self._previous)
         return self._previous.copy()
+
+
+def _normalized_quaternion_xyzw(quaternion: np.ndarray) -> np.ndarray:
+    value = np.asarray(quaternion, dtype=np.float32).reshape(4)
+    norm = float(np.linalg.norm(value))
+    if norm < 1e-8:
+        return np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    return (value / norm).astype(np.float32)
+
+
+def _slerp_xyzw(start: np.ndarray, end: np.ndarray, fraction: float) -> np.ndarray:
+    """Interpolate quaternions on their shortest arc."""
+    first = _normalized_quaternion_xyzw(start)
+    second = _normalized_quaternion_xyzw(end)
+    dot = float(np.dot(first, second))
+    if dot < 0.0:
+        second = -second
+        dot = -dot
+    dot = float(np.clip(dot, -1.0, 1.0))
+    if dot > 0.9995:
+        return _normalized_quaternion_xyzw(first + fraction * (second - first))
+    angle = float(np.arccos(dot))
+    sine = float(np.sin(angle))
+    return _normalized_quaternion_xyzw(
+        (np.sin((1.0 - fraction) * angle) / sine) * first
+        + (np.sin(fraction * angle) / sine) * second
+    )
+
+
+class TeleopMotionSmoother:
+    """Shared causal pose and joint-command low-pass for live teleoperation.
+
+    It filters calibrated controller TCP poses before retargeting/IK, then
+    filters the IK command that is rendered, sent to hardware, or recorded.
+    The filter advances from timestamps, so every frontend has the same
+    behaviour at 30, 60, or 100 Hz.  ``time_constant_s=0`` disables it for
+    diagnosis without changing any other part of the pipeline.
+    """
+
+    def __init__(
+        self, time_constant_s: float = DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S
+    ) -> None:
+        if time_constant_s < 0.0:
+            raise ValueError("time_constant_s must be >= 0.")
+        self.time_constant_s = float(time_constant_s)
+        self._source_poses: dict[str, np.ndarray] = {}
+        self._last_source_time_ns: int | None = None
+        self._joint_q: np.ndarray | None = None
+        self._last_joint_time_s: float | None = None
+
+    def reset(self, q: np.ndarray | None = None) -> None:
+        self._source_poses.clear()
+        self._last_source_time_ns = None
+        self._joint_q = None if q is None else np.asarray(q, dtype=np.float32).copy()
+        self._last_joint_time_s = None
+
+    def anchor_sources(
+        self, source_poses: dict[str, np.ndarray], sides: tuple[str, ...]
+    ) -> None:
+        """Make a newly anchored controller pose exact (never lagged)."""
+        for side in sides:
+            if side in source_poses:
+                self._source_poses[side] = np.asarray(
+                    source_poses[side], dtype=np.float32
+                ).copy()
+
+    def smooth_source_poses(
+        self,
+        source_poses: dict[str, np.ndarray],
+        side_tracked: dict[str, bool],
+        sample_time_ns: int,
+    ) -> dict[str, np.ndarray]:
+        """Filter only fresh tracker frames and preserve untracked poses."""
+        timestamp = int(sample_time_ns)
+        is_fresh = self._last_source_time_ns is None or timestamp > self._last_source_time_ns
+        if is_fresh:
+            if self._last_source_time_ns is None:
+                alpha = 1.0
+            else:
+                dt_s = min((timestamp - self._last_source_time_ns) * 1e-9, 0.25)
+                alpha = self._alpha(dt_s)
+            for side, current_value in source_poses.items():
+                if not side_tracked.get(side, False):
+                    continue
+                current = np.asarray(current_value, dtype=np.float32)
+                previous = self._source_poses.get(side)
+                if previous is None or alpha >= 1.0:
+                    filtered = current.copy()
+                else:
+                    filtered = previous.copy()
+                    filtered[:3] += alpha * (current[:3] - filtered[:3])
+                    filtered[3:7] = _slerp_xyzw(previous[3:7], current[3:7], alpha)
+                self._source_poses[side] = filtered
+            self._last_source_time_ns = timestamp
+
+        return {
+            side: self._source_poses.get(side, np.asarray(pose, dtype=np.float32)).copy()
+            for side, pose in source_poses.items()
+        }
+
+    def smooth_joint_command(self, q: np.ndarray, now_s: float) -> np.ndarray:
+        """Return the time-normalized filtered joint command."""
+        current = np.asarray(q, dtype=np.float32)
+        if self._joint_q is None:
+            self._joint_q = current.copy()
+        else:
+            dt_s = (
+                0.0
+                if self._last_joint_time_s is None
+                else min(max(float(now_s) - self._last_joint_time_s, 0.0), 0.25)
+            )
+            alpha = self._alpha(dt_s)
+            self._joint_q = self._joint_q + alpha * (current - self._joint_q)
+        self._last_joint_time_s = float(now_s)
+        return self._joint_q.copy()
+
+    def _alpha(self, dt_s: float) -> float:
+        if self.time_constant_s == 0.0:
+            return 1.0
+        return float(1.0 - np.exp(-max(dt_s, 0.0) / self.time_constant_s))
 
 
 class TeleopLoopTimer:
@@ -160,6 +285,18 @@ def enabled_tracking_ok(
     enabled: tuple[str, ...],
 ) -> bool:
     return all(side_tracked[side] for side in enabled)
+
+
+def tracking_sample_time_ns(sample: Any) -> int:
+    """Stable tracker-frame time for smoothing, preferring device generation time."""
+    for value in (
+        getattr(sample, "device_time_ns", 0),
+        getattr(sample, "aligned_time_ns", 0),
+        getattr(sample, "pc_monotonic_ns", 0),
+    ):
+        if int(value) > 0:
+            return int(value)
+    return time.monotonic_ns()
 
 
 def latest_widths(grippers: Any):

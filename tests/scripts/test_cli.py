@@ -35,22 +35,53 @@ def test_nested_command_routes_to_specialized_module():
     target_main.assert_called_once_with()
 
 
-def test_command_group_help_lists_only_its_subcommands(capsys):
-    cli.main(["teleop", "--help"])
+def test_teleop_routes_to_sim_module():
+    target_main = mock.Mock()
+    module = SimpleNamespace(main=target_main)
+    with mock.patch.object(cli.importlib, "import_module", return_value=module) as load:
+        cli.main(["teleop", "--device", "pico"])
+
+    load.assert_called_once_with("handumi.scripts.teleop_sim")
+    target_main.assert_called_once_with()
+
+
+def test_teleop_real_routes_to_real_module():
+    target_main = mock.Mock()
+    module = SimpleNamespace(main=target_main)
+    with mock.patch.object(cli.importlib, "import_module", return_value=module) as load:
+        cli.main(["teleop-real", "--device", "pico"])
+
+    load.assert_called_once_with("handumi.scripts.teleop_real")
+    target_main.assert_called_once_with()
+
+
+def test_teleop_record_routes_to_record_module():
+    target_main = mock.Mock()
+    module = SimpleNamespace(main=target_main)
+    with mock.patch.object(cli.importlib, "import_module", return_value=module) as load:
+        cli.main(["teleop-record", "--device", "pico"])
+
+    load.assert_called_once_with("handumi.scripts.teleop_record")
+    target_main.assert_called_once_with()
+
+
+def test_teleop_help_is_forwarded_to_the_sim_command(capsys):
+    with pytest.raises(SystemExit, match="0"):
+        cli.main(["teleop", "--help"])
 
     output = capsys.readouterr().out
-    assert "handumi teleop sim" in output
-    assert "handumi teleop real" in output
+    assert "live simulation" in output
     assert "handumi calibrate spatial" not in output
 
 
 def test_short_program_name_is_preserved_in_help(capsys):
     with mock.patch.object(cli.sys, "argv", ["hu"]):
-        cli.main(["teleop", "--help"])
+        with pytest.raises(SystemExit, match="0"):
+            cli.main(["teleop", "--help"])
 
     output = capsys.readouterr().out
-    assert "hu teleop sim" in output
-    assert "handumi teleop sim" not in output
+    assert "hu teleop" in output
+    assert "handumi teleop" not in output
 
 
 def test_unknown_command_fails_cleanly():

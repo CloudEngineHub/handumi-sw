@@ -39,9 +39,9 @@ Usage
 -----
 ::
 
-    handumi teleop sim --device meta
-    handumi teleop sim --device meta --quest-ip 127.0.0.1 --no-browser
-    handumi teleop sim --device pico --pico-mode mandos
+    handumi teleop --device meta
+    handumi teleop --device meta --quest-ip 127.0.0.1 --no-browser
+    handumi teleop --device pico --pico-mode mandos
 """
 
 from __future__ import annotations
@@ -67,15 +67,16 @@ from handumi.cameras import (
     resolve_camera_ids,
 )
 from handumi.config import DEFAULT_RIG_CONFIG
-from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, resolve_home_q
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.scripts.record import _camera_list_arg, build_tracker, connect_feetech
 from handumi.teleop.common import (
+    DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
     DEFAULT_TELEOP_FPS,
     SIDE_CHOICES,
     KeyboardSpaceListener,
     TeleopLoopTimer,
+    TeleopMotionSmoother,
     enabled_sides as _enabled_sides,
     latest_widths,
     sample_state as _sample_state,
@@ -84,6 +85,7 @@ from handumi.teleop.common import (
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.session import TeleopSession
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
 from handumi.utils.trajectory import TrajectoryTrail
@@ -94,13 +96,13 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s - %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("handumi.teleop_sim")
+sim_log = logging.getLogger("handumi.teleop_sim")
 
 _TRAIL_SECONDS = 10.0
 _CHART_WINDOW_S = 20.0  # rolling window for the gripper-width chart
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def _parse_sim_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     show_advanced = "--help-advanced" in raw_argv
     raw_argv = [value for value in raw_argv if value != "--help-advanced"]
@@ -110,8 +112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     p = argparse.ArgumentParser(
         description=(
-            "Preview live HandUMI tracking through a robot profile in Viser and "
-            "Rerun; nothing is recorded."
+            "Teleoperate HandUMI through a robot profile in live simulation."
         )
     )
     p.add_argument("--help-advanced", action="store_true", help="Show expert hardware options.")
@@ -138,6 +139,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=1.0,
         help=advanced("Scale HandUMI translation deltas."),
+    )
+    p.add_argument(
+        "--motion-smoothing-time-constant-s",
+        type=float,
+        default=DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+        help=advanced(
+            "Shared TCP-pose and joint-command low-pass time constant; 0 disables smoothing."
+        ),
     )
     p.add_argument("--no-browser", action="store_true", help="Don't auto-open Viser.")
     p.add_argument(
@@ -230,6 +239,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(raw_argv)
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return _parse_sim_args(argv)
+
+
 class AutoStartCountdown:
     """One-shot start after continuous valid tracking for a safety delay."""
 
@@ -255,14 +268,14 @@ class AutoStartCountdown:
             return ()
         if not tracking_ready:
             if self.started_at is not None:
-                log.info("Auto-start countdown cancelled: controller tracking lost.")
+                sim_log.info("Auto-start countdown cancelled: controller tracking lost.")
             self.started_at = None
             self.announced_seconds = None
             return ()
         if self.started_at is None:
             self.started_at = now
             self.announced_seconds = int(np.ceil(self.delay_s))
-            log.info(
+            sim_log.info(
                 "Controllers detected. Auto-start in %d s; hold them steady.",
                 self.announced_seconds,
             )
@@ -271,7 +284,7 @@ class AutoStartCountdown:
         if remaining <= 0.0:
             self.completed = True
             if idle_sides:
-                log.info(
+                sim_log.info(
                     "Auto-start countdown complete; starting %s.",
                     "/".join(idle_sides),
                 )
@@ -280,7 +293,7 @@ class AutoStartCountdown:
         seconds = int(np.ceil(remaining))
         if seconds < (self.announced_seconds or seconds):
             self.announced_seconds = seconds
-            log.info("Auto-start in %d s ...", seconds)
+            sim_log.info("Auto-start in %d s ...", seconds)
         return ()
 
 
@@ -300,7 +313,7 @@ def _resolve_camera_usage(args: argparse.Namespace) -> None:
             "--cameras."
         )
     if not args.skip_cameras:
-        log.info("Rerun disabled; skipping cameras (they are only shown in Rerun).")
+        sim_log.info("Rerun disabled; skipping cameras (they are only shown in Rerun).")
         args.skip_cameras = True
 
 
@@ -314,9 +327,9 @@ def _load_calibration(args: argparse.Namespace):
     )
     if path.exists():
         calibration = load_controller_tcp_calibration(path)
-        log.info("controller->TCP calibration: %s", source)
+        sim_log.info("controller->TCP calibration: %s", source)
         return calibration
-    log.warning(
+    sim_log.warning(
         "No calibration at %s — previewing RAW controller poses. "
         "See docs/README_tcp_offset.md to calibrate.",
         path,
@@ -470,12 +483,14 @@ def _log_rerun(
         )
 
 
-def main() -> None:
-    args = parse_args()
+def _run_sim() -> None:
+    args = _parse_sim_args()
     if args.fps <= 0:
         raise SystemExit("--fps must be > 0.")
     if args.auto_start_delay_s <= 0.0:
         raise SystemExit("--auto-start-delay-s must be greater than zero.")
+    if args.motion_smoothing_time_constant_s < 0.0:
+        raise SystemExit("--motion-smoothing-time-constant-s must be >= 0.")
 
     _resolve_camera_usage(args)
     calibration = _load_calibration(args)
@@ -508,7 +523,7 @@ def main() -> None:
 
     grippers = connect_feetech(args)  # honors --skip-feetech internally
 
-    log.info("Loading %s IK solver (JAX JIT warmup, ~30s on CPU) ...", args.robot)
+    sim_log.info("Loading %s IK solver (JAX JIT warmup, ~30s on CPU) ...", args.robot)
     runtime = load_embodiment(args.robot)
     try:
         home_pose_name, home_q = resolve_home_q(
@@ -526,7 +541,7 @@ def main() -> None:
         anchor_z=args.anchor_z,
     )
     q = home_q.copy()
-    log.info("Selected home pose: %s", home_pose_name)
+    sim_log.info("Selected home pose: %s", home_pose_name)
     controller.warmup()
 
     server = None
@@ -578,13 +593,13 @@ def main() -> None:
                 scene_position=scene_position,
             )
             physics.start()
-            log.info(
+            sim_log.info(
                 "Scene %r with MuJoCo contact physics at %s.",
                 args.scene,
                 scene_position,
             )
         else:
-            log.info(
+            sim_log.info(
                 "Scene %r rendered statically (no MJCF for %s).", args.scene, args.robot
             )
     target_markers = {}
@@ -606,11 +621,11 @@ def main() -> None:
             client.camera.look_at = (0.2, 0.0, 0.35)
 
         url = f"http://localhost:{server.get_port()}"
-        log.info("Live view ready: %s (Ctrl+C to stop)", url)
+        sim_log.info("Live view ready: %s (Ctrl+C to stop)", url)
         if not args.no_browser:
             webbrowser.open(url)
     else:
-        log.info("Viser disabled; streaming live cameras and tracking only to Rerun.")
+        sim_log.info("Viser disabled; streaming live cameras and tracking only to Rerun.")
 
     rr = _init_rerun(not args.no_rerun, cam_names)
     max_points = max(2, int(_TRAIL_SECONDS * args.fps))
@@ -626,7 +641,7 @@ def main() -> None:
     # tip's height at anchor time corresponds to anchor-z in robot world,
     # pinning absolute heights (real table touch == sim table touch).
     if args.anchor_z is not None:
-        log.info(
+        sim_log.info(
             "Table-anchor mode: anchor with the tip ON the table "
             "(maps to z=%.3f in robot world).",
             args.anchor_z,
@@ -641,21 +656,23 @@ def main() -> None:
     episode_start: float | None = None
     frame = 0
     loop_timer = TeleopLoopTimer(args.fps)
+    motion_smoother = TeleopMotionSmoother(args.motion_smoothing_time_constant_s)
+    teleop_session = TeleopSession(controller, motion_smoother)
     if args.auto_start:
         manual_hint = " Space remains available." if args.space_start else ""
-        log.info(
+        sim_log.info(
             "Arms idle at home. Waiting for controller tracking; auto-start "
             "after %.1f s.%s",
             args.auto_start_delay_s,
             manual_hint,
         )
     elif args.space_start:
-        log.info(
+        sim_log.info(
             "Arms idle at home. Start with Space, or double clap a gripper "
             "to start enabled arms."
         )
     else:
-        log.info("Arms idle at home. Double clap a gripper to start enabled arms.")
+        sim_log.info("Arms idle at home. Double clap a gripper to start enabled arms.")
     try:
         while True:
             loop_start, _ = loop_timer.tick()
@@ -666,9 +683,9 @@ def main() -> None:
                 ):
                     break
             sample = tracker.latest()
-            side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
-
             widths = latest_widths(grippers)
+            inputs = teleop_session.inputs(sample, widths)
+            side_tracked = inputs.side_tracked
             if rr is not None:
                 if cameras:
                     cam_frames = read_camera_frames(
@@ -685,11 +702,6 @@ def main() -> None:
                     rr.Scalars(float(widths.right_mm)),
                 )
 
-            state = _sample_state(sample, widths)
-            source_poses: dict[str, np.ndarray] = dict(
-                zip(("left", "right"), raw_state_pose7_pair(state), strict=True)
-            )
-
             # Double clap toggles teleop: first clap starts idle arms, next clap
             # clears anchors so the robot parks at home and waits for a fresh
             # start. Space remains an optional start shortcut for idle arms.
@@ -698,11 +710,11 @@ def main() -> None:
             if args.space_start and space_listener.consume_space():
                 start_sides = controller.idle_sides()
                 if start_sides:
-                    log.info("Space pressed; starting %s.", "/".join(start_sides))
+                    sim_log.info("Space pressed; starting %s.", "/".join(start_sides))
             auto_start_sides = auto_start.update(
                 now=loop_start,
                 tracking_ready=_tracking_ready_for_sides(
-                    source_poses, side_tracked, enabled_sides
+                    inputs.raw_source_poses, side_tracked, enabled_sides
                 ),
                 already_active=controller.active,
                 idle_sides=controller.idle_sides(),
@@ -712,47 +724,46 @@ def main() -> None:
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
                 if controller.active:
                     q = controller.reset()
+                    motion_smoother.reset(home_q)
                     episode_start = None
                     frame = 0
                     reset_this_frame = True
-                    log.info(
+                    sim_log.info(
                         "Double clap detected; teleop reset, arms parking at home."
                     )
                     log_say("teleop reset", play_sounds=play_sounds)
                 else:
                     start_sides = enabled_sides
-                    log.info(
+                    sim_log.info(
                         "Double clap detected; starting %s.", "/".join(start_sides)
                     )
 
-            anchored_sides = controller.anchor(source_poses, side_tracked, start_sides)
+            teleop_frame = teleop_session.advance(
+                inputs, now_s=loop_start, start_sides=start_sides
+            )
+            anchored_sides = teleop_frame.anchored_sides
             anchored_this_frame = bool(anchored_sides)
             for side in anchored_sides:
-                log.info("%s arm anchored — follows from home.", side)
+                sim_log.info("%s arm anchored — follows from home.", side)
                 log_say(f"{side} anchored", play_sounds=play_sounds)
 
             if (anchored_this_frame or reset_this_frame) and physics is not None:
                 # Starting or resetting teleop also puts every scene prop
                 # (cube, box, ...) back at its initial pose.
                 physics.reset()
-                log.info("Scene reset to its initial state.")
+                sim_log.info("Scene reset to its initial state.")
             if episode_start is None and anchored_this_frame:
                 episode_start = loop_start
                 frame = 0
-                log.info("Teleop timer started.")
+                sim_log.info("Teleop timer started.")
 
             # Anchored + tracked sides follow their anchor via IK; anchored
             # but momentarily untracked sides hold the current pose (None
             # target). Never-anchored sides are parked kinematically at
             # home_q every tick (no IK target — chasing the home pose through
             # IK left the arm in a jittery tug-of-war of costs).
-            step = controller.step(
-                source_poses,
-                side_tracked,
-                {"left": widths.left_normalized, "right": widths.right_normalized},
-            )
-            q = step.q
-            for side, pose7 in step.target_pose7.items():
+            q = teleop_frame.q
+            for side, pose7 in teleop_frame.step.target_pose7.items():
                 if target_markers:
                     target_markers[side].position = tuple(pose7[:3])
 
@@ -808,7 +819,7 @@ def main() -> None:
             if episode_start is not None:
                 frame += 1
     except KeyboardInterrupt:
-        log.info("Stopping.")
+        sim_log.info("Stopping.")
     finally:
         space_listener.close()
         if physics is not None:
@@ -817,6 +828,10 @@ def main() -> None:
         if grippers is not None:
             grippers.close()
         tracker.stop()
+
+
+def main() -> None:
+    _run_sim()
 
 
 if __name__ == "__main__":

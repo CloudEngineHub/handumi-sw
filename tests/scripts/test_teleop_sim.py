@@ -47,6 +47,17 @@ class SampleStateTest(unittest.TestCase):
 
 
 class TeleopSimCameraSelectionTest(unittest.TestCase):
+    def test_parse_sim_args(self):
+        args = parse_args(["--device", "meta", "--robot", "piper"])
+
+        self.assertEqual(args.robot, "piper")
+
+    def test_real_and_record_flags_are_not_sim_options(self):
+        with self.assertRaises(SystemExit):
+            parse_args(["--real", "--device", "meta"])
+        with self.assertRaises(SystemExit):
+            parse_args(["--record", "--device", "meta"])
+
     def test_no_viser_flag_is_parsed(self):
         self.assertTrue(parse_args(["--device", "meta", "--no-viser"]).no_viser)
 

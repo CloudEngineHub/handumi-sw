@@ -4,14 +4,18 @@ import numpy as np
 
 from handumi.dataset.capture import SYNC_LAG_S
 from handumi.feetech import GripperWidths
-from handumi.scripts.record_teleop import (
+from handumi.scripts.teleop_record import (
     PICO_TRACKING_MODE,
     build_features,
     build_joint_frame,
     joint_state_feature,
     parse_args,
 )
-from handumi.teleop import DEFAULT_GRIPPER_SAMPLE_HZ, DEFAULT_TELEOP_FPS
+from handumi.teleop import (
+    DEFAULT_GRIPPER_SAMPLE_HZ,
+    DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+    DEFAULT_TELEOP_FPS,
+)
 
 
 def _widths() -> GripperWidths:
@@ -37,6 +41,10 @@ class TeleopRecordSchemaTest(unittest.TestCase):
         self.assertFalse(args.skip_feetech)
         self.assertFalse(args.space_start)
         self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
+        self.assertEqual(
+            args.motion_smoothing_time_constant_s,
+            DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+        )
         self.assertEqual(args.sync_lag_s, SYNC_LAG_S)
         self.assertEqual(args.feetech_sample_hz, DEFAULT_GRIPPER_SAMPLE_HZ)
 

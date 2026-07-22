@@ -173,7 +173,7 @@ def main() -> None:
         )
 
     print("\nSetup listo. Prueba:")
-    command = f"  uv run handumi teleop real --device {args.device} --robot {args.robot}"
+    command = f"  uv run handumi teleop-real --device {args.device} --robot {args.robot}"
     if args.controller_tcp_calibration is not None:
         command += f" --controller-tcp-calibration {calibration_path}"
     print(command)

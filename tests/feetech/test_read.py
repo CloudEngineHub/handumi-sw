@@ -1,4 +1,4 @@
-"""Regression tests for the gripper read path used by ``handumi-teleop-sim``.
+"""Regression tests for the gripper read path used by ``handumi teleop``.
 
 These tests intentionally do not open a serial device.  They model the exact
 SDK result from the reported failure: a successful ID ping followed by failed
@@ -39,7 +39,7 @@ def _bus(packet: _PacketWithPingButNoPosition) -> FeetechBus:
 
 
 def test_teleop_gripper_read_fails_after_a_successful_port_scan() -> None:
-    """Reproduce the ``teleop_sim -> gripper -> bus`` failure path exactly."""
+    """Reproduce the ``teleop -> gripper -> bus`` failure path exactly."""
     config = FeetechConfig(
         port=None,
         baudrate=1_000_000,
@@ -70,7 +70,7 @@ def test_teleop_gripper_read_fails_after_a_successful_port_scan() -> None:
     # even when the register read that teleop needs is unreliable.
     assert grippers._buses["/dev/ttyACM0"].ping(1)
 
-    # This is the same call made at teleop_sim.py:764.  FeetechBus retries four
+    # This is the same call made by teleop.py. FeetechBus retries four
     # times, hence five position transactions in total.
     with pytest.raises(
         RuntimeError,
