@@ -8,6 +8,10 @@
 
 [HandUMI](https://github.com/BrikHMP18/HandUMI) is a hand-worn interface for collecting robot-free bimanual demonstrations. This repository contains its synchronized data collection, calibration, validation, replay, teleoperation, and robot-retargeting software.
 
+<p align="center">
+  <img src="docs/images/demo-handumi-compressed.gif" alt="HandUMI demonstration and robot retargeting preview">
+</p>
+
 > **Collect once, retarget to many robots.** Record demonstrations with HandUMI
 > once, then retarget and reuse the same data across different bimanual arms
 > with parallel grippers, without recollecting demonstrations for each robot.
@@ -21,10 +25,42 @@ git clone https://github.com/robonet-ai/handumi-sw.git
 cd handumi-sw
 bash install.sh
 source .venv/bin/activate
-handumi-record --help
+cp configs/rig.example.yaml configs/rig.yaml
+handumi doctor
+handumi record outputs/my-first-dataset --dry-run
 ```
 
 PICO support is installed by default. Use `bash install.sh --skip-xrt` for a Meta Quest-only workstation.
+Edit `configs/rig.yaml` once with the local cameras, tracking device and robot
+profile. `handumi setup --check` prints the same read-only readiness checklist
+as `handumi doctor`; `handumi setup` runs the guided hardware setup. Existing
+workflows are grouped under the single `handumi` command; use `handumi --help`
+to see the final command tree. Bash, Zsh, and Fish completion is loaded when
+the virtual environment is activated, so `handumi re<Tab>` completes `record`
+and `replay`. The shorter `hu` executable is an equivalent alias, so commands
+such as `hu record` use the same interface and completion.
+
+## Install from GitHub
+
+HandUMI can also be installed directly from this repository:
+
+```bash
+pip install "handumi @ git+https://github.com/robonet-ai/handumi-sw.git"
+```
+
+Optional robot and simulation backends can be selected with extras:
+
+```bash
+pip install "handumi[sim,piper,openarm] @ git+https://github.com/robonet-ai/handumi-sw.git"
+```
+
+For reproducible environments, pin a branch, tag, or commit:
+
+```toml
+dependencies = [
+    "handumi @ git+https://github.com/robonet-ai/handumi-sw.git@main",
+]
+```
 
 ## Install from GitHub
 
@@ -103,7 +139,7 @@ HandUMI builds on UMI, HandUMI Quest App, XRoboToolkit, LeRobot, PyRoki,
 Viser, Rerun, and MuJoCo. See the [documentation](https://robonet-ai.github.io/handumi-sw/)
 and [LICENSE](LICENSE) for attribution and third-party licensing details.
 
-Project lead and original hardware design: [BrikHMP18](https://github.com/BrikHMP18). Core software contributors include [Leonardo Pérez](https://github.com/leoperezz), [Raul Bastidas](https://github.com/RAUL-BASTIDAS), [Mitshell Ramos](https://github.com/mbrq13), and [Alvaro Mendoza-Li](https://github.com/alvax64).
+Project lead and original hardware design: [BrikHMP18](https://github.com/BrikHMP18). Core software contributors include [Leonardo Pérez](https://github.com/leoperezz), [Raul Bastidas](https://github.com/raulbastidas1203), [Mitshell Ramos](https://github.com/mbrq13), and [Alvaro Mendoza-Li](https://github.com/alvax64).
 
 ## License
 

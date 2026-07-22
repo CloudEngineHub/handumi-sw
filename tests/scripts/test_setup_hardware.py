@@ -27,6 +27,7 @@ class SetupHardwareArgsTest(unittest.TestCase):
         self.assertFalse(args.skip_feetech_home)
         self.assertEqual(args.feetech_start_id, 0)
         self.assertEqual(args.feetech_end_id, 20)
+        self.assertFalse(args.check_only)
 
     def test_can_skip_flags_are_available_for_repair_only_runs(self):
         args = parse_args(["--skip-can-map", "--skip-feetech-map", "--skip-pico"])
@@ -50,6 +51,9 @@ class SetupHardwareArgsTest(unittest.TestCase):
         self.assertTrue(args.force_feetech_calibration)
         self.assertTrue(args.skip_feetech_home)
         self.assertEqual(args.feetech_max_width_mm, 82)
+
+    def test_check_only_alias_is_available(self):
+        self.assertTrue(parse_args(["--check"]).check_only)
 
 
 class SetupHardwareFeetechCalibrationTest(unittest.TestCase):

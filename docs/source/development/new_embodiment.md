@@ -95,7 +95,7 @@ target gripper has a different maximum width. The default, `normalized`,
 preserves the source opening percentage.
 
 Useful references are `configs/robots/piper.yaml`, `openarmv1.yaml`,
-`trlc_dk1.yaml`, and `yam.yaml`.
+`trlc_dk1.yaml`, `yam.yaml` and `r1lite.yaml`.
 
 ## 3. Add a simulation test
 
@@ -158,9 +158,8 @@ For absolute-table replay, use a recorded validation episode and inspect the
 model in Viser:
 
 ```bash
-JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --repo-id local/myrobot_validation \
-  --dataset-root outputs/myrobot_validation \
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/myrobot_validation \
   --episode 0 --robot myrobot --retarget-mode absolute-table --strict-ik
 ```
 

@@ -51,23 +51,8 @@ cuda = [
 ]
 
 [project.scripts]
-handumi-record = "handumi.scripts.record:main"
-handumi-record-teleop = "handumi.scripts.record_teleop:main"
-handumi-teleop-sim = "handumi.scripts.teleop_sim:main"
-handumi-teleop-real = "handumi.scripts.teleop_real:main"
-handumi-pico-camera = "handumi.scripts.pico_camera:main"
-handumi-convert = "handumi.scripts.conversion:main"
-handumi-validate = "handumi.scripts.validate:main"
-handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"
-handumi-setup-hardware = "handumi.scripts.setup.setup_hardware:main"
-handumi-set-servo-id = "handumi.scripts.setup.set_servo_id:main"
-handumi-home-servos = "handumi.scripts.setup.home_servos:main"
-handumi-calibrate-grippers = "handumi.scripts.setup.calibrate_grippers:main"
-handumi-calibrate-openarm-grippers = "handumi.scripts.setup.calibrate_openarm_grippers:main"
-handumi-print-controller-pose = "handumi.scripts.setup.print_controller_pose:main"
-handumi-calibrate-tcp-offset = "handumi.scripts.setup.calibrate_tcp_offset:main"
-handumi-calibrate-spatial = "handumi.scripts.setup.calibrate_spatial:main"
-handumi-replay-in-sim = "handumi.scripts.replay.replay_in_sim:main"
+handumi = "handumi.scripts.cli:main"
+hu = "handumi.scripts.cli:main"
 
 [dependency-groups]
 dev = [
@@ -88,6 +73,7 @@ packages = ["src/handumi"]
 "assets/axol" = "handumi/assets/axol"
 "assets/openarm" = "handumi/assets/openarm"
 "assets/piper" = "handumi/assets/piper"
+"assets/r1lite" = "handumi/assets/r1lite"
 "assets/scenes" = "handumi/assets/scenes"
 "assets/trlc-dk1" = "handumi/assets/trlc-dk1"
 "assets/yam" = "handumi/assets/yam"

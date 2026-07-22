@@ -15,14 +15,15 @@ Safety behavior:
 
 Examples:
 
-    handumi-teleop-real --device pico --robot piper
-    handumi-teleop-real --device pico --robot piper --space-start
+    handumi teleop real --device pico --robot piper
+    handumi teleop real --device pico --robot piper --space-start
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import sys
 import time
 from pathlib import Path
 
@@ -62,9 +63,13 @@ log = logging.getLogger("handumi.teleop_real")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
     parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description="Teleoperate a supported physical robot with HandUMI."
     )
+    parser.add_argument("--help-advanced", action="store_true", help="Show expert hardware options.")
     parser.add_argument("--device", choices=("pico", "meta"), required=True)
     parser.add_argument("--robot", choices=REAL_BACKEND_NAMES, default="piper")
     parser.add_argument(
@@ -136,7 +141,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Validate but do not auto-repair CAN with sudo before connecting.",
     )
-    return parser.parse_args(argv)
+    if not show_advanced:
+        normal = {
+            "help",
+            "help_advanced",
+            "device",
+            "robot",
+            "side",
+            "space_start",
+            "no_sounds",
+        }
+        for action in parser._actions:
+            if action.dest not in normal:
+                action.help = argparse.SUPPRESS
+    else:
+        parser.print_help()
+        raise SystemExit(0)
+    return parser.parse_args(raw_argv)
 
 
 def _validate_args(args: argparse.Namespace) -> None:

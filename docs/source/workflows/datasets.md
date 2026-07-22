@@ -5,12 +5,12 @@ replay, then run automated validation and inspect the captured signals.
 
 ## 1. Replay and Inspect
 
-For local recordings, pass only the local root; `--repo-id` is unnecessary and
-no dataset is downloaded:
+For local recordings, pass the local root as `DATASET`; no dataset is
+downloaded:
 
 ```bash
-JAX_PLATFORMS=cpu handumi-replay-in-sim \
-  --dataset-root outputs/20260714_224135 \
+JAX_PLATFORMS=cpu handumi replay \
+  outputs/20260714_224135 \
   --robot openarmv1 \
   --episode 0
 ```
@@ -23,8 +23,8 @@ Choose the target robot explicitly. Piper is a currently available example:
 
 ```bash
 TARGET_ROBOT=piper
-handumi-replay-in-sim \
-  --repo-id your-name/handumi-demo \
+handumi replay \
+  your-name/handumi-demo \
   --robot "$TARGET_ROBOT"
 ```
 
@@ -40,7 +40,7 @@ Table-calibrated datasets preserve recorded bimanual geometry automatically.
 For an explicit geometry-preserving replay:
 
 ```bash
-handumi-replay-in-sim --repo-id your-name/handumi-demo \
+handumi replay your-name/handumi-demo \
   --robot "$TARGET_ROBOT" \
   --retarget-mode absolute-table \
   --deployment-calibration "configs/calibration/${TARGET_ROBOT}_table.yaml"
@@ -64,16 +64,14 @@ bimanual separation, table-to-robot transform, and IK errors.
 :::
 
 Offline playback of a dataset on physical arms is not currently exposed.
-`handumi-teleop-real` consumes live HandUMI motion and is not a recorded-dataset
+`handumi teleop real` consumes live HandUMI motion and is not a recorded-dataset
 replay command.
 
 ## 2. Run Automated Validation
 
 ```bash
-handumi-validate \
-  --repo-id your-name/handumi-demo \
-  --root outputs/datasets/handumi-demo \
-  --fail-on-reject
+handumi validate \
+  outputs/datasets/handumi-demo --strict
 ```
 
 The report is written to `meta/handumi_quality.json`. Review rejected episodes
@@ -106,29 +104,28 @@ capture can be checked against another supported robot.
 
 Conversion creates a target-specific dataset while preserving the raw source.
 `--retarget-mode` defaults to `auto` and is resolved with the exact same rule
-`handumi-replay-in-sim` uses, identically for every embodiment: when the
-source dataset declares a calibrated table workspace, conversion runs the
-same `absolute-table` solver as replay (validating
-`configs/calibration/<embodiment>_table.yaml`) for exact qpos parity;
-otherwise it falls back to `local-relative`. No embodiment gets a different
-default or a separate code path — pick the target with `--embodiment`:
+`handumi replay` uses, identically for every embodiment: when the source
+dataset declares a calibrated table workspace, conversion runs the same
+`absolute-table` solver as replay (validating
+`configs/calibration/<embodiment>_table.yaml`) for exact qpos parity; otherwise
+it falls back to `local-relative`. For Piper, use the validated `--robot piper`
+profile to convert the replay result to physical Piper commands:
 
 ```bash
-JAX_PLATFORMS=cpu handumi-convert \
-  --repo-id your-name/handumi-demo \
-  --root outputs/datasets/handumi-demo \
-  --embodiment piper \
-  --output-repo-id your-name/handumi-demo-piper
+JAX_PLATFORMS=cpu handumi convert \
+  outputs/datasets/handumi-demo \
+  --robot piper \
+  --output your-name/handumi-demo-piper
 ```
 
 The Piper state has 14 physical commands: six replay arm joints in radians
 plus one gripper opening in meters per side. Its pairs are
 `observation.state[t] = command[t]` and `action[t] = command[t+1]`. The two
 mirrored URDF finger joints are reconstructed from the single opening only when
-rendering simulation. Any other embodiment with a validated
-`configs/calibration/<name>_table.yaml` gets the same replay-parity treatment
-automatically; pass an explicit `--retarget-mode` to override the auto
-detection for any of them.
+rendering simulation. Other embodiments use the same `--robot <name>` interface;
+absolute-table support requires their corresponding
+`configs/calibration/<name>_table.yaml` file, and an explicit `--retarget-mode`
+can override auto detection for any of them.
 
 Replay and validate the converted motion before using it with a robot-specific
 integration. See [Add a New Robot Embodiment](../development/new_embodiment.md)

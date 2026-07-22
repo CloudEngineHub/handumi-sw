@@ -14,13 +14,31 @@ Check:
 
 ```bash
 python --version
-handumi-record --help
+handumi record --help
 ```
 
 `install.sh` creates the virtual environment, runs `uv sync`, and builds the
 XRoboToolkit SDK needed for PICO. Use `--skip-xrt` when the setup only uses
 Meta Quest. It also creates the ignored machine-local `configs/rig.yaml` from
 `configs/rig.example.yaml` without overwriting an existing rig configuration.
+Activating the environment loads command and option completion for Bash, Zsh,
+or Fish; for example, `handumi re<Tab>` offers `record` and `replay`.
+`hu` is an equivalent short alias for the complete CLI, including help and
+completion, so `hu record` and `handumi record` behave identically.
+
+For installations that do not use `install.sh`, enable completion in the
+current shell with one of:
+
+```bash
+# Bash
+eval "$(handumi completion bash)"
+
+# Zsh
+eval "$(handumi completion zsh)"
+
+# Fish
+handumi completion fish | source
+```
 
 ## Optional robot and simulation profiles
 

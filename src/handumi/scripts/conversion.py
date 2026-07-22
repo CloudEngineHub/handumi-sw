@@ -2,17 +2,10 @@
 """Convert a raw HandUMI LeRobot dataset to robot-specific joint angles.
 
 The script loads raw HandUMI controller states (``observation.state``), applies
-the same optional controller->TCP calibration and IK retargeting used by
-``replay_in_sim.py``, then writes a LeRobot v3.0 dataset whose
+the same optional controller->TCP calibration and local-relative retargeting
+used by ``replay_in_sim.py``, then writes a LeRobot v3.0 dataset whose
 ``observation.state`` and ``action`` columns contain physical robot joint
 values.
-
-``--retarget-mode`` defaults to ``auto`` and is resolved with the exact same
-rule ``handumi-replay-in-sim`` uses, identically for every embodiment: when
-the source dataset was recorded in the calibrated table workspace, conversion
-solves through the replay pipeline (``absolute-table``) for exact qpos
-parity; otherwise it falls back to ``local-relative``. No embodiment gets a
-different default or a separate code path.
 
 All video streams are preserved unchanged (the last frame of each episode is
 dropped from the parquet data to produce ``action = state[t+1]``, but the
@@ -23,20 +16,13 @@ Usage
 ::
 
     # Axol embodiment (output defaults to NONHUMAN-RESEARCH/handumi-dataset-v2-axol)
-    handumi-convert \
-        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
-        --embodiment axol
+    handumi convert NONHUMAN-RESEARCH/handumi-dataset-v2 --robot axol
 
     # Piper embodiment, custom output repo-id, push to hub afterwards
-    handumi-convert \
-        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
-        --embodiment piper \
-        --output-repo-id NONHUMAN-RESEARCH/my-piper-dataset \
+    handumi convert NONHUMAN-RESEARCH/handumi-dataset-v2 \
+        --robot piper \
+        --output NONHUMAN-RESEARCH/my-piper-dataset \
         --push-to-hub
-
-Both commands above resolve their retarget mode the same way: auto-detected
-from the source dataset's ``tracking_workspace`` metadata. Pass an explicit
-``--retarget-mode`` to override it for any embodiment.
 """
 
 from __future__ import annotations
@@ -97,7 +83,10 @@ class ConversionTcpCalibrationSelection:
 # ---------------------------------------------------------------------------
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
+    def advanced(text: str) -> str:
+        return text if show_advanced else argparse.SUPPRESS
+
     parser = argparse.ArgumentParser(
         description=(
             "Convert a PICO/HandUMI LeRobot dataset to an embodiment-specific "
@@ -111,56 +100,26 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     ds = parser.add_argument_group("Dataset I/O")
     ds.add_argument(
-        "--repo-id",
-        default="NONHUMAN-RESEARCH/handumi-dataset-v2",
-        help="HuggingFace repo-id of the source HandUMI dataset.",
+        "dataset",
+        help="Local source dataset path or Hugging Face repo id.",
     )
     ds.add_argument(
-        "--root",
+        "--output",
         default=None,
         help=(
-            "Local root of the source dataset. "
-            "Defaults to outputs/datasets/<repo-name>."
+            "Local output path or Hugging Face repository id. Defaults to a "
+            "robot-suffixed dataset under outputs/datasets/."
         ),
-    )
-    ds.add_argument(
-        "--output-repo-id",
-        default=None,
-        help=(
-            "HuggingFace repo-id for the converted dataset. "
-            "Defaults to <source-repo-id>-<embodiment> "
-            "(e.g. NONHUMAN-RESEARCH/handumi-dataset-v2-piper). "
-            "The local output directory is always outputs/datasets/<output-repo-name>."
-        ),
-    )
-    ds.add_argument(
-        "--output-dir",
-        type=Path,
-        default=None,
-        help=(
-            "Local output dataset directory. Defaults to outputs/datasets/"
-            "<output-repo-name>."
-        ),
-    )
-    ds.add_argument(
-        "--resume",
-        action="store_true",
-        help="Append newly processed episodes to an existing output directory.",
     )
     ds.add_argument(
         "--revision",
         default="main",
-        help="Git revision of the source dataset.",
+        help=advanced("Git revision of the source dataset."),
     )
     ds.add_argument(
         "--source",
         default="observation.state",
-        help="Raw 16D HandUMI feature column to convert.",
-    )
-    ds.add_argument(
-        "--column",
-        default=None,
-        help="Deprecated alias for --source.",
+        help=advanced("Raw 16D HandUMI feature column to convert."),
     )
     ds.add_argument(
         "--episodes",
@@ -182,23 +141,23 @@ def build_parser() -> argparse.ArgumentParser:
     ds.add_argument(
         "--push-to-hub",
         action="store_true",
-        help="Push the resulting dataset to the HuggingFace Hub after writing.",
+        help=advanced("Push the resulting dataset to the Hugging Face Hub."),
     )
     ds.add_argument(
         "--hub-token",
         default=None,
-        help="HuggingFace API token (uses HF_TOKEN env var if not set).",
+        help=advanced("Hugging Face token; defaults to HF_TOKEN."),
     )
     ds.add_argument(
         "--quality-config",
         type=Path,
         default=Path("configs/quality.yaml"),
-        help="Offline episode-acceptance thresholds.",
+        help=advanced("Offline episode-acceptance thresholds."),
     )
     ds.add_argument(
         "--skip-quality-filter",
         action="store_true",
-        help="Convert rejected episodes too; intended only for debugging.",
+        help=advanced("Convert rejected episodes too; debugging only."),
     )
 
     # ------------------------------------------------------------------
@@ -206,79 +165,75 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     emb = parser.add_argument_group("Embodiment")
     emb.add_argument(
-        "--embodiment",
+        "--robot",
+        dest="embodiment",
         choices=EMBODIMENT_NAMES,
-        default=None,
-        help=(
-            "Target robot embodiment (default: axol). Retarget-mode resolution "
-            "is identical for every embodiment; see --retarget-mode."
-        ),
+        default="axol",
+        help="Target robot; loads its validated retargeting profile.",
     )
 
     # ------------------------------------------------------------------
     # Shared IK parameters
     # ------------------------------------------------------------------
     ik = parser.add_argument_group("Shared IK parameters")
-    ik.add_argument("--scale", type=float, default=1.0)
+    ik.add_argument("--scale", type=float, default=1.0, help=advanced("Legacy global scale."))
     ik.add_argument(
         "--axis-map",
         default=None,
-        help=(
+        help=advanced(
             "PICO delta → robot delta mapping, e.g. z,x,y or z,y,-x.  "
             "Defaults to the selected embodiment's validated mapping."
         ),
     )
-    ik.add_argument("--left-only", action="store_true")
-    ik.add_argument("--right-only", action="store_true")
+    ik.add_argument("--left-only", action="store_true", help=advanced("Solve only the left arm."))
+    ik.add_argument("--right-only", action="store_true", help=advanced("Solve only the right arm."))
     ik.add_argument(
         "--gripper",
         type=float,
         default=1.0,
-        help="Fallback gripper opening in [0, 1], used only when the recording "
+        help=advanced("Fallback gripper opening in [0, 1], used only when the recording "
         "carries no Feetech widths (e.g. --skip-feetech). Otherwise the "
-        "recorded opening drives the finger joints frame by frame.",
+        "recorded opening drives the finger joints frame by frame."),
     )
     ik.add_argument(
         "--gripper-max-width-m",
         type=float,
         default=None,
-        help="HandUMI full opening (m) that maps to the robot gripper fully "
+        help=advanced("HandUMI full opening (m) that maps to the robot gripper fully "
         "open; defaults to the selected robot configuration. Recorded normalized "
-        "Feetech values take precedence in replay-parity conversion.",
+        "Feetech values take precedence in replay-parity conversion."),
     )
-    ik.add_argument("--pos-weight", type=float, default=None)
-    ik.add_argument("--ori-weight", type=float, default=None)
-    ik.add_argument("--max-joint-delta", type=float, default=None)
-    ik.add_argument("--max-reach", type=float, default=None)
+    ik.add_argument("--pos-weight", type=float, default=None, help=advanced("IK position weight."))
+    ik.add_argument("--ori-weight", type=float, default=None, help=advanced("IK orientation weight."))
+    ik.add_argument("--max-joint-delta", type=float, default=None, help=advanced("IK joint step limit."))
+    ik.add_argument("--max-reach", type=float, default=None, help=advanced("Workspace reach limit."))
     ik.add_argument(
         "--retarget-mode",
         choices=("auto", "local-relative", "anchored", "absolute-table"),
         default="auto",
-        help=(
+        help=advanced(
             "Retargeting mode shared with replay_in_sim.py. auto selects "
-            "absolute-table when the source dataset declares a calibrated "
-            "table workspace, otherwise local-relative -- the same rule "
-            "handumi-replay-in-sim applies, and applied identically for "
-            "every embodiment (no embodiment gets a different default)."
+            "absolute-table when the source dataset declares a calibrated table "
+            "workspace, otherwise local-relative."
         ),
     )
     ik.add_argument(
         "--compose-source",
         choices=("commanded", "achieved"),
         default="commanded",
-        help="For local-relative mode, compose on previous target or achieved FK.",
+        help=advanced("For local-relative mode, compose on previous target or achieved FK."),
     )
     ik.add_argument(
         "--translation-scale",
         type=float,
         default=1.0,
-        help="Scale local-relative translation deltas after frame adaptation.",
+        help=advanced("Scale local-relative translation deltas after frame adaptation."),
     )
     ik.add_argument(
         "--controller-device",
         choices=("pico", "meta"),
         default=None,
-        help=(
+        help=advanced(
             "Override the source tracking device. Defaults to dataset metadata, "
             f"then {DEFAULT_CONTROLLER_DEVICE!r} for legacy datasets."
         ),
@@ -287,18 +242,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help="Override the source robot/device Controller->TCP calibration.",
+        help=advanced("Override the source robot/device Controller->TCP calibration."),
     )
     ik.add_argument(
         "--raw-controller-debug",
         action="store_true",
-        help="Use raw controller poses directly, without controller->TCP calibration.",
+        help=advanced("Use raw controller poses without Controller->TCP calibration."),
     )
     ik.add_argument(
         "--deployment-calibration",
         type=Path,
         default=None,
-        help=(
+        help=advanced(
             "YAML containing robot_from_table for absolute-table conversion. "
             "Defaults to configs/calibration/<robot>_table.yaml."
         ),
@@ -307,17 +262,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--absolute-orientation",
         choices=("relative-start", "table-absolute"),
         default="relative-start",
-        help="Absolute-table tool orientation policy used by replay.",
+        help=advanced("Absolute-table tool orientation policy used by replay."),
     )
-    ik.add_argument("--initial-solve-iterations", type=int, default=12)
-    ik.add_argument("--initial-position-tolerance-m", type=float, default=0.01)
-    ik.add_argument("--max-ik-position-error-m", type=float, default=0.03)
-    ik.add_argument("--max-ik-rotation-error-deg", type=float, default=45.0)
-    ik.add_argument("--table-clearance-warning-m", type=float, default=0.10)
+    ik.add_argument("--initial-solve-iterations", type=int, default=12, help=advanced("Initial unrestricted IK iterations."))
+    ik.add_argument("--initial-position-tolerance-m", type=float, default=0.01, help=advanced("Initial TCP tolerance."))
+    ik.add_argument("--max-ik-position-error-m", type=float, default=0.03, help=advanced("Maximum TCP position error."))
+    ik.add_argument("--max-ik-rotation-error-deg", type=float, default=45.0, help=advanced("Maximum TCP rotation error."))
+    ik.add_argument("--table-clearance-warning-m", type=float, default=0.10, help=advanced("Table-clearance warning threshold."))
     ik.add_argument(
         "--strict-ik",
         action="store_true",
-        help="Reject an episode when replay IK fidelity thresholds are exceeded.",
+        help=advanced("Reject an episode when IK thresholds are exceeded."),
+    )
+
+    parser.add_argument(
+        "--help-advanced", action="store_true", help="Show expert IK and calibration options."
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve and print the conversion plan without loading episodes.",
     )
 
     return parser
@@ -337,18 +301,45 @@ def _default_output_repo_id(source_repo_id: str, embodiment: str) -> str:
     return f"{repo_id}-{embodiment}"
 
 
+def _resolve_conversion_output(
+    value: str | None,
+    *,
+    source_repo_id: str,
+    embodiment: str,
+) -> tuple[str, Path]:
+    if value is None:
+        repo_id = _default_output_repo_id(source_repo_id, embodiment)
+        return repo_id, dataset_root_from_repo_id(repo_id)
+
+    candidate = Path(value).expanduser()
+    looks_local = (
+        value.startswith((".", "/", "~", "outputs/"))
+        or candidate.exists()
+        or candidate.parent.exists()
+    )
+    if looks_local:
+        return f"local/{candidate.name}", candidate
+    return value, dataset_root_from_repo_id(value)
+
+
 def _resolve_cli_profile(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
 ) -> None:
-    """Resolve CLI defaults that do not require the source dataset.
+    """Resolve conversion defaults that do not require source dataset metadata."""
+    args.piper = args.embodiment == "piper"
 
-    This only picks the target embodiment and validates numeric thresholds.
-    ``--retarget-mode auto`` is resolved later by ``_resolve_retarget_mode``,
-    once the source dataset's metadata is available, using the exact same
-    rule for every embodiment.
-    """
-    args.embodiment = args.embodiment or "axol"
+    if args.retarget_mode == "absolute-table":
+        path = args.deployment_calibration or (
+            Path("configs/calibration") / f"{args.embodiment}_table.yaml"
+        )
+        from handumi.scripts.replay.replay_in_sim import load_robot_from_table
+
+        try:
+            load_robot_from_table(path, expected_robot=args.embodiment)
+        except SystemExit as exc:
+            parser.error(str(exc))
+        args.deployment_calibration = path
 
     if args.initial_solve_iterations < 1:
         parser.error("--initial-solve-iterations must be >= 1.")
@@ -367,13 +358,7 @@ def _resolve_retarget_mode(
     args: argparse.Namespace,
     source_info: dict[str, Any],
 ) -> None:
-    """Resolve ``--retarget-mode auto`` with the same rule replay uses.
-
-    Every embodiment goes through this identical rule: ``absolute-table``
-    (exact replay-solver parity) when the source dataset declares a
-    calibrated table workspace, ``local-relative`` otherwise. No embodiment
-    is special-cased here.
-    """
+    """Resolve ``--retarget-mode auto`` with the same rule replay uses."""
     from handumi.scripts.replay.replay_in_sim import (
         _resolved_retarget_mode as resolve_replay_retarget_mode,
     )
@@ -791,7 +776,7 @@ def _write_gripper_joints(
 
     ``state[14]``/``state[15]`` carry the left/right opening in meters;
     normalized by --gripper-max-width-m and scaled to each finger's URDF
-    range (same mapping handumi-teleop-sim renders). Recordings without Feetech
+    range (same mapping ``handumi teleop sim`` renders). Recordings without Feetech
     (widths all zero) fall back to the constant --gripper opening.
     """
     widths_m = np.asarray(states, dtype=np.float32)[
@@ -835,7 +820,7 @@ def _solve_with_replay_pipeline(
         solve_episode as solve_replay_episode,
     )
 
-    replay_args = build_replay_parser().parse_args([])
+    replay_args = build_replay_parser().parse_args([str(args.root)])
     replay_args.repo_id = args.repo_id
     replay_args.dataset_root = args.root
     replay_args.revision = args.revision
@@ -886,6 +871,11 @@ def _piper_command_states_from_rollout(
     """Backward-compatible Piper helper kept for older callers/tests."""
     qpos = np.asarray(rollout["qpos"], dtype=np.float32)
     openings = np.asarray(rollout["gripper_normalized"], dtype=np.float32)
+    if openings.shape != (len(qpos), 2):
+        raise ValueError(
+            "Piper conversion requires replay gripper_normalized with shape "
+            f"({len(qpos)}, 2), got {openings.shape}."
+        )
     names = list(actuated_names)
     arm_indices = {
         side: [names.index(f"{side}_joint{joint}") for joint in range(1, 7)]
@@ -1100,32 +1090,44 @@ def _write_converted_dataset_readme(
 
 
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+    raw_argv = list(sys.argv[1:])
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
+    parser = build_parser(show_advanced=show_advanced)
+    if show_advanced:
+        parser.print_help()
+        return
+    args = parser.parse_args(raw_argv)
     _resolve_cli_profile(parser, args)
     args.ik_reports = []
 
     if args.left_only and args.right_only:
         parser.error("Use only one of --left-only or --right-only.")
-    if args.column is not None:
-        args.source = args.column
+    from handumi.dataset.selection import resolve_dataset_selection
+
+    try:
+        selection = resolve_dataset_selection(
+            args.dataset,
+            revision=args.revision,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    args.repo_id = selection.repo_id
+    args.root = selection.root
 
     # ------------------------------------------------------------------
     # Resolve paths and names
     # ------------------------------------------------------------------
     source_repo_id = args.repo_id
-    source_root = Path(args.root) if args.root else dataset_root_from_repo_id(source_repo_id)
-    output_repo_id = args.output_repo_id or _default_output_repo_id(
-        source_repo_id, args.embodiment
+    source_root = selection.root
+    output_repo_id, output_root = _resolve_conversion_output(
+        args.output,
+        source_repo_id=source_repo_id,
+        embodiment=args.embodiment,
     )
-    output_root = args.output_dir or dataset_root_from_repo_id(output_repo_id)
-
-    print(f"Source  : {source_root}  ({source_repo_id})")
-    print(f"Output  : {output_root}  ({output_repo_id})")
-    print(f"Embodiment: {args.embodiment}")
 
     # ------------------------------------------------------------------
-    # Ensure source metadata is available, then read episode count
+    # Ensure source metadata is available, then resolve metadata-driven defaults
     # ------------------------------------------------------------------
     from handumi.dataset import ensure_metadata, validate_raw_state_metadata
 
@@ -1139,6 +1141,21 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
     _resolve_retarget_mode(parser, args, source_info)
+
+    print(
+        "Conversion plan\n"
+        f"  Source: {source_root} ({source_repo_id})\n"
+        f"  Output: {output_root} ({output_repo_id})\n"
+        f"  Robot profile: {args.embodiment}\n"
+        f"  Retargeting: {args.retarget_mode}\n"
+        f"  Episodes: {args.episodes or 'all'}"
+    )
+    if args.dry_run:
+        return
+
+    # ------------------------------------------------------------------
+    # Resolve calibration, then read episode count
+    # ------------------------------------------------------------------
     if not args.raw_controller_debug:
         try:
             args.controller_tcp_selection = _resolve_conversion_tcp_calibration(
@@ -1155,25 +1172,13 @@ def main() -> None:
         parser.error(
             f"Could not determine total_episodes from "
             f"{source_root / 'meta' / 'info.json'}. "
-            "Check --repo-id, --root, and --revision."
+            "Check DATASET and --revision."
         )
 
     try:
         episode_indices = _parse_episode_list(args.episodes, total_source_episodes)
     except ValueError as exc:
         parser.error(str(exc))
-    if args.resume:
-        existing_info = output_root / "meta" / "info.json"
-        if existing_info.exists():
-            existing_episodes = int(
-                json.loads(existing_info.read_text()).get("total_episodes", 0)
-            )
-            if existing_episodes > 0:
-                episode_indices = episode_indices[existing_episodes:]
-                print(
-                    "Resume: skipping "
-                    f"{existing_episodes} existing output episode(s)."
-                )
 
     print(
         f"Source episodes: {total_source_episodes}  "
@@ -1284,7 +1289,6 @@ def main() -> None:
         robot_type=robot_type,
         joint_names=joint_names,
         fps=dataset_fps,
-        resume=args.resume,
         handumi_metadata={
             "conversion_source": args.source,
             "retarget_mode": args.retarget_mode,
@@ -1297,7 +1301,7 @@ def main() -> None:
                 "type": "opening_width",
                 "unit": "m",
                 "max_width_m": float(runtime.config.gripper_max_width_m),
-                "source": "recorded Feetech normalized or raw HandUMI width",
+                "source": "recorded Feetech normalized",
             },
             "deployment_calibration": _deployment_calibration_metadata(args),
             "absolute_orientation": args.absolute_orientation,
@@ -1309,11 +1313,7 @@ def main() -> None:
             "controller_device": args.controller_device,
             "raw_controller_debug": bool(args.raw_controller_debug),
             "controller_tcp_calibration": (
-                {
-                    "calibration_id": 0,
-                    "path": "meta/calibrations/000000.json",
-                    "sha256": args.controller_tcp_selection.metadata.get("sha256"),
-                }
+                args.controller_tcp_selection.metadata
                 if not args.raw_controller_debug
                 else None
             ),
