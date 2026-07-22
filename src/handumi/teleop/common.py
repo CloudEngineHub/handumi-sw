@@ -18,16 +18,16 @@ from handumi.retargeting.handumi_to_robot import VR_TO_ROBOT
 from handumi.tracking.transforms import Pose
 
 SIDE_CHOICES = ("left", "right", "both")
-# PICO's live tracking stream is 30 Hz.  Driving the control/CAN loop faster
-# only retransmits the same pose and can build command backlog on real arms.
-DEFAULT_TELEOP_FPS = 60
+# PICO's live tracking stream is 30 Hz. Driving IK faster only retransmits the
+# same pose and, because IK limits are expressed per frame, can request joint
+# motion faster than a real backend is allowed to stream it.
+DEFAULT_TELEOP_FPS = 30
 DEFAULT_GRIPPER_SAMPLE_HZ = 200.0
 DEFAULT_JOINT_SMOOTHING_ALPHA = 0.5
-# The same causal low-pass is applied to controller TCP poses and solved joint
-# commands in every live-teleop frontend.  This is deliberately expressed in
-# seconds (rather than "alpha per frame") so its behaviour does not change
-# when the tracking or rendering rate changes.
-DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S = 0.05
+# Live teleop is direct by default: the newest tracked TCP pose produces the
+# newest IK command without a causal filter continuing to catch up after the
+# operator stops. The optional smoother remains available for explicit tuning.
+DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S = 0.0
 
 
 class JointActionSmoother:

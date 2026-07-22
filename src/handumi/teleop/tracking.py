@@ -19,7 +19,7 @@ class TrackingRecoveryPolicy:
         self.config = config or TrackingRecoveryConfig()
         self.tracking_lost_since: float | None = None
         self.tracking_missing_since: float | None = None
-        self.last_recovery_attempt = 0.0
+        self.last_recovery_attempt: float | None = None
 
     @property
     def lost(self) -> bool:
@@ -50,7 +50,10 @@ class TrackingRecoveryPolicy:
             return False
         if self.lost_for(now) < self.config.recover_after_s:
             return False
-        if now - self.last_recovery_attempt < self.config.recover_period_s:
+        if (
+            self.last_recovery_attempt is not None
+            and now - self.last_recovery_attempt < self.config.recover_period_s
+        ):
             return False
         self.last_recovery_attempt = now
         return True

@@ -14,10 +14,6 @@ from handumi.scripts.teleop_real import (
     parse_args,
 )
 from handumi.teleop.common import start_sides as _start_sides
-from handumi.teleop import (
-    DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
-    DEFAULT_TELEOP_FPS,
-)
 
 
 class TeleopRealArgsTest(unittest.TestCase):
@@ -25,11 +21,7 @@ class TeleopRealArgsTest(unittest.TestCase):
         args = parse_args(["--device", "pico"])
 
         self.assertEqual(args.robot, "piper")
-        self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
-        self.assertEqual(
-            args.motion_smoothing_time_constant_s,
-            DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
-        )
+        self.assertEqual(args.fps, 30)
         self.assertFalse(args.space_start)
         _validate_args(args)
 
@@ -38,14 +30,6 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         self.assertTrue(args.space_start)
         _validate_args(args)
-
-    def test_motion_smoothing_time_constant_cannot_be_negative(self):
-        for value in ("-0.01", "-1"):
-            args = parse_args(
-                ["--device", "pico", "--motion-smoothing-time-constant-s", value]
-            )
-            with self.assertRaises(SystemExit):
-                _validate_args(args)
 
     def test_default_calibration_comes_from_piper_robot_tool_setup(self):
         args = parse_args(["--device", "meta"])

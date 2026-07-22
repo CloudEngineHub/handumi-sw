@@ -14,6 +14,7 @@ from handumi.real.piper import (
 )
 from handumi.real.piper.driver import step_mdeg_toward
 from handumi.robots.registry import RobotRealConfig, load_robot_config
+from handumi.teleop import DEFAULT_TELEOP_FPS
 
 
 JOINT_NAMES = [
@@ -99,6 +100,14 @@ class PiperCanConfigTest(unittest.TestCase):
         self.assertEqual(config.real.home_tolerance_deg, 3.0)
         self.assertEqual(config.real.speed_percent, 80)
         self.assertEqual(config.real.gripper_effort, 1000)
+
+    def test_default_ik_rate_cannot_build_streamer_backlog(self):
+        config = load_robot_config("piper")
+        max_ik_speed_deg_s = (
+            np.rad2deg(config.ik_weights.max_joint_delta) * DEFAULT_TELEOP_FPS
+        )
+
+        self.assertLessEqual(max_ik_speed_deg_s, config.real.max_joint_speed_deg_s)
 
 
 class PiperUnitsTest(unittest.TestCase):

@@ -1,8 +1,15 @@
-"""Piper SDK driver, units, settings, and streaming for real HandUMI teleop."""
+"""AgileX Piper CAN backend used by real HandUMI teleop.
+
+The teleop script computes one IK configuration ``q`` at the live tracking
+rate. This module turns that ``q`` into Piper SDK joint units and streams the
+latest target on a fixed-rate CAN thread so the robot receives smooth,
+bounded joint commands even if the IK loop jitters.
+"""
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +19,6 @@ import numpy as np
 import yaml
 
 from handumi.config import DEFAULT_RIG_CONFIG, EXAMPLE_RIG_CONFIG
-from handumi.real.streamer import JointStreamer, step_toward
 from handumi.robots.registry import RobotRealConfig
 
 log = logging.getLogger("handumi.real.piper")
@@ -25,7 +31,7 @@ SIDE_NAMES = ("left", "right")
 
 @dataclass(frozen=True)
 class PiperCanSettings:
-    """Resolved Piper SDK teleop settings from robot defaults + local rig."""
+    """Resolved Piper real-teleop settings from robot defaults + local rig."""
 
     left_port: str
     right_port: str
@@ -131,8 +137,17 @@ def step_mdeg_toward(
     target: np.ndarray,
     max_step_mdeg: float,
 ) -> np.ndarray:
-    """Move one command sample toward ``target`` by at most ``max_step_mdeg`` (int64 output)."""
-    return np.rint(step_toward(current, target, max_step_mdeg)).astype(np.int64)
+    """Move one command sample toward ``target`` by at most ``max_step_mdeg`` per joint."""
+    current_f = np.asarray(current, dtype=np.float64)
+    target_f = np.asarray(target, dtype=np.float64)
+    if max_step_mdeg <= 0.0:
+        return np.rint(target_f).astype(np.int64)
+    delta = np.clip(
+        target_f - current_f,
+        -float(max_step_mdeg),
+        float(max_step_mdeg),
+    )
+    return np.rint(current_f + delta).astype(np.int64)
 
 
 def format_mdeg(values: np.ndarray) -> str:
@@ -223,7 +238,7 @@ class PiperSdkArm:
             disconnect()
 
 
-class PiperJointStreamer(JointStreamer):
+class PiperJointStreamer:
     """Latest-target, fixed-rate sender for both real Piper arms."""
 
     def __init__(
@@ -238,13 +253,15 @@ class PiperJointStreamer(JointStreamer):
             raise ValueError("max_joint_speed_deg_s must be > 0")
         if not arms:
             raise ValueError("no Piper arms connected")
-        super().__init__(
-            command_rate_hz=command_rate_hz,
-            thread_name="handumi-piper-sdk-streamer",
-        )
+        if command_rate_hz <= 0.0:
+            raise ValueError("command_rate_hz must be > 0")
         self.arms = arms
+        self.command_rate_hz = float(command_rate_hz)
         self.gripper_effort = int(gripper_effort)
         self.max_step_mdeg = max(1.0, max_joint_speed_deg_s * 1000.0 / command_rate_hz)
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._error: BaseException | None = None
         self._commanded = {
             side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()
         }
@@ -252,6 +269,19 @@ class PiperJointStreamer(JointStreamer):
         self._gripper_targets: dict[str, int | None] = {
             side: None for side in self.arms
         }
+        self._thread = threading.Thread(
+            target=self._run,
+            name="handumi-piper-can-streamer",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        log.info(
+            "Piper stream: %.1f Hz, %.3f deg/tick",
+            self.command_rate_hz,
+            self.max_step_mdeg / 1000.0,
+        )
+        self._thread.start()
 
     def set_max_joint_speed_deg_s(self, max_joint_speed_deg_s: float) -> None:
         if max_joint_speed_deg_s <= 0.0:
@@ -346,6 +376,16 @@ class PiperJointStreamer(JointStreamer):
                 last_print = now
             time.sleep(0.05)
 
+    def raise_if_failed(self) -> None:
+        if self._error is not None:
+            raise RuntimeError("Piper command streamer failed") from self._error
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self.raise_if_failed()
+
     def _run(self) -> None:
         period = 1.0 / self.command_rate_hz
         next_time = time.perf_counter()
@@ -361,12 +401,15 @@ class PiperJointStreamer(JointStreamer):
                         )
                         for side in self.arms
                     }
+                    # Publish the scheduled command before sending. A concurrent
+                    # hold then captures this exact tick and prevents later motion.
                     self._commanded.update(
                         {side: cmd.copy() for side, cmd in next_commands.items()}
                     )
 
                 for side, arm in self.arms.items():
-                    arm.send_mdeg(next_commands[side])
+                    cmd = next_commands[side]
+                    arm.send_mdeg(cmd)
                     gripper = gripper_targets.get(side)
                     if gripper is not None:
                         arm.send_gripper_microm(gripper, self.gripper_effort)
@@ -382,7 +425,7 @@ class PiperJointStreamer(JointStreamer):
 
 
 class PiperCanEnvironment:
-    """Owns Piper SDK arms plus the smooth latest-target streamer."""
+    """Owns Piper CAN arms plus the smooth latest-target streamer."""
 
     def __init__(
         self,
@@ -497,10 +540,8 @@ class PiperCanEnvironment:
 
 
 __all__ = [
-    "ARM_JOINT_COUNT",
     "MDEG_TO_RAD",
     "RAD_TO_MDEG",
-    "PiperArm",
     "PiperCanEnvironment",
     "PiperCanSettings",
     "PiperJointStreamer",

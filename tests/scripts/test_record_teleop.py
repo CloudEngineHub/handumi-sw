@@ -45,6 +45,8 @@ class TeleopRecordSchemaTest(unittest.TestCase):
             args.motion_smoothing_time_constant_s,
             DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
         )
+        self.assertEqual(args.fps, 30)
+        self.assertEqual(args.motion_smoothing_time_constant_s, 0.0)
         self.assertEqual(args.sync_lag_s, SYNC_LAG_S)
         self.assertEqual(args.feetech_sample_hz, DEFAULT_GRIPPER_SAMPLE_HZ)
 
