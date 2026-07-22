@@ -93,6 +93,7 @@ from handumi.teleop.hardware import (
     load_required_controller_tcp_calibration as _load_required_calibration,
     validate_feetech_ready as _validate_feetech_ready,
 )
+from handumi.teleop.smoothing import JointCommandSmoother, JointSmoothingConfig
 from handumi.teleop.tracking import TrackingRecoveryPolicy
 from handumi.tracking.base import TrackingProvider
 from handumi.tracking.gestures import DoubleClapDetector
@@ -109,6 +110,8 @@ DEFAULT_TRANSLATION_SCALE = 1.0
 SPACE_START_ENABLED = False
 PLAY_SOUNDS = True
 REPAIR_CAN_ON_SETUP = True
+JOINT_SMOOTHING_CUTOFF_HZ = JointSmoothingConfig.cutoff_hz
+JOINT_MAX_VELOCITY_RAD_S = JointSmoothingConfig.max_velocity_rad_s
 RIG_CONFIG_PATH = DEFAULT_RIG_CONFIG
 CONTROLLER_TCP_CALIBRATION_PATH = None
 FEETECH_PORT_OVERRIDE = None
@@ -224,6 +227,8 @@ def _apply_recording_defaults(args: argparse.Namespace) -> None:
     args.pico_adb = not PICO_USE_WIFI
     args.pico_wifi = PICO_USE_WIFI
     args.skip_adb_check = SKIP_ADB_CHECK
+    args.joint_smoothing_cutoff_hz = JOINT_SMOOTHING_CUTOFF_HZ
+    args.joint_max_velocity_rad_s = JOINT_MAX_VELOCITY_RAD_S
 
 
 def _validate_args(args: argparse.Namespace) -> None:
@@ -240,8 +245,15 @@ def _validate_args(args: argparse.Namespace) -> None:
         "sensor_loss_timeout_s",
         "feetech_sample_hz",
         "tracking_loss_timeout_s",
+        "joint_smoothing_cutoff_hz",
+        "joint_max_velocity_rad_s",
     ):
-        if getattr(args, name) <= 0:
+        value = getattr(args, name)
+        if name.startswith("joint_"):
+            if value < 0:
+                raise SystemExit(f"--{name.replace('_', '-')} must be >= 0.")
+            continue
+        if value <= 0:
             raise SystemExit(f"--{name.replace('_', '-')} must be greater than zero.")
 
 
@@ -267,6 +279,7 @@ def record_episode(
     gripper_stale_timeout_s: float,
     sensor_loss_timeout_s: float,
     tracking_loss_timeout_s: float,
+    command_smoother: JointCommandSmoother | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, str, np.ndarray]:
     interval = 1.0 / fps
     n_frames = 0
@@ -279,6 +292,9 @@ def record_episode(
     max_sync_skew_ns = int(max_sync_skew_s * 1e9)
     sync_lag_ns = int(sync_lag_s * 1e9)
     q = controller.q.copy()
+    if command_smoother is None:
+        command_smoother = JointCommandSmoother()
+        command_smoother.reset(q)
     observations: list[np.ndarray] = []
     commands: list[np.ndarray] = []
 
@@ -316,6 +332,7 @@ def record_episode(
             if tracking_recovery.note_missing(loop_start):
                 held = real_env.hold(q)
                 controller.tracking_lost(held)
+                command_smoother.reset(held)
                 q = held
                 log.warning("Tracking lost; robot command held and episode discarded.")
                 log_say("tracking lost", play_sounds=play_sounds)
@@ -354,6 +371,7 @@ def record_episode(
         ):
             if controller.active:
                 q = controller.reset()
+                command_smoother.reset(home_q)
                 start_t = None
                 n_frames = 0
                 observations.clear()
@@ -375,7 +393,7 @@ def record_episode(
             "right": immediate_widths.right_normalized,
         }
         teleop_step = controller.step(source_poses, side_tracked, openings)
-        action_q = teleop_step.q
+        action_q = command_smoother.smooth(teleop_step.q, dt=interval)
         real_env.write(action_q, openings)
         real_env.check_health()
         q = action_q
@@ -473,6 +491,12 @@ def main() -> None:
         translation_scale=args.translation_scale,
     )
     controller.warmup()
+    command_smoother = JointCommandSmoother(
+        JointSmoothingConfig(
+            cutoff_hz=args.joint_smoothing_cutoff_hz,
+            max_velocity_rad_s=args.joint_max_velocity_rad_s,
+        )
+    )
     _validate_feetech_ready(args)
 
     calibration = _load_required_calibration(args)
@@ -513,6 +537,7 @@ def main() -> None:
         real_env.connect()
         log.info("Selected home pose: %s", home_pose_name)
         real_env.home(home_q)
+        command_smoother.reset(home_q)
         space_listener.start()
 
         from handumi.dataset import EpisodeResult, write_dataset
@@ -547,6 +572,7 @@ def main() -> None:
                     break
                 clap_detector = DoubleClapDetector()
             controller.reset()
+            command_smoother.reset(home_q)
             states, actions, n_frames, status, _ = record_episode(
                 tracker=tracker,
                 grippers=grippers,
@@ -568,6 +594,7 @@ def main() -> None:
                 gripper_stale_timeout_s=args.gripper_stale_timeout_s,
                 sensor_loss_timeout_s=args.sensor_loss_timeout_s,
                 tracking_loss_timeout_s=args.tracking_loss_timeout_s,
+                command_smoother=command_smoother,
             )
             if n_frames == 0 or status in {
                 "tracking_lost",

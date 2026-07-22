@@ -48,6 +48,7 @@ from handumi.teleop.hardware import (
     validate_feetech_ports_exist,
     validate_feetech_ready as _validate_feetech_ready,
 )
+from handumi.teleop.smoothing import JointCommandSmoother, JointSmoothingConfig
 from handumi.teleop.tracking import TrackingRecoveryPolicy
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
@@ -81,6 +82,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Scale HandUMI translation deltas before applying them to the robot TCP.",
+    )
+    parser.add_argument(
+        "--joint-smoothing-cutoff-hz",
+        type=float,
+        default=JointSmoothingConfig.cutoff_hz,
+        help="Post-IK low-pass cutoff for real joint commands; 0 disables filtering.",
+    )
+    parser.add_argument(
+        "--joint-max-velocity-rad-s",
+        type=float,
+        default=JointSmoothingConfig.max_velocity_rad_s,
+        help="Post-IK per-joint velocity limit for real commands; 0 disables limiting.",
     )
     parser.add_argument(
         "--space-start",
@@ -131,6 +144,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--fps must be > 0.")
     if args.duration_s < 0.0:
         raise SystemExit("--duration-s must be >= 0.")
+    if args.joint_smoothing_cutoff_hz < 0.0:
+        raise SystemExit("--joint-smoothing-cutoff-hz must be >= 0.")
+    if args.joint_max_velocity_rad_s < 0.0:
+        raise SystemExit("--joint-max-velocity-rad-s must be >= 0.")
     if args.skip_feetech and not args.space_start:
         raise SystemExit(
             "--skip-feetech disables double-clap; add --space-start so teleop can begin."
@@ -190,6 +207,12 @@ def main() -> None:
     episode_start: float | None = None
     frame = 0
     tracking_recovery = TrackingRecoveryPolicy()
+    command_smoother = JointCommandSmoother(
+        JointSmoothingConfig(
+            cutoff_hz=args.joint_smoothing_cutoff_hz,
+            max_velocity_rad_s=args.joint_max_velocity_rad_s,
+        )
+    )
 
     try:
         log.info("Starting tracking before moving real arms.")
@@ -200,6 +223,7 @@ def main() -> None:
         real_env.setup(repair=not args.skip_can_repair)
         real_env.connect()
         real_env.home(home_q)
+        command_smoother.reset(home_q)
 
         space_listener.start()
         if args.space_start:
@@ -239,6 +263,7 @@ def main() -> None:
                 if tracking_recovery.note_missing(loop_start):
                     held = real_env.hold(q)
                     controller.tracking_lost(held)
+                    command_smoother.reset(held)
                     q = held
                     log.warning(
                         "Tracking lost; pending motion cancelled at the current robot "
@@ -274,6 +299,7 @@ def main() -> None:
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
                 if controller.active:
                     q = controller.reset()
+                    command_smoother.reset(home_q)
                     episode_start = None
                     frame = 0
                     log.info(
@@ -301,7 +327,8 @@ def main() -> None:
                 "left": widths.left_normalized,
                 "right": widths.right_normalized,
             }
-            q = controller.step(source_poses, side_tracked, openings).q
+            raw_q = controller.step(source_poses, side_tracked, openings).q
+            q = command_smoother.smooth(raw_q, dt=interval)
             real_env.write(q, openings)
             real_env.check_health()
 

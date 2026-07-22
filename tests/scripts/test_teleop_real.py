@@ -55,6 +55,16 @@ class TeleopRealArgsTest(unittest.TestCase):
         args = parse_args(["--device", "pico", "--skip-feetech", "--space-start"])
         _validate_args(args)
 
+    def test_joint_smoothing_tuning_must_be_non_negative(self):
+        args = parse_args(["--device", "pico", "--joint-smoothing-cutoff-hz", "-1"])
+
+        with self.assertRaises(SystemExit):
+            _validate_args(args)
+
+        args = parse_args(["--device", "pico", "--joint-max-velocity-rad-s", "-1"])
+        with self.assertRaises(SystemExit):
+            _validate_args(args)
+
     def test_space_starts_only_idle_arms(self):
         anchors = {"left": {"source": object()}, "right": None}
 

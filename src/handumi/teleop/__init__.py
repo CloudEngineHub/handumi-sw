@@ -12,11 +12,14 @@ from handumi.teleop.common import (
     tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.smoothing import JointCommandSmoother, JointSmoothingConfig
 from handumi.teleop.tracking import TrackingRecoveryConfig, TrackingRecoveryPolicy
 
 __all__ = [
     "SIDE_CHOICES",
     "KeyboardSpaceListener",
+    "JointCommandSmoother",
+    "JointSmoothingConfig",
     "TeleopController",
     "TrackingRecoveryConfig",
     "TrackingRecoveryPolicy",
