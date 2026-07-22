@@ -48,12 +48,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-import select
-import sys
-import termios
-import threading
 import time
-import tty
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -72,18 +67,22 @@ from handumi.cameras import (
     resolve_camera_ids,
 )
 from handumi.config import DEFAULT_RIG_CONFIG
-from handumi.dataset.raw import pose_to_state_vector
-from handumi.feetech import zero_gripper_widths
-from handumi.retargeting.handumi_to_robot import (
-    VR_TO_ROBOT,
-    raw_state_pose7_pair,
-)
+from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, resolve_home_q
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.scripts.record import build_tracker, connect_feetech
-from handumi.tracking.gestures import DoubleClapDetector
+from handumi.teleop.common import (
+    SIDE_CHOICES,
+    KeyboardSpaceListener,
+    enabled_sides as _enabled_sides,
+    latest_widths,
+    sample_state as _sample_state,
+    start_sides as _start_sides,
+    tracking_ready_for_sides as _tracking_ready_for_sides,
+    tracking_world_map as _tracking_world_map,
+)
 from handumi.teleop.core import TeleopController
-from handumi.tracking.transforms import Pose
+from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
 from handumi.utils.trajectory import TrajectoryTrail
 from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
@@ -97,7 +96,6 @@ log = logging.getLogger("handumi.teleop_sim")
 
 _TRAIL_SECONDS = 10.0
 _CHART_WINDOW_S = 20.0  # rolling window for the gripper-width chart
-SIDE_CHOICES = ("left", "right", "both")
 
 
 def parse_args() -> argparse.Namespace:
@@ -217,52 +215,6 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-class KeyboardSpaceListener:
-    """Non-blocking Space listener for terminal-triggered sim start."""
-
-    def __init__(self, *, enabled: bool) -> None:
-        self.enabled = enabled and sys.stdin.isatty()
-        self._space = threading.Event()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if not self.enabled:
-            return
-        self._thread = threading.Thread(
-            target=self._run,
-            name="handumi-teleop-sim-space",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def consume_space(self) -> bool:
-        if not self._space.is_set():
-            return False
-        self._space.clear()
-        return True
-
-    def close(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-
-    def _run(self) -> None:
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setcbreak(fd)
-            while not self._stop.is_set():
-                readable, _, _ = select.select([sys.stdin], [], [], 0.1)
-                if not readable:
-                    continue
-                char = sys.stdin.read(1)
-                if char == " ":
-                    self._space.set()
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-
 class AutoStartCountdown:
     """One-shot start after continuous valid tracking for a safety delay."""
 
@@ -321,34 +273,6 @@ def _camera_arg(value: str) -> int | str:
     return int(value) if value.isdigit() else value
 
 
-def _enabled_sides(side: str) -> tuple[str, ...]:
-    if side == "both":
-        return ("left", "right")
-    return (side,)
-
-
-def _tracking_ready_for_sides(
-    source_poses: dict[str, np.ndarray],
-    side_tracked: dict[str, bool],
-    enabled_sides: tuple[str, ...],
-) -> bool:
-    """Require a real finite controller pose for every arm being auto-started."""
-    return all(
-        side_tracked[side]
-        and np.isfinite(source_poses[side]).all()
-        and float(np.linalg.norm(source_poses[side][:3])) > 1e-6
-        for side in enabled_sides
-    )
-
-
-def _start_sides(
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    enabled_sides: tuple[str, ...],
-) -> tuple[str, ...]:
-    """Space only starts inactive arms; it does not re-anchor."""
-    return tuple(side for side in enabled_sides if anchors[side] is None)
-
-
 def _resolve_camera_usage(args: argparse.Namespace) -> None:
     """Cameras only ever appear in Rerun, so tie their lifecycle to it.
 
@@ -391,22 +315,6 @@ def _load_calibration(args: argparse.Namespace):
         right=IDENTITY_POSE7.astype(np.float32).copy(),
         source=None,
     )
-
-
-def _sample_state(sample, widths=None) -> np.ndarray:
-    """16D raw state from a live sample's calibrated TCP poses + gripper widths."""
-    left = Pose(sample.left_tcp_pose[:3], sample.left_tcp_pose[3:7])
-    right = Pose(sample.right_tcp_pose[:3], sample.right_tcp_pose[3:7])
-    left_w = 0.0 if widths is None else widths.left
-    right_w = 0.0 if widths is None else widths.right
-    return pose_to_state_vector(left, right, left_w, right_w)
-
-
-def _tracking_world_map(device: str) -> np.ndarray:
-    """Map the provider's TCP world axes into robot-world axes."""
-    # Meta poses are converted from Unity to HandUMI/robot axes at the tracking
-    # boundary. PICO/XRT poses remain in their native VR world here.
-    return VR_TO_ROBOT if device == "pico" else np.eye(3, dtype=np.float32)
 
 
 def _selected_camera_names(context_camera: bool) -> list[str]:
@@ -758,11 +666,7 @@ def main() -> None:
             sample = tracker.latest()
             side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
 
-            widths = (
-                zero_gripper_widths()
-                if grippers is None
-                else grippers.read_normalized_widths()
-            )
+            widths = latest_widths(grippers)
             if rr is not None:
                 if cameras:
                     cam_frames = read_camera_frames(

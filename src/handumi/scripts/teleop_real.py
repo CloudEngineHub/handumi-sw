@@ -23,35 +23,33 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import time
-import numpy as np
 from pathlib import Path
+
 import numpy as np
 
-from handumi.calibration.control_tcp import (
-    calibration_path_for_robot_device,
-    load_controller_tcp_calibration,
-)
 from handumi.config import DEFAULT_RIG_CONFIG
-from handumi.feetech import zero_gripper_widths
-from handumi.feetech.calibration import (
-    assert_calibrated,
-    load_config,
-    user_calibration_path,
-)
 from handumi.feetech.setup import list_feetech_serial_ports
 from handumi.real.registry import REAL_BACKEND_NAMES, make_real_backend
 from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
 from handumi.robots.registry import load_embodiment, resolve_home_q
-from handumi.scripts.teleop_sim import (
+from handumi.teleop.common import (
+    SIDE_CHOICES,
     KeyboardSpaceListener,
-    _enabled_sides,
-    _sample_state,
-    _tracking_world_map,
+    enabled_sides as _enabled_sides,
+    enabled_tracking_ok as _enabled_tracking_ok,
+    latest_widths as _latest_widths,
+    sample_state as _sample_state,
+    tracking_world_map as _tracking_world_map,
 )
-from handumi.tracking.gestures import DoubleClapDetector
 from handumi.teleop.core import TeleopController
+from handumi.teleop.hardware import (
+    load_required_controller_tcp_calibration as _load_required_calibration,
+    validate_feetech_ports_exist,
+    validate_feetech_ready as _validate_feetech_ready,
+)
+from handumi.teleop.tracking import TrackingRecoveryPolicy
+from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
 
 logging.basicConfig(
@@ -60,8 +58,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("handumi.teleop_real")
-
-SIDE_CHOICES = ("left", "right", "both")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -141,91 +137,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         )
 
 
-def _validate_feetech_ready(args: argparse.Namespace) -> None:
-    if args.skip_feetech:
-        return
-    feetech_config = load_config(args.rig_config)
-    if args.feetech_port is not None:
-        feetech_config = type(feetech_config)(
-            port=args.feetech_port,
-            baudrate=feetech_config.baudrate,
-            protocol_version=feetech_config.protocol_version,
-            left=feetech_config.left,
-            right=feetech_config.right,
-        )
-    assert_calibrated(feetech_config, source=user_calibration_path())
-    _validate_feetech_ports_exist(feetech_config, robot=args.robot)
-
-
 def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> None:
-    ports = {
-        side: getattr(feetech_config, side).port or feetech_config.port
-        for side in ("left", "right")
-    }
-    missing = {
-        side: port
-        for side, port in ports.items()
-        if not port or not Path(port).exists()
-    }
-    if missing:
-        current = sorted(list_feetech_serial_ports())
-        missing_text = ", ".join(
-            f"{side}={port or '<unset>'}" for side, port in missing.items()
-        )
-        current_text = ", ".join(current) if current else "none"
-        raise SystemExit(
-            "Feetech port configured in rig.yaml is missing: "
-            f"{missing_text}.\n"
-            f"Current Feetech ports: {current_text}\n"
-            "Remap Feetech without touching CAN/PICO:\n"
-            f"  uv run handumi-setup-hardware --robot {robot} --device pico "
-            "--skip-can-map --skip-can-repair --skip-pico "
-            "--force-feetech-calibration"
-        )
-
-    denied = {
-        side: port
-        for side, port in ports.items()
-        if port and not os.access(port, os.R_OK | os.W_OK)
-    }
-    if denied:
-        denied_text = ", ".join(f"{side}={port}" for side, port in denied.items())
-        raise SystemExit(
-            f"Missing permission to open Feetech: {denied_text}.\n"
-            "Run first:\n"
-            f"  uv run handumi-setup-hardware --robot {robot} --device pico "
-            "--skip-can-map --skip-can-repair --skip-feetech-map --skip-pico"
-        )
-
-
-def _load_required_calibration(args: argparse.Namespace):
-    path, source = calibration_path_for_robot_device(
-        args.robot,
-        args.device,
-        explicit_path=args.controller_tcp_calibration,
+    return validate_feetech_ports_exist(
+        feetech_config,
+        robot=robot,
+        list_ports=list_feetech_serial_ports,
     )
-    if not path.exists():
-        raise SystemExit(
-            f"Missing controller->TCP calibration: {path}\n"
-            "Run the TCP calibration before real teleop, or pass "
-            "--controller-tcp-calibration <path>."
-        )
-    calibration = load_controller_tcp_calibration(path)
-    log.info("controller->TCP calibration: %s", source)
-    return calibration
-
-
-def _latest_widths(grippers):
-    return (
-        zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
-    )
-
-
-def _enabled_tracking_ok(
-    side_tracked: dict[str, bool],
-    enabled_sides: tuple[str, ...],
-) -> bool:
-    return all(side_tracked[side] for side in enabled_sides)
 
 
 def main() -> None:
@@ -272,8 +189,7 @@ def main() -> None:
     interval = 1.0 / args.fps
     episode_start: float | None = None
     frame = 0
-    tracking_lost_since: float | None = None
-    last_recovery_attempt = 0.0
+    tracking_recovery = TrackingRecoveryPolicy()
 
     try:
         log.info("Starting tracking before moving real arms.")
@@ -307,9 +223,20 @@ def main() -> None:
             sample = tracker.latest()
             side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
             tracking_ok = _enabled_tracking_ok(side_tracked, enabled_sides)
+
+            if not controller.active and not tracking_ok:
+                tracking_recovery.reset()
+                widths = _latest_widths(grippers)
+                if args.space_start:
+                    space_listener.consume_space()
+                clap.update(widths.left_mm, widths.right_mm, loop_start)
+                dt = time.perf_counter() - loop_start
+                if (sleep := interval - dt) > 0:
+                    time.sleep(sleep)
+                continue
+
             if not tracking_ok:
-                if tracking_lost_since is None:
-                    tracking_lost_since = loop_start
+                if tracking_recovery.note_missing(loop_start):
                     held = real_env.hold(q)
                     controller.tracking_lost(held)
                     q = held
@@ -319,8 +246,7 @@ def main() -> None:
                     )
                     log_say("tracking lost", play_sounds=play_sounds)
                 recover = getattr(tracker, "recover", None)
-                if callable(recover) and loop_start - last_recovery_attempt >= 3.0:
-                    last_recovery_attempt = loop_start
+                if callable(recover) and tracking_recovery.should_recover(loop_start):
                     if recover():
                         log.info(
                             "Tracking recovered; double clap or Space to re-anchor."
@@ -330,9 +256,9 @@ def main() -> None:
                 if (sleep := interval - dt) > 0:
                     time.sleep(sleep)
                 continue
-            if tracking_lost_since is not None:
-                tracking_lost_since = None
+            if tracking_recovery.lost:
                 log.info("Tracking stream is valid again; waiting for a fresh anchor.")
+            tracking_recovery.reset()
 
             widths = _latest_widths(grippers)
             state = _sample_state(sample, widths)

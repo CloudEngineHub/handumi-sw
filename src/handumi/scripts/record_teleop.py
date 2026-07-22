@@ -47,10 +47,6 @@ from typing import Any
 
 import numpy as np
 
-from handumi.calibration.control_tcp import (
-    calibration_path_for_robot_device,
-    load_controller_tcp_calibration,
-)
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset.canonical import canonical_joint_layout, canonicalize_command
 from handumi.dataset.capture import (
@@ -79,19 +75,25 @@ from handumi.scripts.record import (
     build_tracker,
     connect_feetech,
 )
-from handumi.scripts.teleop_real import (
-    _enabled_tracking_ok,
-    _enabled_sides,
-    _latest_widths,
-    _tracking_world_map,
-    _validate_feetech_ready,
-)
-from handumi.scripts.teleop_sim import KeyboardSpaceListener, _sample_state
 from handumi.synchronization import (
     SustainedHealthGate,
     synchronized_gripper_frame,
 )
+from handumi.teleop.common import (
+    SIDE_CHOICES,
+    KeyboardSpaceListener,
+    enabled_sides as _enabled_sides,
+    enabled_tracking_ok as _enabled_tracking_ok,
+    latest_widths as _latest_widths,
+    sample_state as _sample_state,
+    tracking_world_map as _tracking_world_map,
+)
 from handumi.teleop.core import TeleopController
+from handumi.teleop.hardware import (
+    load_required_controller_tcp_calibration as _load_required_calibration,
+    validate_feetech_ready as _validate_feetech_ready,
+)
+from handumi.teleop.tracking import TrackingRecoveryPolicy
 from handumi.tracking.base import TrackingProvider
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
@@ -103,7 +105,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("handumi.record_teleop")
 
-SIDE_CHOICES = ("left", "right", "both")
 DEFAULT_TRANSLATION_SCALE = 1.0
 SPACE_START_ENABLED = False
 PLAY_SOUNDS = True
@@ -273,8 +274,7 @@ def record_episode(
     episode_start_ns: int | None = None
     status = "recorded"
     pending_start_sides = initial_start_sides
-    tracking_lost_since: float | None = None
-    last_recovery_attempt = 0.0
+    tracking_recovery = TrackingRecoveryPolicy()
     health_gate = SustainedHealthGate(sensor_loss_timeout_s)
     max_sync_skew_ns = int(max_sync_skew_s * 1e9)
     sync_lag_ns = int(sync_lag_s * 1e9)
@@ -298,28 +298,45 @@ def record_episode(
 
         sample = tracker.latest()
         side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
-        if not _enabled_tracking_ok(side_tracked, enabled_sides):
-            if tracking_lost_since is None:
-                tracking_lost_since = loop_start
+        tracking_ok = _enabled_tracking_ok(side_tracked, enabled_sides)
+
+        if not controller.active and not tracking_ok:
+            tracking_recovery.reset()
+            immediate_widths = _latest_widths(grippers)
+            space_listener.consume_space()
+            clap_detector.update(
+                immediate_widths.left_mm,
+                immediate_widths.right_mm,
+                loop_start,
+            )
+            _sleep_until_next_tick(interval, loop_start)
+            continue
+
+        if not tracking_ok:
+            if tracking_recovery.note_missing(loop_start):
                 held = real_env.hold(q)
                 controller.tracking_lost(held)
                 q = held
                 log.warning("Tracking lost; robot command held and episode discarded.")
                 log_say("tracking lost", play_sounds=play_sounds)
-            if loop_start - tracking_lost_since >= tracking_loss_timeout_s:
+            if (
+                tracking_recovery.lost
+                and tracking_recovery.lost_for(loop_start) >= tracking_loss_timeout_s
+            ):
                 status = "tracking_lost"
                 observations.clear()
                 commands.clear()
                 break
             recover = getattr(tracker, "recover", None)
-            if callable(recover) and loop_start - last_recovery_attempt >= 3.0:
-                last_recovery_attempt = loop_start
-                recover()
+            if callable(recover) and tracking_recovery.should_recover(loop_start):
+                if recover():
+                    log.info("Tracking recovered; double clap or Space to re-anchor.")
+                    log_say("tracking recovered", play_sounds=play_sounds)
             _sleep_until_next_tick(interval, loop_start)
             continue
-        if tracking_lost_since is not None:
-            tracking_lost_since = None
+        if tracking_recovery.lost:
             log.info("Tracking stream recovered; waiting for a fresh anchor.")
+        tracking_recovery.reset()
 
         observation_q = real_env.read(base_q=q)
         immediate_widths = _latest_widths(grippers)
@@ -626,22 +643,6 @@ def main() -> None:
             if tracker_started:
                 tracker.stop()
             log_say("Exiting", play_sounds=play_sounds, blocking=True)
-
-
-def _load_required_calibration(args: argparse.Namespace):
-    path, source = calibration_path_for_robot_device(
-        args.robot,
-        args.device,
-        explicit_path=args.controller_tcp_calibration,
-    )
-    if not path.exists():
-        raise SystemExit(
-            f"Missing controller->TCP calibration: {path}\n"
-            "Run the TCP calibration for the configured robot/device before "
-            "real teleop."
-        )
-    log.info("controller->TCP calibration: %s", source)
-    return load_controller_tcp_calibration(path)
 
 
 def _existing_episode_count(root: Path) -> int:

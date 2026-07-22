@@ -8,11 +8,11 @@ positions.  Motion is opt-in and requires an exact confirmation string.
 Examples::
 
     .venv/bin/python tests/real/piper/test_connection.py --side right
-    .venv/bin/python tests/real/piper/test_connection.py --side right \\
+    .venv/bin/python tests/real/piper/test_connection.py --side right \
         --move-deg 2 --confirm "MOVE RIGHT J6"
-    .venv/bin/python tests/real/piper/test_connection.py --side both \\
+    .venv/bin/python tests/real/piper/test_connection.py --side both \
         --stream-seconds 30 --confirm "STREAM BOTH"
-    .venv/bin/python tests/real/piper/test_connection.py --side both \\
+    .venv/bin/python tests/real/piper/test_connection.py --side both \
         --exercise-seconds 8 --confirm "EXERCISE BOTH"
 """
 
