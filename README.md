@@ -27,7 +27,7 @@ bash install.sh
 source .venv/bin/activate
 cp configs/rig.example.yaml configs/rig.yaml
 handumi doctor
-handumi record outputs/my-first-dataset --dry-run
+handumi record --output-dir outputs/my-first-dataset --dry-run
 ```
 
 PICO support is installed by default. Use `bash install.sh --skip-xrt` for a Meta Quest-only workstation.

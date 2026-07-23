@@ -179,7 +179,9 @@ class RecordingConfigurationTest(unittest.TestCase):
                 "  robot: openarmv1\n",
             )
             args = _resolve_recording_args(
-                parse_args([str(root / "capture"), "--rig-config", str(rig)])
+                parse_args(
+                    ["--output-dir", str(root / "capture"), "--rig-config", str(rig)]
+                )
             )
 
         self.assertEqual(args.output_dir, root / "capture")
@@ -216,7 +218,13 @@ class RecordingConfigurationTest(unittest.TestCase):
             (dataset / "meta" / "info.json").write_text(json.dumps(info))
             args = _resolve_recording_args(
                 parse_args(
-                    [str(dataset), "--resume", "--rig-config", str(rig)]
+                    [
+                        "--output-dir",
+                        str(dataset),
+                        "--resume",
+                        "--rig-config",
+                        str(rig),
+                    ]
                 )
             )
 
@@ -235,7 +243,14 @@ class RecordingConfigurationTest(unittest.TestCase):
             )
             args = _resolve_recording_args(
                 parse_args(
-                    [str(root / "capture"), "--cameras", "left_wrist", "--rig-config", str(rig)]
+                    [
+                        "--output-dir",
+                        str(root / "capture"),
+                        "--cameras",
+                        "left_wrist",
+                        "--rig-config",
+                        str(rig),
+                    ]
                 )
             )
 
@@ -244,7 +259,7 @@ class RecordingConfigurationTest(unittest.TestCase):
 
     def test_redundant_camera_flags_are_rejected(self):
         with self.assertRaises(SystemExit):
-            parse_args(["outputs/capture", "--only-left-camera"])
+            parse_args(["--output-dir", "outputs/capture", "--only-left-camera"])
 
 
 class CameraSelectionTest(unittest.TestCase):
@@ -318,17 +333,6 @@ class RecordArgumentValidationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(SystemExit, "--manual-control"):
             _validate_args(args)
-
-    def test_resume_requires_explicit_output_dir(self):
-        args = self._args(resume=True, output_dir=None)
-
-        with self.assertRaisesRegex(SystemExit, "--resume requires"):
-            _validate_args(args)
-
-    def test_resume_accepts_explicit_output_dir(self):
-        args = self._args(resume=True, output_dir=Path("outputs/existing"))
-
-        _validate_args(args)
 
     def test_rejects_conflicting_encoder_and_codec_selection(self):
         args = self._args(encoder="gpu", vcodec="h264")

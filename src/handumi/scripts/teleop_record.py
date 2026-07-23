@@ -21,11 +21,11 @@ Examples
 --------
 ::
 
-    handumi teleop-record --device pico --robot piper
-    handumi teleop-record --device pico --robot openarmv1
-    handumi teleop-record --device pico --robot piper --side right
+    handumi teleop-record --device pico --robot piper --output-dir outputs/piper-demo
+    handumi teleop-record --device pico --robot openarmv1 --output-dir outputs/openarm-demo
+    handumi teleop-record --device pico --robot piper --side right --output-dir outputs/right-arm-demo
     handumi teleop-record --device pico --robot piper \
-        --output-dir outputs/my_dataset --resume
+        --output-dir outputs/piper-demo --resume
 
 Common options:
 
@@ -36,16 +36,16 @@ Common options:
 * ``--episode-time-s`` Maximum episode duration in seconds.
 * ``--num-episodes``  Number of episodes to record; 0 means until stopped.
 * ``--task``          Task description stored in the dataset.
-* ``--output-dir``    Destination directory; defaults to outputs/teleop_<date>.
-* ``--resume``        Append episodes to an existing dataset.
+* ``--output-dir``    Destination directory, for example ``outputs/piper-demo``.
+* ``--resume``        Append episodes from an existing dataset in that directory.
 """
 
 import argparse
+import json
 import logging
 import signal
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -227,9 +227,17 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--episode-time-s", type=float, default=60.0)
     p.add_argument("--num-episodes", type=int, default=10)
     p.add_argument("--task", type=str, default="HandUMI real teleop recording")
-    p.add_argument("--repo-id", type=str, default="local/handumi_teleop_dataset")
-    p.add_argument("--output-dir", type=Path, default=None)
-    p.add_argument("--resume", action="store_true")
+    p.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Local dataset directory, for example outputs/piper-demo.",
+    )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="Append episodes to the finalized dataset in --output-dir.",
+    )
     args = p.parse_args(argv)
     _apply_recording_defaults(args)
     return args
@@ -522,8 +530,10 @@ def record_episode(
 def _run_record() -> None:
     args = _parse_record_args()
     _validate_record_args(args)
-    if args.output_dir is None:
-        args.output_dir = _default_output_dir()
+    args.output_dir = Path(args.output_dir)
+    args.repo_id = f"local/{args.output_dir.name}"
+    if args.resume:
+        _validate_resume_dataset(args.output_dir)
     play_sounds = not args.no_sounds
     stop_event = threading.Event()
 
@@ -750,15 +760,28 @@ def _run_record() -> None:
 
 def _existing_episode_count(root: Path) -> int:
     info_path = Path(root) / "meta" / "info.json"
-    if not info_path.exists():
-        return 0
-    import json
-
     return int(json.loads(info_path.read_text()).get("total_episodes", 0))
 
 
-def _default_output_dir() -> Path:
-    return Path("outputs") / f"teleop_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+def _validate_resume_dataset(root: Path) -> None:
+    """Require a finalized vector dataset before appending teleop episodes."""
+    root = Path(root)
+    info_path = root / "meta" / "info.json"
+    required_paths = (
+        root / "meta" / "episodes",
+        root / "meta" / "tasks.parquet",
+        root / "data",
+    )
+    if not root.is_dir():
+        raise SystemExit(f"Cannot resume: dataset directory does not exist: {root}")
+    if not all(path.exists() for path in required_paths):
+        raise SystemExit(f"Cannot resume incomplete dataset at {root}.")
+    try:
+        info = json.loads(info_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Cannot resume: invalid {info_path}: {exc}") from exc
+    if not isinstance(info, dict) or "total_episodes" not in info:
+        raise SystemExit(f"Cannot resume: {info_path} is not a HandUMI dataset.")
 
 
 def main() -> None:

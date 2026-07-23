@@ -7,7 +7,7 @@ start or stop/save; double-clap left while recording to restart the attempt).
 
 Spoken status announcements ("Recording episode 3", "Episode 3 saved, 812
 frames", ...) are on by default — pass --no-sounds to disable them. The
-required DATASET argument selects the local output directory.
+required --output-dir selects the local output directory.
 """
 
 from __future__ import annotations
@@ -929,7 +929,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--help-advanced", action="store_true", help="Show every expert option.")
-    p.add_argument("dataset", type=Path, help="Local dataset directory.")
     p.add_argument("--device", choices=("pico", "meta"), default=None)
     p.add_argument(
         "--cameras",
@@ -954,15 +953,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=advanced("Record without gripper sensors and zero-fill their values."),
     )
     p.add_argument(
-        "--repo-id",
-        default=None,
-        help=advanced("Dataset-card repository id; normally inferred from DATASET."),
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Local dataset directory, for example outputs/my-dataset.",
     )
     p.add_argument(
         "--resume",
         action="store_true",
         help=(
-            "Append episodes to the finalized DATASET. "
+            "Append episodes to the finalized dataset in --output-dir. "
             "--episodes is the number of additional episodes to record."
         ),
     )
@@ -1109,10 +1109,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
     """Apply CLI > resumed dataset > rig.yaml > built-in defaults."""
-    args.output_dir = Path(args.dataset)
+    args.output_dir = Path(args.output_dir)
+    args.repo_id = f"local/{args.output_dir.name}"
     args.cam_ids = None
-    if args.repo_id is None:
-        args.repo_id = f"local/{args.output_dir.name}"
 
     explicit = {
         name: getattr(args, name, None) is not None
@@ -1136,8 +1135,6 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
 
     resume_values: dict[str, object] = {}
     if bool(getattr(args, "resume", False)):
-        if args.output_dir is None:
-            raise SystemExit("--resume requires an explicit dataset OUTPUT.")
         info_path = Path(args.output_dir) / "meta" / "info.json"
         try:
             info = json.loads(info_path.read_text(encoding="utf-8"))
@@ -1240,8 +1237,6 @@ def _recording_values_from_dataset(
 
 
 def _validate_args(args: argparse.Namespace) -> None:
-    if bool(getattr(args, "resume", False)) and getattr(args, "output_dir", None) is None:
-        raise SystemExit("--resume requires a DATASET directory.")
     if (
         getattr(args, "vcodec", None) not in (None, "auto")
         and getattr(args, "encoder", "auto") != "auto"

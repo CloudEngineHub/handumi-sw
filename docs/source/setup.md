@@ -112,7 +112,7 @@ Use `127.0.0.1:63901` for USB or the workstation IP with `--pico-wifi`.
 Smoke-test a short capture before calibration:
 
 ```bash
-handumi record outputs/datasets/pico-smoke \
+handumi record --output-dir outputs/pico-smoke \
   --device pico --skip-feetech \
   --task "pico smoke" --episodes 1 --episode-time-s 10
 ```
@@ -217,7 +217,7 @@ Capture the left side:
 
 ```bash
 LEFT_RUN="outputs/tcp_pivot_left_$(date +%Y%m%d_%H%M%S)"
-handumi record "$LEFT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
+handumi record --output-dir "$LEFT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
   --cameras left_wrist \
   --task "tcp pivot left" --episodes 1 --episode-time-s 25 \
   --tracking-loss-timeout-s 3 --no-sounds
@@ -231,7 +231,7 @@ Repeat for the right side:
 
 ```bash
 RIGHT_RUN="outputs/tcp_pivot_right_$(date +%Y%m%d_%H%M%S)"
-handumi record "$RIGHT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
+handumi record --output-dir "$RIGHT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
   --cameras right_wrist \
   --task "tcp pivot right" --episodes 1 --episode-time-s 25 \
   --tracking-loss-timeout-s 3 --no-sounds

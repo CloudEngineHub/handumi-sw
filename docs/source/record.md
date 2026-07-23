@@ -21,7 +21,7 @@ Start with a short pilot:
 
 ```bash
 handumi doctor --device meta
-handumi record outputs/datasets/handumi-demo \
+handumi record --output-dir outputs/handumi-demo \
   --task "pick and place" \
   --session-calibration outputs/calibration/session.yaml \
   --cameras left_wrist,right_wrist,workspace \
@@ -48,7 +48,7 @@ Append more episodes to a finalized local dataset without repeating its
 recording configuration:
 
 ```bash
-handumi record outputs/datasets/handumi-demo --resume \
+handumi record --output-dir outputs/handumi-demo --resume \
   --episodes 20 \
   --task "pick and place"
 ```
@@ -60,6 +60,11 @@ robot profile from its `meta/info.json` snapshot. Explicit incompatible
 overrides are rejected before hardware starts, including FPS, cameras, image
 shapes, tracking schemas, calibrations, or target-robot metadata. The task text
 may change so the same dataset can contain multiple tasks.
+
+Both `handumi record` and `handumi teleop-record` require `--output-dir`.
+For example, `--output-dir outputs/handumi-demo` stores the dataset in that
+directory, and `--resume` verifies and reads the same finalized dataset before
+recording additional episodes.
 
 ## Streaming Video Encoding
 
@@ -121,7 +126,7 @@ handumi record --help-advanced
 
 ```bash
 handumi validate \
-  outputs/datasets/handumi-demo --strict
+  outputs/handumi-demo --strict
 ```
 
 Review `meta/handumi_quality.json`. Fix rejected captures before increasing `--episodes`.

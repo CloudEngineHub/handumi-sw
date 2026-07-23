@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -9,6 +12,7 @@ from handumi.scripts.teleop_record import (
     DEFAULT_RECORD_TRAJECTORY_DELAY_MS,
     PICO_TRACKING_MODE,
     _validate_record_args,
+    _validate_resume_dataset,
     build_features,
     build_joint_frame,
     joint_state_feature,
@@ -36,7 +40,7 @@ def _widths() -> GripperWidths:
 
 class TeleopRecordSchemaTest(unittest.TestCase):
     def test_operational_defaults_are_constants_not_cli_flags(self):
-        args = parse_args(["--device", "pico"])
+        args = parse_args(["--device", "pico", "--output-dir", "outputs/capture"])
 
         self.assertEqual(args.pico_mode, PICO_TRACKING_MODE)
         self.assertTrue(args.pico_adb)
@@ -58,18 +62,32 @@ class TeleopRecordSchemaTest(unittest.TestCase):
         self.assertEqual(args.feetech_sample_hz, DEFAULT_GRIPPER_SAMPLE_HZ)
 
         with self.assertRaises(SystemExit):
-            parse_args(["--device", "pico", "--skip-feetech"])
+            parse_args(["--device", "pico", "--output-dir", "outputs/capture", "--skip-feetech"])
         with self.assertRaises(SystemExit):
-            parse_args(["--device", "pico", "--pico-wifi"])
+            parse_args(["--device", "pico", "--output-dir", "outputs/capture", "--pico-wifi"])
 
     def test_trajectory_configuration_is_validated(self):
-        args = parse_args(["--device", "pico", "--command-rate-hz", "0"])
+        args = parse_args(["--device", "pico", "--output-dir", "outputs/capture", "--command-rate-hz", "0"])
         with self.assertRaises(SystemExit):
             _validate_record_args(args)
 
-        args = parse_args(["--device", "pico", "--trajectory-delay-ms", "-1"])
+        args = parse_args(["--device", "pico", "--output-dir", "outputs/capture", "--trajectory-delay-ms", "-1"])
         with self.assertRaises(SystemExit):
             _validate_record_args(args)
+
+    def test_resume_requires_a_finalized_dataset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "dataset"
+            with self.assertRaisesRegex(SystemExit, "does not exist"):
+                _validate_resume_dataset(root)
+
+            (root / "meta" / "episodes").mkdir(parents=True)
+            (root / "meta" / "tasks.parquet").touch()
+            (root / "data").mkdir()
+            (root / "meta" / "info.json").write_text(
+                json.dumps({"total_episodes": 2}), encoding="utf-8"
+            )
+            _validate_resume_dataset(root)
 
     def test_joint_state_feature_uses_robot_joint_names(self):
         self.assertEqual(

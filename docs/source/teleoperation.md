@@ -90,12 +90,14 @@ Use `handumi teleop-record` when the real robot should be driven live and saved
 as a joint-level dataset:
 
 ```bash
-handumi teleop-record --robot <robot_id> --device meta --output-dir outputs/my_dataset
+handumi teleop-record --robot <robot_id> --device meta \
+  --output-dir outputs/my-dataset
 ```
 
 This command has its own parser and operational defaults. It does not use
 `--record` on `handumi teleop`; the plain `handumi teleop` command is reserved
-for live simulation.
+for live simulation. `--resume` with the same `--output-dir` verifies and
+appends to that finalized local dataset.
 
 To stream the context and wrist cameras into a PICO headset independently of
 the selected robot, see [PICO Remote Vision](workflows/pico_remote_vision.md).
