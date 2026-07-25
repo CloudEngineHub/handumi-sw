@@ -1,30 +1,32 @@
 #!/usr/bin/env python3
-"""Replay one deterministic Piper motion to isolate teleop jitter.
+"""Cycle both Piper grippers between fully closed and fully open.
 
-This is an executable hardware diagnostic, not a pytest test.  It deliberately
-does not use tracking or IK: both modes evaluate the same smooth, hard-coded
-joint trajectory.  First inspect it in Viser, then replay the exact same
-trajectory on the real arms and compare the requested positions with CAN
-feedback.
+This is an executable hardware diagnostic, not a pytest test.  Both arms stay
+fixed at ``piper.yaml``'s configured home pose -- there is no arm/wrist
+motion -- while each gripper repeatedly opens to its configured max width and
+closes back to zero. First inspect it in Viser, then replay the exact same
+opening/closing schedule on the real arms and compare the requested opening
+with CAN feedback.
 
-The trajectory starts and ends at ``piper.yaml``'s configured home pose.  It
-is a manipulation-like reach/retract: shoulder and elbow carry each gripper
-forward, while J4/J6 make two small orientation corrections during each 6 s
-cycle.  It stays well within the limits in ``assets/piper/piper.urdf``.
+The min/max used here are not computed: a gripper opening of 0 (closed) is
+the floor enforced by the driver (widths are clamped to `>= 0`), and the max
+is ``gripper_max_width_m`` from ``configs/robots/piper.yaml`` (0.066 m for
+the installed ``piper_parallel_v1`` gripper) -- the physical jaw travel of
+that gripper, not a derived value.
 
 Examples::
 
     # Kinematic reference.  Open the printed Viser URL.
-    .venv/bin/python tests/real/piper/test_jitter.py --mode sim
+    .venv/bin/python tests/real/piper/test_max_gripper.py --mode sim
 
     # Same commands on the real robot.  This homes both arms first and returns
     # them home on exit, so the explicit confirmation is required.
-    .venv/bin/python tests/real/piper/test_jitter.py --mode real \
+    .venv/bin/python tests/real/piper/test_max_gripper.py --mode real \
         --confirm "RUN PIPER JITTER TEST"
 
     # Save target, streamed-command, and feedback samples for later plotting.
-    .venv/bin/python tests/real/piper/test_jitter.py --mode real \\
-        --confirm "RUN PIPER JITTER TEST" --csv /tmp/piper-jitter.csv
+    .venv/bin/python tests/real/piper/test_max_gripper.py --mode real \\
+        --confirm "RUN PIPER JITTER TEST" --csv /tmp/piper-gripper.csv
 
 Interpretation:
 
@@ -94,7 +96,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--trajectory-period-s",
         type=float,
         default=6.0,
-        help="Duration of one home → forward reach → home cycle.",
+        help="Duration of one closed → open → closed gripper cycle.",
     )
     parser.add_argument(
         "--rate-hz",
@@ -147,49 +149,11 @@ def validate_args(args: argparse.Namespace) -> None:
 def hardcoded_gripper_opening(elapsed_s: float, period_s: float) -> float:
     """Return the 0 (closed) to 1 (fully open) gripper fraction at ``elapsed_s``.
 
-    Uses the same smooth, zero-velocity-at-the-ends shape as ``reach`` so both
-    grippers open fully at mid-cycle and close fully again by the end, adding
-    full-range gripper motion to the existing arm/wrist diagnostic sweep.
+    A smooth, zero-velocity-at-the-ends shape: both grippers open fully at
+    mid-cycle and close fully again by the end of each ``period_s``, with
+    the arms held fixed at home.
     """
     return 0.5 * (1.0 - math.cos(2.0 * math.pi * elapsed_s / period_s))
-
-
-def hardcoded_sweep_q(
-    home_q: np.ndarray,
-    joint_names: tuple[str, ...],
-    elapsed_s: float,
-    period_s: float,
-) -> np.ndarray:
-    """Return the fixed, smooth diagnostic sweep at ``elapsed_s``.
-
-    The reach is zero at home and one at the farthest point, with zero velocity
-    at both ends.  A smaller wrist waveform gives two orientation corrections
-    per reach, as when keeping a gripper level while teleoperating.  This is
-    faster and more representative than a single, slow all-joint sweep, but
-    still avoids position steps. Values are radians and remain within the
-    Piper URDF limits.
-    """
-    reach = 0.5 * (1.0 - math.cos(2.0 * math.pi * elapsed_s / period_s))
-    wrist_correction = math.sin(4.0 * math.pi * elapsed_s / period_s)
-    q = np.asarray(home_q, dtype=np.float32).copy()
-    # Reach offsets from home for [J1, J2, J3, J4, J5, J6]. This coordinated
-    # bend translates each TCP about 4--5 cm forward from home (and upward,
-    # clearing the table) instead of only rotating the wrist. J2 moves only
-    # positive and J3 only negative, respecting their asymmetric URDF limits.
-    offsets_deg = {
-        "left": (15.0, 30.0, -40.0, 20.0, -10.0, 25.0),
-        "right": (-15.0, 30.0, -40.0, -20.0, -10.0, -25.0),
-    }
-    for side, offsets in offsets_deg.items():
-        for number, offset_deg in enumerate(offsets, start=1):
-            index = joint_names.index(f"{side}_joint{number}")
-            q[index] += np.deg2rad(offset_deg) * reach
-        # Keep orientation actively changing while the arm is reaching. The
-        # sign is mirrored so both grippers perform the same task-like motion.
-        sign = 1.0 if side == "left" else -1.0
-        q[joint_names.index(f"{side}_joint4")] += np.deg2rad(7.0 * sign) * wrist_correction
-        q[joint_names.index(f"{side}_joint6")] += np.deg2rad(9.0 * sign) * wrist_correction
-    return q
 
 
 def trajectory_samples(
@@ -200,11 +164,15 @@ def trajectory_samples(
     period_s: float,
     rate_hz: float,
 ) -> Iterator[Sample]:
-    """Yield a fixed-rate version of the same target used in each mode."""
+    """Yield a fixed-rate version of the same target used in each mode.
+
+    ``q`` stays at ``home_q`` for the whole run -- only the gripper opening
+    cycles between 0 (closed) and 1 (fully open) each ``period_s``.
+    """
     count = int(math.floor(duration_s * rate_hz)) + 1
+    q = np.asarray(home_q, dtype=np.float32).copy()
     for index in range(count):
         elapsed_s = min(index / rate_hz, duration_s)
-        q = hardcoded_sweep_q(home_q, runtime.joint_names, elapsed_s, period_s)
         gripper_openings = {
             side: hardcoded_gripper_opening(elapsed_s, period_s) for side in SIDES
         }
