@@ -1,4 +1,4 @@
-"""Delayed, time-driven joint command playback for real teleoperation."""
+"""Interpolated, time-driven joint command playback for live teleoperation."""
 
 from __future__ import annotations
 
@@ -120,7 +120,11 @@ class DelayedJointCommandBuffer:
 
 
 class DelayedJointCommandPlayer:
-    """Read a delayed command buffer and publish it at a fixed rate."""
+    """Read a delayed command buffer and publish it at a fixed rate.
+
+    EMA is applied only to arm joints. Gripper openings already arrive as
+    calibrated operator commands and must not acquire additional response lag.
+    """
 
     def __init__(
         self,
@@ -128,10 +132,14 @@ class DelayedJointCommandPlayer:
         *,
         command_rate_hz: float,
         delay_s: float,
+        ema_time_constant_s: float = 0.0,
     ) -> None:
         if command_rate_hz <= 0.0:
             raise ValueError("command_rate_hz must be > 0")
+        if ema_time_constant_s < 0.0:
+            raise ValueError("ema_time_constant_s must be >= 0")
         self.command_rate_hz = float(command_rate_hz)
+        self.ema_time_constant_s = float(ema_time_constant_s)
         self.buffer = DelayedJointCommandBuffer(delay_s)
         self._write = write
         self._stop = threading.Event()
@@ -139,6 +147,8 @@ class DelayedJointCommandPlayer:
         self._thread: threading.Thread | None = None
         self._latest_lock = threading.Lock()
         self._latest: tuple[np.ndarray, dict[str, float]] | None = None
+        self._filtered_q: np.ndarray | None = None
+        self._filtered_openings: dict[str, float] = {}
 
     def start(
         self,
@@ -158,6 +168,8 @@ class DelayedJointCommandPlayer:
         self._error = None
         with self._latest_lock:
             self._latest = None
+        self._filtered_q = None
+        self._filtered_openings = {}
         self._thread = threading.Thread(
             target=self._run,
             name="handumi-delayed-joint-player",
@@ -200,14 +212,20 @@ class DelayedJointCommandPlayer:
 
     def _run(self) -> None:
         period_s = 1.0 / self.command_rate_hz
+        alpha = (
+            1.0
+            if self.ema_time_constant_s == 0.0
+            else float(1.0 - np.exp(-period_s / self.ema_time_constant_s))
+        )
         next_tick = time.perf_counter()
         try:
             while not self._stop.is_set():
                 command = self.buffer.sample(next_tick)
                 if command is not None:
-                    self._write(*command)
+                    filtered = self._smooth(*command, alpha=alpha)
+                    self._write(*filtered)
                     with self._latest_lock:
-                        self._latest = (command[0].copy(), command[1].copy())
+                        self._latest = (filtered[0].copy(), filtered[1].copy())
                 next_tick += period_s
                 remaining_s = next_tick - time.perf_counter()
                 if remaining_s > 0.0:
@@ -219,9 +237,72 @@ class DelayedJointCommandPlayer:
             self._error = exc
             self._stop.set()
 
+    def _smooth(
+        self,
+        q: np.ndarray,
+        openings: dict[str, float],
+        *,
+        alpha: float,
+    ) -> tuple[np.ndarray, dict[str, float]]:
+        if self._filtered_q is None or alpha >= 1.0:
+            self._filtered_q = q.copy()
+        else:
+            self._filtered_q += alpha * (q - self._filtered_q)
+        self._filtered_openings = openings.copy()
+        return self._filtered_q.copy(), self._filtered_openings.copy()
+
+
+class TeleopCommandStream:
+    """Own the common 30 Hz IK -> interpolated 100 Hz output lifecycle."""
+
+    def __init__(
+        self,
+        write: Callable[[np.ndarray, dict[str, float]], None],
+        *,
+        command_rate_hz: float,
+        delay_s: float,
+        ema_time_constant_s: float,
+    ) -> None:
+        self.player = DelayedJointCommandPlayer(
+            write,
+            command_rate_hz=command_rate_hz,
+            delay_s=delay_s,
+            ema_time_constant_s=ema_time_constant_s,
+        )
+
+    def submit(
+        self,
+        q: np.ndarray,
+        openings: Mapping[str, float],
+        *,
+        time_s: float,
+        active: bool,
+        new_epoch: bool = False,
+    ) -> None:
+        """Submit one IK result, resetting interpolation at a fresh anchor."""
+        if new_epoch:
+            self.player.stop()
+            self.player.start(q, openings, time_s=time_s)
+        elif active:
+            if self.player.running:
+                self.player.push(q, openings, time_s=time_s)
+            else:
+                self.player.start(q, openings, time_s=time_s)
+
+    def stop(self) -> None:
+        self.player.stop()
+
+    def latest(self) -> tuple[np.ndarray, dict[str, float]] | None:
+        return self.player.latest()
+
+    @property
+    def running(self) -> bool:
+        return self.player.running
+
 
 __all__ = [
     "DelayedJointCommandBuffer",
     "DelayedJointCommandPlayer",
     "JointCommand",
+    "TeleopCommandStream",
 ]

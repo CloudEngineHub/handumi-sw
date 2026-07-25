@@ -22,19 +22,37 @@ from handumi.teleop.common import (
     tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.motion import (
+    DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
+    DEFAULT_COMMAND_RATE_HZ,
+    DEFAULT_ORIENTATION_DEADBAND_DEG,
+    DEFAULT_POSITION_DEADBAND_MM,
+    DEFAULT_TRAJECTORY_DELAY_MS,
+    TeleopMotionConfig,
+    add_teleop_motion_arguments,
+    validate_teleop_motion_args,
+)
 from handumi.teleop.session import TeleopFrame, TeleopInputs, TeleopSession
 from handumi.teleop.tracking import TrackingRecoveryConfig, TrackingRecoveryPolicy
+from handumi.teleop.trajectory import TeleopCommandStream
 
 __all__ = [
     "SIDE_CHOICES",
     "DEFAULT_GRIPPER_SAMPLE_HZ",
+    "DEFAULT_COMMAND_EMA_TIME_CONSTANT_S",
+    "DEFAULT_COMMAND_RATE_HZ",
     "DEFAULT_JOINT_SMOOTHING_ALPHA",
     "DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S",
+    "DEFAULT_ORIENTATION_DEADBAND_DEG",
     "DEFAULT_ORIENTATION_DEADBAND_RAD",
+    "DEFAULT_POSITION_DEADBAND_MM",
     "DEFAULT_POSITION_DEADBAND_M",
     "DEFAULT_TELEOP_FPS",
+    "DEFAULT_TRAJECTORY_DELAY_MS",
     "JointActionSmoother",
     "TeleopMotionSmoother",
+    "TeleopMotionConfig",
+    "TeleopCommandStream",
     "KeyboardSpaceListener",
     "TeleopController",
     "TeleopFrame",
@@ -51,4 +69,6 @@ __all__ = [
     "tracking_ready_for_sides",
     "tracking_sample_time_ns",
     "tracking_world_map",
+    "add_teleop_motion_arguments",
+    "validate_teleop_motion_args",
 ]

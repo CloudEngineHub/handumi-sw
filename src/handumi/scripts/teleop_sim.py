@@ -71,12 +71,9 @@ from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, resolve_h
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.scripts.record import _camera_list_arg, build_tracker, connect_feetech
 from handumi.teleop.common import (
-    DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
-    DEFAULT_TELEOP_FPS,
     SIDE_CHOICES,
     KeyboardSpaceListener,
     TeleopLoopTimer,
-    TeleopMotionSmoother,
     enabled_sides as _enabled_sides,
     latest_widths,
     sample_state as _sample_state,
@@ -85,8 +82,12 @@ from handumi.teleop.common import (
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.motion import (
+    TeleopMotionConfig,
+    add_teleop_motion_arguments,
+    validate_teleop_motion_args,
+)
 from handumi.teleop.session import TeleopSession
-from handumi.teleop.trajectory import DelayedJointCommandPlayer
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
 from handumi.utils.trajectory import TrajectoryTrail
@@ -101,8 +102,6 @@ sim_log = logging.getLogger("handumi.teleop_sim")
 
 _TRAIL_SECONDS = 10.0
 _CHART_WINDOW_S = 20.0  # rolling window for the gripper-width chart
-DEFAULT_SIM_COMMAND_RATE_HZ = 100.0
-DEFAULT_SIM_TRAJECTORY_DELAY_MS = 80.0
 
 
 def _parse_sim_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -128,24 +127,7 @@ def _parse_sim_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--port", type=int, default=8003, help=advanced("Viser port."))
-    p.add_argument(
-        "--fps",
-        type=int,
-        default=DEFAULT_TELEOP_FPS,
-        help=advanced("Control frequency."),
-    )
-    p.add_argument(
-        "--command-rate-hz",
-        type=float,
-        default=DEFAULT_SIM_COMMAND_RATE_HZ,
-        help=advanced("Fixed-rate playback frequency for interpolated joints."),
-    )
-    p.add_argument(
-        "--trajectory-delay-ms",
-        type=float,
-        default=DEFAULT_SIM_TRAJECTORY_DELAY_MS,
-        help=advanced("Playback delay used to bracket and interpolate IK results."),
-    )
+    add_teleop_motion_arguments(p, help_transform=advanced)
     p.add_argument(
         "--duration-s", type=float, default=0.0, help=advanced("0 runs until Ctrl+C.")
     )
@@ -154,14 +136,6 @@ def _parse_sim_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=1.0,
         help=advanced("Scale HandUMI translation deltas."),
-    )
-    p.add_argument(
-        "--motion-smoothing-time-constant-s",
-        type=float,
-        default=DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
-        help=advanced(
-            "Shared TCP-pose and joint-command low-pass time constant; 0 disables smoothing."
-        ),
     )
     p.add_argument("--no-browser", action="store_true", help="Don't auto-open Viser.")
     p.add_argument(
@@ -500,16 +474,9 @@ def _log_rerun(
 
 def _run_sim() -> None:
     args = _parse_sim_args()
-    if args.fps <= 0:
-        raise SystemExit("--fps must be > 0.")
+    validate_teleop_motion_args(args)
     if args.auto_start_delay_s <= 0.0:
         raise SystemExit("--auto-start-delay-s must be greater than zero.")
-    if args.command_rate_hz <= 0.0:
-        raise SystemExit("--command-rate-hz must be > 0.")
-    if args.trajectory_delay_ms < 0.0:
-        raise SystemExit("--trajectory-delay-ms must be >= 0.")
-    if args.motion_smoothing_time_constant_s < 0.0:
-        raise SystemExit("--motion-smoothing-time-constant-s must be >= 0.")
 
     _resolve_camera_usage(args)
     calibration = _load_calibration(args)
@@ -674,8 +641,9 @@ def _run_sim() -> None:
     )
     episode_start: float | None = None
     frame = 0
-    loop_timer = TeleopLoopTimer(args.fps)
-    motion_smoother = TeleopMotionSmoother(args.motion_smoothing_time_constant_s)
+    motion_config = TeleopMotionConfig.from_args(args)
+    loop_timer = TeleopLoopTimer(motion_config.input_rate_hz)
+    motion_smoother = motion_config.make_input_smoother()
     teleop_session = TeleopSession(controller, motion_smoother)
     joint_names = list(runtime.robot.joints.actuated_names)
 
@@ -694,11 +662,7 @@ def _run_sim() -> None:
         elif robot_view is not None:
             robot_view.update_cfg(command_q)
 
-    command_player = DelayedJointCommandPlayer(
-        write_sim_command,
-        command_rate_hz=args.command_rate_hz,
-        delay_s=args.trajectory_delay_ms / 1000.0,
-    )
+    command_stream = motion_config.make_command_stream(write_sim_command)
     sim_log.info(
         "Joint trajectory playback: %.1f Hz with %.0f ms delay.",
         args.command_rate_hz,
@@ -769,7 +733,7 @@ def _run_sim() -> None:
                 start_sides = auto_start_sides
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
                 if controller.active:
-                    command_player.stop()
+                    command_stream.stop()
                     q = controller.reset()
                     motion_smoother.reset(home_q)
                     episode_start = None
@@ -812,26 +776,13 @@ def _run_sim() -> None:
             # home_q every tick (no IK target — chasing the home pose through
             # IK left the arm in a jittery tug-of-war of costs).
             q = teleop_frame.q
-            if anchored_this_frame:
-                command_player.stop()
-                command_player.start(
-                    q,
-                    inputs.openings,
-                    time_s=loop_start,
-                )
-            elif controller.active:
-                if not command_player.running:
-                    command_player.start(
-                        q,
-                        inputs.openings,
-                        time_s=loop_start,
-                    )
-                else:
-                    command_player.push(
-                        q,
-                        inputs.openings,
-                        time_s=loop_start,
-                    )
+            command_stream.submit(
+                q,
+                inputs.openings,
+                time_s=loop_start,
+                active=controller.active,
+                new_epoch=anchored_this_frame,
+            )
             for side, pose7 in teleop_frame.step.target_pose7.items():
                 if target_markers:
                     target_markers[side].position = tuple(pose7[:3])
@@ -879,7 +830,7 @@ def _run_sim() -> None:
         sim_log.info("Stopping.")
     finally:
         space_listener.close()
-        command_player.stop()
+        command_stream.stop()
         if physics is not None:
             physics.close()
         disconnect_cameras(cameras)

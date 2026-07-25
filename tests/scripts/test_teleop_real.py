@@ -7,11 +7,6 @@ import numpy as np
 
 from handumi.feetech.calibration import FeetechConfig, GripperCalibration
 from handumi.scripts.teleop_real import (
-    DEFAULT_REAL_COMMAND_RATE_HZ,
-    DEFAULT_REAL_ORIENTATION_DEADBAND_DEG,
-    DEFAULT_REAL_POSITION_DEADBAND_MM,
-    DEFAULT_REAL_SMOOTHING_TIME_CONSTANT_S,
-    DEFAULT_REAL_TRAJECTORY_DELAY_MS,
     _enabled_tracking_ok,
     _load_required_calibration,
     _validate_feetech_ports_exist,
@@ -19,6 +14,13 @@ from handumi.scripts.teleop_real import (
     parse_args,
 )
 from handumi.teleop.common import start_sides as _start_sides
+from handumi.teleop.motion import (
+    DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
+    DEFAULT_COMMAND_RATE_HZ,
+    DEFAULT_ORIENTATION_DEADBAND_DEG,
+    DEFAULT_POSITION_DEADBAND_MM,
+    DEFAULT_TRAJECTORY_DELAY_MS,
+)
 
 
 class TeleopRealArgsTest(unittest.TestCase):
@@ -27,20 +29,18 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         self.assertEqual(args.robot, "piper")
         self.assertEqual(args.fps, 30)
-        self.assertEqual(args.command_rate_hz, DEFAULT_REAL_COMMAND_RATE_HZ)
-        self.assertEqual(
-            args.trajectory_delay_ms, DEFAULT_REAL_TRAJECTORY_DELAY_MS
-        )
+        self.assertEqual(args.command_rate_hz, DEFAULT_COMMAND_RATE_HZ)
+        self.assertEqual(args.trajectory_delay_ms, DEFAULT_TRAJECTORY_DELAY_MS)
         self.assertEqual(
             args.motion_smoothing_time_constant_s,
-            DEFAULT_REAL_SMOOTHING_TIME_CONSTANT_S,
+            DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
         )
         self.assertEqual(
-            args.motion_position_deadband_mm, DEFAULT_REAL_POSITION_DEADBAND_MM
+            args.motion_position_deadband_mm, DEFAULT_POSITION_DEADBAND_MM
         )
         self.assertEqual(
             args.motion_orientation_deadband_deg,
-            DEFAULT_REAL_ORIENTATION_DEADBAND_DEG,
+            DEFAULT_ORIENTATION_DEADBAND_DEG,
         )
         self.assertFalse(args.space_start)
         _validate_args(args)

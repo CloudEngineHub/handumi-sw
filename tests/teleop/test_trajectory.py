@@ -72,6 +72,52 @@ def test_player_publishes_from_its_fixed_rate_thread():
     assert latest[1] == {"left": 0.5}
 
 
+def test_player_applies_ema_at_the_fixed_output_rate():
+    published: list[tuple[float, float]] = []
+    received_smoothed_target = threading.Event()
+
+    def write(q, openings):
+        value = float(q[0])
+        published.append((value, openings["left"]))
+        if value > 0.0:
+            received_smoothed_target.set()
+
+    player = DelayedJointCommandPlayer(
+        write,
+        command_rate_hz=100.0,
+        delay_s=0.0,
+        ema_time_constant_s=0.05,
+    )
+    now = time.perf_counter()
+    player.start(np.array([0.0]), {"left": 0.0}, time_s=now)
+    try:
+        assert len(published) == 1 or _wait_until(lambda: bool(published))
+        player.push(np.array([1.0]), {"left": 1.0}, time_s=now + 1e-6)
+        assert received_smoothed_target.wait(timeout=0.2)
+    finally:
+        player.stop()
+
+    first_filtered, first_gripper = next(
+        command for command in published if command[0] > 0.0
+    )
+    expected_alpha = 1.0 - np.exp(-0.01 / 0.05)
+    assert first_filtered == pytest.approx(expected_alpha, rel=1e-4)
+    assert first_gripper == pytest.approx(1.0)
+    latest = player.latest()
+    assert latest is not None
+    assert 0.0 < latest[0][0] < 1.0
+    assert latest[1]["left"] == pytest.approx(1.0)
+
+
+def _wait_until(predicate, timeout_s=0.2):
+    deadline = time.perf_counter() + timeout_s
+    while time.perf_counter() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.001)
+    return False
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     (
@@ -82,3 +128,13 @@ def test_player_publishes_from_its_fixed_rate_thread():
 def test_delayed_buffer_rejects_invalid_configuration(kwargs, message):
     with pytest.raises(ValueError, match=message):
         DelayedJointCommandBuffer(**kwargs)
+
+
+def test_player_rejects_negative_ema_time_constant():
+    with pytest.raises(ValueError, match="ema_time_constant_s"):
+        DelayedJointCommandPlayer(
+            lambda q, openings: None,
+            command_rate_hz=100.0,
+            delay_s=0.04,
+            ema_time_constant_s=-0.1,
+        )

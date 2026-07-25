@@ -24,26 +24,26 @@ import logging
 import sys
 from pathlib import Path
 
-import numpy as np
-
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech.setup import list_feetech_serial_ports
 from handumi.real.registry import REAL_BACKEND_NAMES, make_real_backend
 from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.teleop.common import (
-    DEFAULT_TELEOP_FPS,
     SIDE_CHOICES,
     KeyboardSpaceListener,
     TeleopLoopTimer,
-    TeleopMotionSmoother,
     enabled_sides as _enabled_sides,
     enabled_tracking_ok as _enabled_tracking_ok,
     latest_widths as _latest_widths,
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.motion import (
+    TeleopMotionConfig,
+    add_teleop_motion_arguments,
+    validate_teleop_motion_args,
+)
 from handumi.teleop.session import TeleopSession
-from handumi.teleop.trajectory import DelayedJointCommandPlayer
 from handumi.teleop.hardware import (
     load_required_controller_tcp_calibration as _load_required_calibration,
     validate_feetech_ports_exist,
@@ -59,13 +59,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 real_log = logging.getLogger("handumi.teleop_real")
-
-DEFAULT_REAL_SMOOTHING_TIME_CONSTANT_S = 0.05
-DEFAULT_REAL_POSITION_DEADBAND_MM = 0.5
-DEFAULT_REAL_ORIENTATION_DEADBAND_DEG = 0.25
-DEFAULT_REAL_COMMAND_RATE_HZ = 100.0
-DEFAULT_REAL_TRAJECTORY_DELAY_MS = 80.0
-
 
 def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -85,37 +78,7 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Override a legacy named home pose. Omit to use the robot home_q.",
     )
     parser.add_argument("--side", choices=SIDE_CHOICES, default="both")
-    parser.add_argument("--fps", type=int, default=DEFAULT_TELEOP_FPS)
-    parser.add_argument(
-        "--command-rate-hz",
-        type=float,
-        default=DEFAULT_REAL_COMMAND_RATE_HZ,
-        help="Fixed-rate playback frequency for interpolated joint commands.",
-    )
-    parser.add_argument(
-        "--trajectory-delay-ms",
-        type=float,
-        default=DEFAULT_REAL_TRAJECTORY_DELAY_MS,
-        help="Playback delay used to bracket and interpolate IK results.",
-    )
-    parser.add_argument(
-        "--motion-smoothing-time-constant-s",
-        type=float,
-        default=DEFAULT_REAL_SMOOTHING_TIME_CONSTANT_S,
-        help="TCP and post-IK low-pass time constant; 0 disables it.",
-    )
-    parser.add_argument(
-        "--motion-position-deadband-mm",
-        type=float,
-        default=DEFAULT_REAL_POSITION_DEADBAND_MM,
-        help="Ignore controller translation jitter below this distance.",
-    )
-    parser.add_argument(
-        "--motion-orientation-deadband-deg",
-        type=float,
-        default=DEFAULT_REAL_ORIENTATION_DEADBAND_DEG,
-        help="Ignore controller rotation jitter below this angle.",
-    )
+    add_teleop_motion_arguments(parser)
     parser.add_argument(
         "--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C."
     )
@@ -190,20 +153,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _validate_real_args(args: argparse.Namespace) -> None:
-    if args.fps <= 0:
-        raise SystemExit("--fps must be > 0.")
+    validate_teleop_motion_args(args)
     if args.duration_s < 0.0:
         raise SystemExit("--duration-s must be >= 0.")
-    if args.command_rate_hz <= 0.0:
-        raise SystemExit("--command-rate-hz must be > 0.")
-    if args.trajectory_delay_ms < 0.0:
-        raise SystemExit("--trajectory-delay-ms must be >= 0.")
-    if args.motion_smoothing_time_constant_s < 0.0:
-        raise SystemExit("--motion-smoothing-time-constant-s must be >= 0.")
-    if args.motion_position_deadband_mm < 0.0:
-        raise SystemExit("--motion-position-deadband-mm must be >= 0.")
-    if args.motion_orientation_deadband_deg < 0.0:
-        raise SystemExit("--motion-orientation-deadband-deg must be >= 0.")
     if args.skip_feetech and not args.space_start:
         raise SystemExit(
             "--skip-feetech disables double-clap; add --space-start so teleop can begin."
@@ -259,18 +211,11 @@ def _run_real() -> None:
 
     clap = DoubleClapDetector()
     play_sounds = not args.no_sounds
-    loop_timer = TeleopLoopTimer(args.fps)
-    motion_smoother = TeleopMotionSmoother(
-        args.motion_smoothing_time_constant_s,
-        position_deadband_m=args.motion_position_deadband_mm / 1000.0,
-        orientation_deadband_rad=np.deg2rad(args.motion_orientation_deadband_deg),
-    )
+    motion_config = TeleopMotionConfig.from_args(args)
+    loop_timer = TeleopLoopTimer(motion_config.input_rate_hz)
+    motion_smoother = motion_config.make_input_smoother()
     teleop_session = TeleopSession(controller, motion_smoother)
-    command_player = DelayedJointCommandPlayer(
-        real_env.write,
-        command_rate_hz=args.command_rate_hz,
-        delay_s=args.trajectory_delay_ms / 1000.0,
-    )
+    command_stream = motion_config.make_command_stream(real_env.write)
     episode_start: float | None = None
     frame = 0
     tracking_recovery = TrackingRecoveryPolicy()
@@ -329,7 +274,7 @@ def _run_real() -> None:
 
             if not tracking_ok:
                 if tracking_recovery.note_missing(loop_start):
-                    command_player.stop()
+                    command_stream.stop()
                     held = real_env.hold(q)
                     controller.tracking_lost(held)
                     motion_smoother.reset(held)
@@ -361,7 +306,7 @@ def _run_real() -> None:
                     real_log.info("Space pressed; starting %s.", "/".join(start_sides))
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
                 if controller.active:
-                    command_player.stop()
+                    command_stream.stop()
                     q = controller.reset()
                     motion_smoother.reset(home_q)
                     episode_start = None
@@ -391,28 +336,13 @@ def _run_real() -> None:
                 real_log.info("Teleop timer started.")
 
             q = teleop_frame.q
-            if anchored_this_frame:
-                # A fresh anchor defines a new trajectory epoch. Do not
-                # interpolate from commands left over from an earlier epoch.
-                command_player.stop()
-                command_player.start(
-                    q,
-                    inputs.openings,
-                    time_s=loop_start,
-                )
-            elif controller.active:
-                if not command_player.running:
-                    command_player.start(
-                        q,
-                        inputs.openings,
-                        time_s=loop_start,
-                    )
-                else:
-                    command_player.push(
-                        q,
-                        inputs.openings,
-                        time_s=loop_start,
-                    )
+            command_stream.submit(
+                q,
+                inputs.openings,
+                time_s=loop_start,
+                active=controller.active,
+                new_epoch=anchored_this_frame,
+            )
             real_env.check_health()
 
             loop_timer.sleep(loop_start)
@@ -423,7 +353,7 @@ def _run_real() -> None:
     finally:
         space_listener.close()
         try:
-            command_player.stop()
+            command_stream.stop()
         finally:
             try:
                 real_env.disconnect()

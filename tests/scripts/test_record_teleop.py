@@ -8,8 +8,6 @@ import numpy as np
 from handumi.dataset.capture import SYNC_LAG_S
 from handumi.feetech import GripperWidths
 from handumi.scripts.teleop_record import (
-    DEFAULT_RECORD_COMMAND_RATE_HZ,
-    DEFAULT_RECORD_TRAJECTORY_DELAY_MS,
     PICO_TRACKING_MODE,
     _validate_record_args,
     _validate_resume_dataset,
@@ -19,9 +17,13 @@ from handumi.scripts.teleop_record import (
     parse_args,
 )
 from handumi.teleop import (
+    DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
+    DEFAULT_COMMAND_RATE_HZ,
     DEFAULT_GRIPPER_SAMPLE_HZ,
-    DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+    DEFAULT_ORIENTATION_DEADBAND_DEG,
+    DEFAULT_POSITION_DEADBAND_MM,
     DEFAULT_TELEOP_FPS,
+    DEFAULT_TRAJECTORY_DELAY_MS,
 )
 
 
@@ -48,16 +50,20 @@ class TeleopRecordSchemaTest(unittest.TestCase):
         self.assertFalse(args.skip_feetech)
         self.assertFalse(args.space_start)
         self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
-        self.assertEqual(args.command_rate_hz, DEFAULT_RECORD_COMMAND_RATE_HZ)
-        self.assertEqual(
-            args.trajectory_delay_ms, DEFAULT_RECORD_TRAJECTORY_DELAY_MS
-        )
+        self.assertEqual(args.command_rate_hz, DEFAULT_COMMAND_RATE_HZ)
+        self.assertEqual(args.trajectory_delay_ms, DEFAULT_TRAJECTORY_DELAY_MS)
         self.assertEqual(
             args.motion_smoothing_time_constant_s,
-            DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+            DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
+        )
+        self.assertEqual(
+            args.motion_position_deadband_mm, DEFAULT_POSITION_DEADBAND_MM
+        )
+        self.assertEqual(
+            args.motion_orientation_deadband_deg,
+            DEFAULT_ORIENTATION_DEADBAND_DEG,
         )
         self.assertEqual(args.fps, 30)
-        self.assertEqual(args.motion_smoothing_time_constant_s, 0.0)
         self.assertEqual(args.sync_lag_s, SYNC_LAG_S)
         self.assertEqual(args.feetech_sample_hz, DEFAULT_GRIPPER_SAMPLE_HZ)
 

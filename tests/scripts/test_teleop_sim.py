@@ -10,8 +10,6 @@ from handumi.robots.kinematics import limit_joint_delta
 from handumi.robots.registry import load_robot_config
 from handumi.scripts.teleop_sim import (
     AutoStartCountdown,
-    DEFAULT_SIM_COMMAND_RATE_HZ,
-    DEFAULT_SIM_TRAJECTORY_DELAY_MS,
     _load_calibration,
     parse_args,
     _resolve_camera_usage,
@@ -22,8 +20,12 @@ from handumi.scripts.teleop_sim import (
     _validate_unique_camera_ids,
 )
 from handumi.teleop import (
-    DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+    DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
+    DEFAULT_COMMAND_RATE_HZ,
+    DEFAULT_ORIENTATION_DEADBAND_DEG,
+    DEFAULT_POSITION_DEADBAND_MM,
     DEFAULT_TELEOP_FPS,
+    DEFAULT_TRAJECTORY_DELAY_MS,
 )
 from handumi.tracking.base import ControllerPairSample
 
@@ -70,14 +72,20 @@ class TeleopSimCameraSelectionTest(unittest.TestCase):
         args = parse_args(["--device", "meta"])
 
         self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
-        self.assertEqual(args.command_rate_hz, DEFAULT_SIM_COMMAND_RATE_HZ)
-        self.assertEqual(args.trajectory_delay_ms, DEFAULT_SIM_TRAJECTORY_DELAY_MS)
+        self.assertEqual(args.command_rate_hz, DEFAULT_COMMAND_RATE_HZ)
+        self.assertEqual(args.trajectory_delay_ms, DEFAULT_TRAJECTORY_DELAY_MS)
         self.assertEqual(DEFAULT_TELEOP_FPS, 30)
         self.assertEqual(
             args.motion_smoothing_time_constant_s,
-            DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+            DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
         )
-        self.assertEqual(DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S, 0.0)
+        self.assertEqual(
+            args.motion_position_deadband_mm, DEFAULT_POSITION_DEADBAND_MM
+        )
+        self.assertEqual(
+            args.motion_orientation_deadband_deg,
+            DEFAULT_ORIENTATION_DEADBAND_DEG,
+        )
 
     def test_cameras_are_parsed_in_requested_order(self):
         self.assertEqual(
