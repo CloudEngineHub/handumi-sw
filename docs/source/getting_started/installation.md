@@ -26,6 +26,11 @@ or Fish; for example, `handumi re<Tab>` offers `record` and `replay`.
 `hu` is an equivalent short alias for the complete CLI, including help and
 completion, so `hu record` and `handumi record` behave identically.
 
+Recording is voice-controlled by default. The speech model is not bundled: the
+first `handumi record` downloads it once (~40 MB) to `~/.cache/handumi/vosk/`,
+after which recording needs no network. `handumi doctor` reports whether the
+microphone and model are ready.
+
 For installations that do not use `install.sh`, enable completion in the
 current shell with one of:
 

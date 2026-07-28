@@ -1,9 +1,9 @@
-import threading
 import argparse
 import json
 import os
 import pty
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -17,7 +17,6 @@ from handumi.cameras.base import CameraSample
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
     StreamingEncodingError,
-    _StrictStreamingEncoder,
     _capture_sources_metadata,
     _EscapeStopListener,
     _recommended_encoder_threads,
@@ -27,11 +26,14 @@ from handumi.scripts.record import (
     _robot_metadata,
     _select_video_encoder,
     _selected_camera_names,
+    _start_voice_control,
+    _StrictStreamingEncoder,
     _validate_args,
     _validate_finalized_lerobot_dataset,
     _validate_resume_target,
     _validate_unique_camera_ids,
     _wait_for_clap,
+    _wait_for_start_trigger,
     _wait_for_tracking,
     _write_dataset_readme,
     build_features,
@@ -41,6 +43,7 @@ from handumi.scripts.record import (
 )
 from handumi.tracking.base import ControllerPairSample
 from handumi.tracking.gestures import DoubleClapDetector
+from handumi.utils.voice import VoiceUnavailableError
 
 
 def _widths(left_mm: float, right_mm: float) -> GripperWidths:
@@ -929,3 +932,163 @@ class BuildObservationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _ScriptedVoice:
+    """Replays a fixed command sequence through the listener's poll API."""
+
+    def __init__(self, commands):
+        self._commands = list(commands)
+        self.drained = 0
+
+    def poll(self):
+        return self._commands.pop(0) if self._commands else None
+
+    def drain(self):
+        self.drained += 1
+
+
+class RecordEpisodeVoiceControlTest(unittest.TestCase):
+    def _record(self, voice, grippers=None):
+        dataset = _FakeDataset()
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_FakeTracker(),
+            grippers=grippers,
+            episode_time_s=9999.0,  # would never end on the timer
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            voice=voice,
+        )
+        return dataset, n_frames, status
+
+    def test_stop_recording_keeps_the_episode(self):
+        voice = _ScriptedVoice([None, None, "stop"])
+        dataset, n_frames, status = self._record(voice)
+        self.assertEqual(status, "recorded")
+        self.assertGreater(n_frames, 0)
+        self.assertEqual(len(dataset.frames), n_frames)
+        self.assertEqual(voice.drained, 1)
+
+    def test_restart_discards_the_episode(self):
+        voice = _ScriptedVoice([None, "restart"])
+        dataset, _, status = self._record(voice)
+        self.assertEqual(status, "repeat")
+        self.assertEqual(dataset.frames, [])
+
+    def test_start_heard_mid_episode_is_not_a_stop(self):
+        """A stray "start recording" must not end the take it just began."""
+        voice = _ScriptedVoice(["start", "start", "stop"])
+        _, _, status = self._record(voice)
+        self.assertEqual(status, "recorded")
+
+
+class WaitForStartTriggerTest(unittest.TestCase):
+    def test_voice_start_triggers(self):
+        voice = _ScriptedVoice([None, "start"])
+        with mock.patch("handumi.scripts.record.time.sleep"):
+            self.assertTrue(
+                _wait_for_start_trigger(None, None, voice, threading.Event())
+            )
+        self.assertEqual(voice.drained, 1)
+
+    def test_clap_still_triggers_when_voice_stays_silent(self):
+        voice = _ScriptedVoice([])
+        with mock.patch("handumi.scripts.record.time.sleep"):
+            self.assertTrue(
+                _wait_for_start_trigger(
+                    _FakeGrippers(_clap_sequence()),
+                    DoubleClapDetector(),
+                    voice,
+                    threading.Event(),
+                )
+            )
+
+    def test_stop_event_breaks_the_wait(self):
+        stop = threading.Event()
+        stop.set()
+        self.assertFalse(
+            _wait_for_start_trigger(None, DoubleClapDetector(), _ScriptedVoice([]), stop)
+        )
+
+    def test_other_voice_commands_do_not_start_an_episode(self):
+        voice = _ScriptedVoice(["stop", "restart", "start"])
+        with mock.patch("handumi.scripts.record.time.sleep"):
+            self.assertTrue(
+                _wait_for_start_trigger(None, None, voice, threading.Event())
+            )
+
+
+class StartVoiceControlTest(unittest.TestCase):
+    """Voice is the default control, so its failure mode has to be explicit."""
+
+    def _args(self, **overrides):
+        base = {
+            "voice_control": True,
+            "voice_device": None,
+            "voice_confidence": 0.7,
+        }
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_disabled_returns_no_listener(self):
+        self.assertIsNone(
+            _start_voice_control(self._args(voice_control=False), clap_control=False)
+        )
+
+    def test_unavailable_microphone_aborts_when_it_is_the_only_control(self):
+        with mock.patch(
+            "handumi.scripts.record.VoiceCommandListener.start",
+            side_effect=VoiceUnavailableError("no microphone"),
+        ), self.assertRaises(SystemExit) as ctx:
+            _start_voice_control(self._args(), clap_control=False)
+        self.assertIn("no microphone", str(ctx.exception))
+
+    def test_unavailable_microphone_falls_back_to_clap_control(self):
+        with mock.patch(
+            "handumi.scripts.record.VoiceCommandListener.start",
+            side_effect=VoiceUnavailableError("no microphone"),
+        ):
+            self.assertIsNone(_start_voice_control(self._args(), clap_control=True))
+
+    def test_started_listener_is_returned(self):
+        with mock.patch("handumi.scripts.record.VoiceCommandListener.start"):
+            listener = _start_voice_control(self._args(), clap_control=False)
+        self.assertIsNotNone(listener)
+
+
+class VoiceArgumentTest(unittest.TestCase):
+    def test_voice_control_is_on_by_default(self):
+        self.assertTrue(parse_args(["--output-dir", "out"]).voice_control)
+
+    def test_no_voice_control_disables_it(self):
+        args = parse_args(["--output-dir", "out", "--no-voice-control"])
+        self.assertFalse(args.voice_control)
+
+    def test_manual_control_turns_voice_off_instead_of_erroring(self):
+        args = parse_args(
+            ["--output-dir", "out", "--device", "pico", "--manual-control"]
+        )
+        _validate_args(_resolve_recording_args(args))
+        self.assertFalse(args.voice_control)
+
+    def test_voice_and_clap_control_can_run_together(self):
+        args = parse_args(["--output-dir", "out", "--clap-control"])
+        _validate_args(_resolve_recording_args(args))
+        self.assertTrue(args.voice_control)
+        self.assertTrue(args.clap_control)
+
+    def test_out_of_range_confidence_is_rejected(self):
+        args = parse_args(["--output-dir", "out", "--voice-confidence", "1.5"])
+        with self.assertRaises(SystemExit):
+            _validate_args(args)

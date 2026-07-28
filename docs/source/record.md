@@ -24,11 +24,13 @@ handumi doctor --device meta
 handumi record --output-dir outputs/handumi-demo \
   --task "pick and place" \
   --session-calibration outputs/calibration/session.yaml \
-  --cameras left_wrist,right_wrist,workspace \
-  --rerun --clap-control \
+  --rerun \
   --episodes 3 \
   --episode-time-s 30
 ```
+
+Each episode begins when you say "start recording" and ends on "stop
+recording"; see [Controls](#controls) for the full set.
 
 The usual device, cameras, resolution, FPS and target robot belong in the
 optional `recording:` section of `configs/rig.yaml`. CLI values override those
@@ -96,12 +98,48 @@ slower than capture.
 
 ## Controls
 
-- Right double clap: start or save the current episode.
-- Left double clap: discard and restart the current episode.
+Episodes are driven by voice by default, so the collector never has to put the
+shells down to reach a keyboard:
+
+- "start recording": begin the episode.
+- "stop recording": end and save the current episode.
+- "restart": discard the current attempt and record it again.
+
+Recognition is offline and its vocabulary is closed to exactly those three
+phrases, so nothing else said in the room can trigger a command. The first
+`handumi record` downloads a ~40 MB speech model to `~/.cache/handumi/vosk/`;
+after that no network is needed. Audio comes from the system's default input,
+which means plugging in a headset moves voice control to its microphone with
+no flags to change.
+
+Add `--clap-control` to *also* accept gripper squeezes. Both controls stay live
+at once, which is what to use in a room too noisy to be heard reliably:
+
+- Right double squeeze: start or save the current episode.
+- Left double squeeze: discard and restart the current episode.
+
+Always available:
+
 - `Esc` or `Ctrl+C`: discard an active partial episode and stop.
-- `--space-start`: allow keyboard start when clap control is unavailable.
+- `--episode-time-s`: maximum episode length; it still applies as a safety
+  limit while voice or clap control is running.
+
+Pass `--no-voice-control` to record on the timer alone, or `--manual-control`
+to use the PICO buttons (which turns voice off automatically). Since voice is
+the default control, `handumi record` stops with an install hint if no
+microphone or speech model is available — unless `--clap-control` gives it
+another hands-free path, in which case it warns and continues. `handumi doctor`
+reports the microphone and model state before a session.
 
 The recorder waits for valid controllers and discards an episode after sustained tracking, camera, or encoder failure.
+
+:::{dropdown} Tuning voice recognition
+`--voice-device` selects a microphone by name or index when the system default
+is not the one you want. `--voice-confidence` (default 0.7) raises or lowers
+the bar a phrase must clear to count. The recorder deafens the microphone while
+it speaks its own announcements, so "Stop recording" spoken by the machine is
+never heard as the command.
+:::
 
 :::{dropdown} Synchronization and health gates
 Every row uses one shared `observation.sync.target_time_ns`. Cameras, tracking,

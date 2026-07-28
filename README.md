@@ -128,6 +128,9 @@ to contribute an integration. If you want support for a specific bimanual arm,
 - Robot models and simulation: AgileX PiPER, OpenArm, TRLC-DK1, Axol, and I2RT YAM.
 - Real-robot teleoperation: AgileX PiPER and OpenArm through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
+- Episode control: hands-free by voice ("start recording", "stop recording",
+  "restart"), recognized offline; gripper double-squeezes and PICO buttons
+  remain available.
 
 ## Safety
 

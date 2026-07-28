@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Unified HandUMI recorder for PICO and Meta Quest tracking backends.
 
-Episode control: timed by default (--episode-time-s), PICO buttons with
---manual-control, or hands-free with --clap-control (double-clap right to
-start or stop/save; double-clap left while recording to restart the attempt).
+Episode control: hands-free by voice unless disabled -- say "start recording",
+"stop recording", or "restart". Alternatives are --clap-control (double-squeeze
+the right gripper to start or stop/save, the left one to restart the attempt),
+PICO buttons with --manual-control, and plain --episode-time-s timing with
+--no-voice-control. Voice and clap control can run together, so the squeeze
+still works when the room is too noisy to be heard.
 
 Spoken status announcements ("Recording episode 3", "Episode 3 saved, 812
 frames", ...) are on by default — pass --no-sounds to disable them. The
@@ -92,6 +95,11 @@ from handumi.tracking.pico import (
 )
 from handumi.tracking.transforms import Pose
 from handumi.utils.speech import log_say
+from handumi.utils.voice import (
+    VoiceCommandListener,
+    VoiceUnavailableError,
+    speech_duration_s,
+)
 from handumi.utils.trajectory import TrajectoryTrail
 from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
 
@@ -721,6 +729,7 @@ def record_episode(
     finish_button: str,
     start_threshold: float,
     clap_detector: DoubleClapDetector | None = None,
+    voice: VoiceCommandListener | None = None,
     tracking_loss_timeout_s: float = 1.0,
     sync_lag_s: float = 0.04,
     max_sync_skew_s: float = 0.06,
@@ -873,6 +882,17 @@ def record_episode(
             )
             break
 
+        if voice is not None:
+            command = voice.poll()
+            if command == "stop":
+                voice.drain()
+                status = "recorded"
+                break
+            if command == "restart":
+                voice.drain()
+                status = "repeat"
+                dataset.clear_episode_buffer()
+                break
         if clap_control:
             clap_side = clap_detector.update_side(
                 widths.left_mm, widths.right_mm, loop_start
@@ -1085,11 +1105,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--repeat-button", choices=START_BUTTON_CHOICES, default="B", help=advanced("Repeat button."))
     p.add_argument("--finish-button", choices=START_BUTTON_CHOICES, default="Y", help=advanced("Finish button."))
     p.add_argument(
+        "--voice-control",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Hands-free by voice: say "start recording", "stop recording", '
+        'or "restart". On by default; --no-voice-control falls back to timed '
+        "episodes.",
+    )
+    p.add_argument("--voice-device", default=None, help=advanced("Microphone name or index (default: system default)."))
+    p.add_argument("--voice-confidence", type=float, default=0.7, help=advanced("Minimum recognition confidence (0-1)."))
+    p.add_argument(
         "--clap-control",
         action="store_true",
-        help="Hands-free: double-squeeze right to start or stop/save; "
-        "double-squeeze left while recording to restart the same episode. "
-        "Needs real Feetech widths.",
+        help="Also allow hands-free gripper squeezes: double-squeeze right to "
+        "start or stop/save; double-squeeze left while recording to restart "
+        "the same episode. Needs real Feetech widths.",
     )
     p.add_argument(
         "--no-sounds",
@@ -1255,6 +1285,15 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--clap-control needs real Feetech widths; drop --skip-feetech.")
     if args.clap_control and args.manual_control:
         raise SystemExit("--clap-control and --manual-control are mutually exclusive.")
+    if getattr(args, "voice_control", False) and not (
+        0.0 < args.voice_confidence <= 1.0
+    ):
+        raise SystemExit("--voice-confidence must be within (0, 1].")
+    if getattr(args, "voice_control", False) and args.manual_control:
+        # Voice is on by default, so an explicit --manual-control means the
+        # collector chose the controller; yield instead of erroring.
+        args.voice_control = False
+        log.info("--manual-control set: voice control disabled.")
     if args.tracking_loss_timeout_s <= 0:
         raise SystemExit("--tracking-loss-timeout-s must be greater than zero.")
     for name in (
@@ -1520,9 +1559,21 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
+    voice = _start_voice_control(args, clap_control=args.clap_control)
     escape_listener = _EscapeStopListener(stop_event)
-    if args.clap_control:
+    if args.clap_control or voice is not None:
         escape_listener.start()
+
+    def announce(text: str, *, blocking: bool = False) -> None:
+        """Speak recorder status, deafening voice control while it talks.
+
+        The announcements ("Stop recording", "Restart recording") are the
+        commands, so an unmuted microphone would hear the recorder command
+        itself.
+        """
+        log_say(text, play_sounds=play_sounds, blocking=blocking)
+        if voice is not None and play_sounds:
+            voice.mute(speech_duration_s(text))
 
     recorded = 0
     clap_detector = DoubleClapDetector() if args.clap_control else None
@@ -1534,17 +1585,20 @@ def main() -> None:
             log.info("--- Episode %d/%s ---", ep_num, ep_total)
             if rerun is not None:
                 rerun.set_status("WAITING", f"Episode {ep_num}/{ep_total}: waiting to start")
-            if args.clap_control:
-                assert clap_detector is not None
+            if voice is not None or clap_detector is not None:
                 if restart_active:
                     restart_active = False
                     log.info("  Restarting episode %d immediately ...", ep_num)
                     if rerun is not None:
                         rerun.set_status("RESTARTED", f"Episode {ep_num}/{ep_total}: restarting now")
                 else:
-                    log.info("  Double-squeeze right gripper to start episode %d ...", ep_num)
-                    if not _wait_for_clap(
-                        grippers, clap_detector, stop_event, side="right"
+                    log.info(
+                        "  %s to start episode %d ...",
+                        _start_prompt(voice, clap_detector),
+                        ep_num,
+                    )
+                    if not _wait_for_start_trigger(
+                        grippers, clap_detector, voice, stop_event
                     ):
                         break
                     # A calibrated table workspace is locked and ignores this
@@ -1577,7 +1631,7 @@ def main() -> None:
 
             if not _wait_for_tracking(tracker, stop_event):
                 break
-            log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
+            announce(f"Recording episode {ep_num}")
             if rerun is not None:
                 rerun.set_status("RECORDING", f"Episode {ep_num}/{ep_total} is being recorded")
             n_frames, status = record_episode(
@@ -1598,6 +1652,7 @@ def main() -> None:
                 finish_button=args.finish_button,
                 start_threshold=args.start_threshold,
                 clap_detector=clap_detector,
+                voice=voice,
                 tracking_loss_timeout_s=args.tracking_loss_timeout_s,
                 sync_lag_s=args.sync_lag_s,
                 max_sync_skew_s=args.max_sync_skew_s,
@@ -1608,7 +1663,7 @@ def main() -> None:
             )
             if status == "repeat":
                 log.warning("Episode restart requested (%d frames discarded).", n_frames)
-                log_say("Restart recording", play_sounds=play_sounds)
+                announce("Restart recording")
                 if rerun is not None:
                     rerun.set_status(
                         "RESTARTED",
@@ -1624,7 +1679,7 @@ def main() -> None:
                 "interrupted",
             }:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
-                log_say("Episode discarded", play_sounds=play_sounds)
+                announce("Episode discarded")
                 if rerun is not None:
                     rerun.set_status(
                         "DISCARDED",
@@ -1639,7 +1694,7 @@ def main() -> None:
                     _prepare_streaming_episode(dataset, n_frames)
                 except StreamingEncodingError as exc:
                     log.error("Episode discarded before commit: %s", exc)
-                    log_say("Episode discarded", play_sounds=play_sounds)
+                    announce("Episode discarded")
                     dataset.clear_episode_buffer()
                     if status == "finish":
                         break
@@ -1647,7 +1702,7 @@ def main() -> None:
             dataset.save_episode()
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
-            log_say(f"Episode {ep_num} saved, {n_frames} frames", play_sounds=play_sounds)
+            announce(f"Episode {ep_num} saved, {n_frames} frames")
             if rerun is not None:
                 rerun.set_status(
                     "SAVED", f"Episode {ep_num}/{ep_total}: {n_frames} frames saved"
@@ -1656,9 +1711,11 @@ def main() -> None:
                 break
     finally:
         escape_listener.stop()
+        if voice is not None:
+            voice.stop()
         if rerun is not None:
             rerun.set_status("STOPPED", f"Recording stopped: {recorded} episode(s) saved")
-        log_say("Stop recording", play_sounds=play_sounds, blocking=True)
+        announce("Stop recording", blocking=True)
         log.info("--- Finalising ---")
         finalization_error: BaseException | None = None
         try:
@@ -1755,6 +1812,67 @@ def connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:
     except FeetechUnavailableError as exc:
         raise SystemExit(str(exc)) from exc
     return grippers
+
+
+def _start_voice_control(
+    args: argparse.Namespace, *, clap_control: bool
+) -> VoiceCommandListener | None:
+    """Bring up voice control, or explain why the run cannot continue.
+
+    Voice is the default control, so a missing microphone is fatal unless the
+    collector already has another hands-free control (--clap-control) or opted
+    out of voice entirely.
+    """
+    if not args.voice_control:
+        return None
+    listener = VoiceCommandListener(
+        device=args.voice_device,
+        confidence=args.voice_confidence,
+    )
+    try:
+        listener.start()
+    except VoiceUnavailableError as exc:
+        if clap_control:
+            log.warning("Voice control unavailable (%s); using gripper squeezes only.", exc)
+            return None
+        raise SystemExit(f"Voice control unavailable.\n{exc}") from exc
+    return listener
+
+
+def _wait_for_start_trigger(
+    grippers: FeetechGripperSampler | FeetechGripperPair | None,
+    clap_detector: DoubleClapDetector | None,
+    voice: VoiceCommandListener | None,
+    stop_event: threading.Event,
+) -> bool:
+    """Block until voice or a right double-squeeze starts the episode.
+
+    Either control alone is enough, so a noisy room or a busy pair of hands
+    never leaves the collector without a way to start.
+    """
+    while not stop_event.is_set():
+        if voice is not None and voice.poll() == "start":
+            voice.drain()
+            return True
+        if clap_detector is not None:
+            widths = _latest_gripper_widths(grippers)
+            if clap_detector.update_side(
+                widths.left_mm, widths.right_mm, time.perf_counter()
+            ) == "right":
+                return True
+        time.sleep(0.02)
+    return False
+
+
+def _start_prompt(
+    voice: VoiceCommandListener | None, clap_detector: DoubleClapDetector | None
+) -> str:
+    options = []
+    if voice is not None:
+        options.append('say "start recording"')
+    if clap_detector is not None:
+        options.append("double-squeeze the right gripper")
+    return " or ".join(options).capitalize()
 
 
 def _wait_for_clap(

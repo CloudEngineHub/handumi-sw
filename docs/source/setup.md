@@ -113,7 +113,7 @@ Smoke-test a short capture before calibration:
 
 ```bash
 handumi record --output-dir outputs/pico-smoke \
-  --device pico --skip-feetech \
+  --device pico --skip-feetech --no-voice-control \
   --task "pico smoke" --episodes 1 --episode-time-s 10
 ```
 

@@ -50,6 +50,25 @@ If left/right motion is swapped, correct the mapping in `configs/rig.yaml`;
 do not compensate by reversing calibration values. If a camera appears twice,
 test the first `/dev/video*` node associated with that physical device.
 
+## Voice Control Does Not Respond
+
+Check what the recorder is listening to:
+
+```bash
+handumi doctor
+```
+
+If the microphone is the wrong one, name it explicitly with
+`--voice-device <name-or-index>`; the default follows the system input, so a
+headset only takes over once the OS has switched to it. If commands are heard
+but ignored, the phrase must be exactly "start recording", "stop recording", or
+"restart" — nothing else is in the recognizer's vocabulary. Lower
+`--voice-confidence` if a correct phrase is still being dropped, and raise it if
+the room is noisy enough to trigger commands on its own.
+
+To record without voice, use `--no-voice-control`, and add `--clap-control` to
+keep a hands-free control through gripper squeezes.
+
 ## Recording Is Rejected
 
 Inspect `meta/handumi_quality.json`. The common causes are tracking loss, stale cameras, synchronization errors, frozen poses, large motion jumps, or an episode that is too short.

@@ -27,6 +27,9 @@ dependencies = [
     "pyroki @ git+https://github.com/chungmin99/pyroki.git",
     "matplotlib>=3.11.0",
     "scipy>=1.17.1",
+    # Offline voice control for hands-free recording (src/handumi/utils/voice.py).
+    "vosk>=0.3.45",
+    "sounddevice>=0.4.6",
 ]
 
 [project.urls]

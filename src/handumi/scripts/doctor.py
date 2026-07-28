@@ -33,6 +33,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _voice_check() -> DoctorCheck:
+    """Voice control is the recorder's default, so report it before a session.
+
+    A missing model only warns: `handumi record` downloads it on first use.
+    """
+    from handumi.utils.voice import (
+        MODEL_NAME,
+        VoiceUnavailableError,
+        describe_input_device,
+        resolve_model_path,
+    )
+
+    try:
+        microphone = describe_input_device()
+    except ImportError:
+        return DoctorCheck("voice", "warn", "vosk/sounddevice not installed")
+    except Exception as exc:
+        return DoctorCheck("voice", "warn", f"no microphone ({exc})")
+
+    try:
+        resolve_model_path(download=False)
+    except VoiceUnavailableError:
+        return DoctorCheck(
+            "voice", "warn", f"mic {microphone!r}; {MODEL_NAME} downloads on first record"
+        )
+    return DoctorCheck("voice", "pass", f"mic {microphone!r}; model ready")
+
+
 def collect_doctor_checks(
     rig_config: Path,
     *,
@@ -90,6 +118,8 @@ def collect_doctor_checks(
                 )
     else:
         checks.append(DoctorCheck("feetech", "warn", "section not configured"))
+
+    checks.append(_voice_check())
 
     if device == "meta":
         quest = rig.get("meta_quest") if isinstance(rig, dict) else None
