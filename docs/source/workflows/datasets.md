@@ -43,7 +43,7 @@ For an explicit geometry-preserving replay:
 handumi replay your-name/handumi-demo \
   --robot "$TARGET_ROBOT" \
   --retarget-mode absolute-table \
-  --deployment-calibration "configs/calibration/${TARGET_ROBOT}_table.yaml"
+  --deployment-calibration "configs/calibration/table/${TARGET_ROBOT}.yaml"
 ```
 
 `absolute-table` applies `robot_from_table` to both TCP trajectories, preserving
@@ -107,7 +107,7 @@ Conversion creates a target-specific dataset while preserving the raw source.
 `handumi replay` uses, identically for every embodiment: when the source
 dataset declares a calibrated table workspace, conversion runs the same
 `absolute-table` solver as replay (validating
-`configs/calibration/<embodiment>_table.yaml`) for exact qpos parity; otherwise
+`configs/calibration/table/<embodiment>.yaml`) for exact qpos parity; otherwise
 it falls back to `local-relative`. For Piper, use the validated `--robot piper`
 profile to convert the replay result to physical Piper commands:
 
@@ -124,7 +124,7 @@ plus one gripper opening in meters per side. Its pairs are
 mirrored URDF finger joints are reconstructed from the single opening only when
 rendering simulation. Other embodiments use the same `--robot <name>` interface;
 absolute-table support requires their corresponding
-`configs/calibration/<name>_table.yaml` file, and an explicit `--retarget-mode`
+`configs/calibration/table/<name>.yaml` file, and an explicit `--retarget-mode`
 can override auto detection for any of them.
 
 Replay and validate the converted motion before using it with a robot-specific

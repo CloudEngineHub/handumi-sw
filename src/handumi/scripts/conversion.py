@@ -255,7 +255,7 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         default=None,
         help=advanced(
             "YAML containing robot_from_table for absolute-table conversion. "
-            "Defaults to configs/calibration/<robot>_table.yaml."
+            "Defaults to configs/calibration/table/<robot>.yaml."
         ),
     )
     ik.add_argument(
@@ -331,7 +331,7 @@ def _resolve_cli_profile(
 
     if args.retarget_mode == "absolute-table":
         path = args.deployment_calibration or (
-            Path("configs/calibration") / f"{args.embodiment}_table.yaml"
+            Path("configs/calibration/table") / f"{args.embodiment}.yaml"
         )
         from handumi.scripts.replay.replay_in_sim import load_robot_from_table
 
@@ -376,7 +376,7 @@ def _resolve_retarget_mode(
         from handumi.scripts.replay.replay_in_sim import load_robot_from_table
 
         path = args.deployment_calibration or (
-            Path("configs/calibration") / f"{args.embodiment}_table.yaml"
+            Path("configs/calibration/table") / f"{args.embodiment}.yaml"
         )
         try:
             load_robot_from_table(path, expected_robot=args.embodiment)

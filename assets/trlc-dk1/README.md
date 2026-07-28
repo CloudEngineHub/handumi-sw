@@ -10,5 +10,5 @@ of the follower under a shared world link.
 The current layout places the arm bases 0.60 m apart laterally.
 This is a provisional simulation layout, not a measurement of a physical
 deployment. Update the generator's `--base-separation-m` value and
-`configs/calibration/trlc_dk1_table.yaml` from physical measurements before
+`configs/calibration/table/trlc_dk1.yaml` from physical measurements before
 using absolute placement on hardware.

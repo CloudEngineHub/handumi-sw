@@ -38,7 +38,7 @@ JAX_PLATFORMS=cpu uv run handumi replay \
   --robot openarmv1 \
   --episode 0 \
   --retarget-mode absolute-table \
-  --deployment-calibration configs/calibration/openarmv1_table.yaml
+  --deployment-calibration configs/calibration/table/openarmv1.yaml
 ```
 
 `robot_from_table` places the demonstrated table frame in the robot world. It
@@ -90,7 +90,7 @@ JAX_PLATFORMS=cpu uv run handumi replay \
   --robot trlc_dk1 \
   --episode 0 \
   --retarget-mode absolute-table \
-  --deployment-calibration configs/calibration/trlc_dk1_table.yaml
+  --deployment-calibration configs/calibration/table/trlc_dk1.yaml
 ```
 
 The bimanual URDF uses two namespaced DK1 followers with a provisional `0.60 m`

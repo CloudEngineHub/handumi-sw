@@ -37,17 +37,20 @@ arms:
 # offset when the controller pose is anchored.
 home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0]
 gripper_max_width_m: 0.066
-# Physical tool assembly installed on HandUMI while demonstrating Piper tasks.
-# Changing this gripper or controller mount requires a new pivot calibration.
+# Physical tool assembly installed on HandUMI while demonstrating Piper tasks:
+# the gripper tip screwed onto the shells, and the controller mount. It is a
+# property of the HandUMI tool, not of the arm the data is retargeted to, so a
+# different tip needs its own pivot calibration even on the same robot.
 handumi_tool:
-  gripper: piper_parallel_v1
+  gripper: ARX5_beta
   controller_mount: handumi_v1
-# Validated physical HandUMI mount calibration for each tracking device.
-# New identity-bound dataset snapshots take precedence; this pairing replaces
-# stale legacy snapshots that did not identify their robot/gripper assembly.
+# Calibration files are controller_tcp/{device}_{tool}.yaml, so any robot
+# demonstrated with this same physical tip points at these files instead of
+# duplicating the measurement. New identity-bound dataset snapshots
+# take precedence over this pairing.
 controller_tcp_calibrations:
-  meta: configs/calibration/meta_controller_tcp.yaml
-  pico: configs/calibration/pico_controller_tcp.yaml
+  meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
+  pico: configs/calibration/controller_tcp/pico.yaml
 ik_weights:
   pos: 100.0
   ori: 4.5

@@ -77,7 +77,7 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         np.testing.assert_allclose(
             calibration.left[:3],
-            [0.12068467, 0.02142489, -0.21669616],
+            [0.1206525, 0.02460851, -0.20575515],
         )
 
     def test_accepts_registered_openarm_backend(self):

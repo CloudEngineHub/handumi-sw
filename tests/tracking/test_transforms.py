@@ -175,14 +175,19 @@ class MountingOffsetsTest(unittest.TestCase):
         from handumi.calibration.control_tcp import load_controller_tcp_calibration
 
         calibration = load_controller_tcp_calibration(
-            CALIBRATION_DIR / "meta_controller_tcp.yaml"
+            CALIBRATION_DIR / "controller_tcp" / "meta_ARX5_beta.yaml"
         )
         lx_p, ly_p, lz_p = calibration.left[:3]
         self.assertTrue(
             np.allclose(calibration.right[:3], [lx_p, -ly_p, lz_p], atol=1e-6)
         )
+        # Sanity bound on the tip-to-controller distance, not a fixed
+        # constant of the project: it is a property of whichever gripper tip
+        # is mounted on HandUMI. The range covers the tips in use so far
+        # (ARX5_beta measures 0.240; the earlier tip measured 0.249). A new tip
+        # outside it is legitimate and should widen this bound.
         self.assertAlmostEqual(
-            float(np.linalg.norm(calibration.left[:3])), 0.25, delta=0.01
+            float(np.linalg.norm(calibration.left[:3])), 0.245, delta=0.02
         )
         lx, ly, lz, lw = calibration.left[3:7]
         self.assertAlmostEqual(float(np.linalg.norm(calibration.left[3:7])), 1.0, places=4)

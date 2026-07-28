@@ -31,7 +31,7 @@ from handumi.robots.registry import load_embodiment
 from handumi.robots.utils import pose_mul
 
 DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/pico-dataset-tcp-01"
-DEFAULT_TCP_CALIBRATION = Path("configs/calibration/pico_controller_tcp.yaml")
+DEFAULT_TCP_CALIBRATION = Path("configs/calibration/controller_tcp/pico.yaml")
 LEFT_CONTROLLER = "observation.pico.left_controller_pose"
 RIGHT_CONTROLLER = "observation.pico.right_controller_pose"
 SIDES = ("left", "right")

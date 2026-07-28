@@ -567,10 +567,10 @@ calibration:
         )
 
         self.assertEqual(metadata["source_robot"], "piper")
-        self.assertEqual(metadata["source_gripper"], "piper_parallel_v1")
+        self.assertEqual(metadata["source_gripper"], "ARX5_beta")
         self.assertEqual(metadata["controller_mount"], "handumi_v1")
         self.assertEqual(len(metadata["sha256"]), 64)
-        self.assertTrue(str(metadata["source_path"]).endswith("meta_controller_tcp.yaml"))
+        self.assertTrue(str(metadata["source_path"]).endswith("controller_tcp/meta_ARX5_beta.yaml"))
         self.assertIn("configured piper/meta", source)
 
 

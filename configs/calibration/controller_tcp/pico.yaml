@@ -1,3 +1,8 @@
+# UNIDENTIFIED TOOL ASSEMBLY. Files are otherwise named
+# controller_tcp/{device}_{tool}.yaml, but this legacy measurement predates that
+# convention and is referenced by robots declaring different gripper tips, so
+# which physical tip it was measured with is unknown. Recalibrate against a
+# known assembly and rename it before trusting it.
 calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
   controller_to_gripper_tcp:

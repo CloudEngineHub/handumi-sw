@@ -51,7 +51,7 @@ from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, load_robo
 from handumi.robots.utils import pose_mul, quat_normalize
 
 DEFAULT_OUT_DIR = Path("outputs/replay_in_sim")
-DEFAULT_DEPLOYMENT_CALIBRATION_DIR = Path("configs/calibration")
+DEFAULT_DEPLOYMENT_CALIBRATION_DIR = Path("configs/calibration/table")
 GRIPPER_NORMALIZED_KEYS = (
     "observation.feetech.left_normalized",
     "observation.feetech.right_normalized",
@@ -157,7 +157,7 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         default=None,
         help=advanced(
             "YAML containing robot_from_table for --retarget-mode absolute-table. "
-            "Defaults to configs/calibration/{robot}_table.yaml."
+            "Defaults to configs/calibration/table/{robot}.yaml."
         ),
     )
     parser.add_argument(
@@ -851,7 +851,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
                 "calibrated table workspace."
             )
         deployment_path = args.deployment_calibration or (
-            DEFAULT_DEPLOYMENT_CALIBRATION_DIR / f"{args.robot}_table.yaml"
+            DEFAULT_DEPLOYMENT_CALIBRATION_DIR / f"{args.robot}.yaml"
         )
         robot_from_table = load_robot_from_table(
             deployment_path,

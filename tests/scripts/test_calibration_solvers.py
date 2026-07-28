@@ -43,7 +43,7 @@ class SolvePivotTest(unittest.TestCase):
 class CalibrationMetadataTest(unittest.TestCase):
     def test_snapshot_contains_exact_offsets_and_fingerprint(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "meta_controller_tcp.yaml"
+            path = Path(tmp) / "meta.yaml"
             path.write_text(
                 """calibration:
   controller_to_gripper_tcp:

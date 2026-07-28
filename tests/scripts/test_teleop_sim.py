@@ -155,7 +155,7 @@ class LoadCalibrationTest(unittest.TestCase):
 
     def test_loads_repo_calibration(self):
         calibration = _load_calibration(
-            self._args(Path("configs/calibration/meta_controller_tcp.yaml"))
+            self._args(Path("configs/calibration/controller_tcp/meta_ARX5_beta.yaml"))
         )
         self.assertIsInstance(calibration, ControllerTcpCalibration)
         # Repo file carries a non-identity mount offset.
@@ -171,7 +171,7 @@ class LoadCalibrationTest(unittest.TestCase):
 
         np.testing.assert_allclose(
             calibration.left[:3],
-            [0.12068467, 0.02142489, -0.21669616],
+            [0.1206525, 0.02460851, -0.20575515],
         )
 
 
@@ -212,9 +212,9 @@ class PiperTeleopSimConfigTest(unittest.TestCase):
         config = load_robot_config("piper")
 
         path = config.controller_tcp_calibrations["meta"]
-        self.assertEqual(path.name, "meta_controller_tcp.yaml")
+        self.assertEqual(path.name, "meta_ARX5_beta.yaml")
         self.assertTrue(path.is_file())
-        self.assertEqual(config.handumi_gripper, "piper_parallel_v1")
+        self.assertEqual(config.handumi_gripper, "ARX5_beta")
         self.assertEqual(config.handumi_controller_mount, "handumi_v1")
 
 

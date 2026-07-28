@@ -9,7 +9,7 @@ gripper per side. Start by choosing the scope of the contribution:
 | Scope | Required |
 | --- | --- |
 | Simulation / replay | URDF, assets, robot YAML, tests, and replay evidence. |
-| Absolute-table replay | Above, plus a `<robot>_table.yaml` placement. |
+| Absolute-table replay | Above, plus a `table/<robot>.yaml` placement. |
 | Real hardware | Above, plus a backend, physical calibrations, and hardware safety tests. |
 
 Do not add vendor SDKs, local ports, credentials, or robot-specific recording
@@ -118,7 +118,7 @@ JAX_PLATFORMS=cpu uv run python -c \
 
 ### Table placement for absolute replay
 
-Add `configs/calibration/<robot>_table.yaml`. This is the transform from the
+Add `configs/calibration/table/<robot>.yaml`. This is the transform from the
 demonstration table frame to the target robot world; it is not a TCP offset.
 
 ```yaml

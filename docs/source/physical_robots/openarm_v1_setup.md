@@ -37,7 +37,7 @@ uv run handumi setup \
   --device pico \
   --skip-feetech-map \
   --skip-feetech-calibration \
-  --controller-tcp-calibration /absolute/path/to/pico_controller_tcp.yaml
+  --controller-tcp-calibration /absolute/path/to/controller_tcp/pico.yaml
 ```
 
 Unlike the Piper wizard, the OpenArm wizard does not require unplugging CAN
@@ -145,7 +145,7 @@ uv run handumi setup \
   --skip-pico \
   --calibrate-openarm-zero \
   --openarm-zero-side right \
-  --controller-tcp-calibration /absolute/path/to/pico_controller_tcp.yaml
+  --controller-tcp-calibration /absolute/path/to/controller_tcp/pico.yaml
 ```
 
 Type `CALIBRATE RIGHT` only after checking the physical arm. Wait for the
@@ -161,7 +161,7 @@ uv run handumi setup \
   --skip-pico \
   --calibrate-openarm-zero \
   --openarm-zero-side left \
-  --controller-tcp-calibration /absolute/path/to/pico_controller_tcp.yaml
+  --controller-tcp-calibration /absolute/path/to/controller_tcp/pico.yaml
 ```
 
 Type `CALIBRATE LEFT`. Do not use `openarm-can-cli set_zero` as a substitute:
@@ -217,7 +217,7 @@ uv run handumi teleop-real \
   --side both \
   --space-start \
   --skip-feetech \
-  --controller-tcp-calibration /absolute/path/to/pico_controller_tcp.yaml
+  --controller-tcp-calibration /absolute/path/to/controller_tcp/pico.yaml
 ```
 
 Wait for:

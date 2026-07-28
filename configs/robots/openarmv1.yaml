@@ -38,8 +38,8 @@ handumi_tool:
   gripper: openarm_parallel_v1
   controller_mount: handumi_v1
 controller_tcp_calibrations:
-  meta: configs/calibration/openarmv1_meta_controller_tcp.yaml
-  pico: configs/calibration/pico_controller_tcp.yaml
+  meta: configs/calibration/controller_tcp/meta_openarmv1.yaml
+  pico: configs/calibration/controller_tcp/pico.yaml
 ik_weights:
   pos: 100.0
   ori: 10.0

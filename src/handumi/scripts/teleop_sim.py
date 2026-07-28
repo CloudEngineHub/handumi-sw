@@ -4,7 +4,7 @@
 Nothing is recorded. The same pipeline the post-hoc replay uses runs live:
 
     TrackingProvider.latest()                (PICO or Meta Quest)
-      -> controller->TCP calibration          configs/calibration/<device>_controller_tcp.yaml
+      -> controller->TCP calibration          configs/calibration/controller_tcp/<device>.yaml
       -> anchored retargeting                (same as ``handumi replay``)
       -> bimanual IK                          robots/kinematics.py
       -> Viser                                robot follows your hands

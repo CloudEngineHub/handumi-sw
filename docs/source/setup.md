@@ -197,10 +197,11 @@ session calibration after relocalization or a tracking reset. The saved
 
 ## 5. Calibrate the HandUMI Tool Tip
 
-Controller-to-TCP reconstructs the physical HandUMI tool-tip pose from each
-tracked controller. It is a property of the tool and its controller mount, not
-of any robot arm, so it is calibrated once and reused until that physical
-assembly changes.
+Controller-to-TCP reconstructs the physical tool-tip pose from each tracked
+controller. It belongs to the **tool assembly** -- the gripper tip screwed onto
+the HandUMI shells, plus the controller mount -- and not to the robot the data
+is later retargeted to. A different tip needs its own calibration even on the
+same robot, and one tip serves every robot it is used with.
 
 Each side is captured the same way: **wedge the tip into a firm indentation so
 it cannot slide, then rotate the rest of the assembly around it for 25 seconds,
@@ -264,6 +265,10 @@ handumi calibrate tcp inspect \
 
 Recapture that side until it passes. Do not promote a fit that does not.
 
+Then compare the two sides. The mounts are mirror twins, so `x` and `z` should
+agree between them and only `y` flips sign. A mismatch of several millimeters
+means one of the captures drifted, not that the tool is asymmetric.
+
 ### Step 4. Promote it into the project
 
 Pivot fitting solves translation only, so keep the official quaternions and
@@ -277,9 +282,22 @@ left.position  = [x,  y, z]
 right.position = [x, -y, z]
 ```
 
-Update only those two `position` values in
-`configs/calibration/${TRACKING_DEVICE}_controller_tcp.yaml`, or in the
-robot-specific calibration file declared in `configs/robots/<robot>.yaml`.
+Update only those two `position` values in the calibration file for this tool
+assembly. Those files live in `configs/calibration/controller_tcp/` as
+`{device}_{tool}.yaml`, and each robot points at its own under
+`controller_tcp_calibrations` in `configs/robots/<robot>.yaml`:
+
+```yaml
+handumi_tool:
+  gripper: ARX5_beta          # the tip physically screwed onto HandUMI
+  controller_mount: handumi_v1
+controller_tcp_calibrations:
+  meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
+```
+
+Fitting a **new** tip means writing a new file and pointing the robot at it,
+rather than overwriting the previous tip's calibration. Existing datasets keep
+their own recorded assembly identity, so old recordings stay reproducible.
 
 ### Step 5. Verify
 
@@ -288,14 +306,12 @@ uv run pytest -q tests/tracking/test_transforms.py \
   tests/scripts/test_replay_in_sim.py
 ```
 
+These check the mirror invariant and that the file is selected for the robot.
+One of them also bounds the tip-to-controller distance; that bound is a
+property of the tips in use, so a genuinely new tip legitimately widens it.
+
 Then confirm it physically: touch one point with both tips and check that their
 calibrated positions coincide. After session calibration, touching the table
 should place both tips near `z=0`.
-
-:::{note}
-Reusing the tool on another robot still requires validating and copying the
-result to that robot's identity-bound calibration path. The wizard never
-assumes two physical tool assemblies are identical.
-:::
 
 Next: [Record Demonstrations](record.md).

@@ -133,9 +133,9 @@ class ConversionTcpCalibrationTest(unittest.TestCase):
 
         np.testing.assert_allclose(
             selection.calibration.left[:3],
-            [0.12068467, 0.02142489, -0.21669616],
+            [0.1206525, 0.02460851, -0.20575515],
         )
-        self.assertEqual(selection.metadata["source_gripper"], "piper_parallel_v1")
+        self.assertEqual(selection.metadata["source_gripper"], "ARX5_beta")
         self.assertTrue(selection.source.startswith("configured piper/meta:"))
 
     def test_device_override_cannot_contradict_identity_bound_snapshot(self):
@@ -162,7 +162,7 @@ class ConversionProfileTest(unittest.TestCase):
         self.assertEqual(args.retarget_mode, "absolute-table")
         self.assertEqual(
             args.deployment_calibration,
-            Path("configs/calibration/piper_table.yaml"),
+            Path("configs/calibration/table/piper.yaml"),
         )
         self.assertIsNone(args.gripper_max_width_m)
 

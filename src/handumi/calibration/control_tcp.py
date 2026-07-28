@@ -27,8 +27,8 @@ from handumi.robots.utils import IDENTITY_POSE7, pose_mul, quat_normalize
 DEFAULT_PARQUET = Path("pico_recording/data/chunk-000/file-000.parquet")
 DEFAULT_DEVICE = "pico"
 SUPPORTED_DEVICES = ("pico", "meta")
-DEFAULT_CALIBRATION_DIR = Path("configs/calibration")
-DEFAULT_CALIBRATION = DEFAULT_CALIBRATION_DIR / f"{DEFAULT_DEVICE}_controller_tcp.yaml"
+DEFAULT_CALIBRATION_DIR = Path("configs/calibration/controller_tcp")
+DEFAULT_CALIBRATION = DEFAULT_CALIBRATION_DIR / f"{DEFAULT_DEVICE}.yaml"
 STATE_COLUMN = "observation.state"
 SIDES = ("left", "right")
 CONTROLLER_TCP_METADATA_SCHEMA_VERSION = 2
@@ -90,7 +90,7 @@ def missing_calibration_message(path: Path = DEFAULT_CALIBRATION) -> str:
 def calibration_path_for_device(device: str, root: Path = DEFAULT_CALIBRATION_DIR) -> Path:
     if device not in SUPPORTED_DEVICES:
         raise SystemExit(f"Invalid device {device!r}; use one of {SUPPORTED_DEVICES}")
-    return root / f"{device}_controller_tcp.yaml"
+    return root / f"{device}.yaml"
 
 
 def calibration_path_for_robot_device(

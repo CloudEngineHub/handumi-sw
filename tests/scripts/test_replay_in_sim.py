@@ -179,7 +179,7 @@ def test_piper_meta_configured_tcp_calibration_precedes_dataset_snapshot():
     )
 
     np.testing.assert_allclose(
-        selection.calibration.left[:3], [0.12068467, 0.02142489, -0.21669616]
+        selection.calibration.left[:3], [0.1206525, 0.02460851, -0.20575515]
     )
     assert selection.source.startswith("configured piper/meta:")
     assert len(selection.source.rsplit("sha256=", 1)[1]) == 64
@@ -199,7 +199,7 @@ def test_dataset_tcp_snapshot_can_be_requested_explicitly():
         _metadata_calibration_info(),
         robot="piper",
         controller_device="meta",
-        configured_path=Path("configs/calibration/meta_controller_tcp.yaml"),
+        configured_path=Path("configs/calibration/controller_tcp/meta_ARX5_beta.yaml"),
     )
 
     np.testing.assert_allclose(selection.calibration.left[:3], [0.01, 0.02, 0.03])
@@ -231,7 +231,7 @@ calibration:
         _metadata_calibration_info(),
         robot="piper",
         controller_device="meta",
-        configured_path=Path("configs/calibration/meta_controller_tcp.yaml"),
+        configured_path=Path("configs/calibration/controller_tcp/meta_ARX5_beta.yaml"),
     )
 
     np.testing.assert_allclose(selection.calibration.left[:3], [0.4, 0.5, 0.6])
@@ -261,7 +261,7 @@ def test_identity_bound_dataset_snapshot_precedes_current_robot_setup():
         info,
         robot="piper",
         controller_device="meta",
-        configured_path=Path("configs/calibration/meta_controller_tcp.yaml"),
+        configured_path=Path("configs/calibration/controller_tcp/meta_ARX5_beta.yaml"),
         configured_gripper="piper_parallel_v1",
         configured_mount="handumi_v1",
     )
