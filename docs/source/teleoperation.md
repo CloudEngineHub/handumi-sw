@@ -10,28 +10,25 @@ only after tracking, calibration, and motion mapping behave correctly.
 Select any supported robot model through `--robot`:
 
 ```bash
-handumi teleop --device meta --robot <robot_id> \
-  --cameras left_wrist,right_wrist,workspace --space-start
+handumi teleop --device meta --robot <robot_id>
 ```
 
 For example, using the currently supported Piper embodiment:
 
 ```bash
 TARGET_ROBOT=piper
-handumi teleop --device meta --robot "$TARGET_ROBOT" \
-  --cameras left_wrist,right_wrist,workspace --space-start
+handumi teleop --device meta --robot "$TARGET_ROBOT"
 ```
 
 OpenArm v1 uses the same command and starts from its configured `home_q`:
 
 ```bash
-handumi teleop --device meta --robot openarmv1 \
-  --space-start
+handumi teleop --device meta --robot openarmv1
 ```
 
 This opens Viser with the live robot model and Rerun with tracking, TCP trails,
-gripper widths, and the left wrist, workspace, and right wrist cameras. Nothing
-is recorded. Use `--device pico` for PICO.
+gripper widths, and both wrist cameras. Nothing is recorded. Use `--device pico`
+for PICO.
 
 Add a task scene with:
 
@@ -39,18 +36,38 @@ Add a task scene with:
 handumi teleop --device meta --robot "$TARGET_ROBOT" --scene cube_in_box
 ```
 
-`--cameras` accepts the logical names `left_wrist`, `right_wrist`, and
-`workspace`. Their physical device IDs come only from the corresponding
-entries in `configs/rig.yaml`.
+Teleoperation shows both wrist cameras by default, so `--cameras` is only
+needed to change that selection — for instance to add the overhead view:
+
+```bash
+handumi teleop --device meta --robot "$TARGET_ROBOT" \
+  --cameras left_wrist,right_wrist,workspace
+```
+
+It accepts the logical names `left_wrist`, `right_wrist`, and `workspace`;
+their physical device IDs come only from the corresponding entries in
+`configs/rig.yaml`, which is where each camera is declared once. Use
+`--skip-cameras` to run without any camera view.
 
 Viser shows the robot and Rerun shows tracking and camera trails. Use `--no-rerun` or `--no-viser` when a viewer is not needed.
 
 ### Start and Reset
 
-- Double clap starts the enabled, tracked arms from home.
-- Another double clap clears anchors and returns them home.
-- With `--space-start`, Space starts any idle enabled arm.
+Arms sit idle at home until they are started, and the same gesture stops them
+again:
+
+- **Double-squeeze a gripper**: start the enabled, tracked arms from home.
+- **Double-squeeze again**: clear the anchors and return them home. This is the
+  stop.
 - Tracking loss cancels pending motion and holds the latest command.
+
+Two optional ways to start exist for when squeezing a gripper is impractical —
+neither replaces the double-squeeze, which stays active in every mode:
+
+- `--space-start`: also start idle arms by pressing Space in the terminal.
+  Space only *starts*; it is not a stop or pause key.
+- `--auto-start`: start on their own once controller tracking has been valid
+  for `--auto-start-delay-s` (default 5), with no gesture at all.
 
 ## Real Robot Teleoperation
 

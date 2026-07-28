@@ -198,27 +198,26 @@ session calibration after relocalization or a tracking reset. The saved
 ## 5. Calibrate the HandUMI Tool Tip
 
 Controller-to-TCP reconstructs the physical HandUMI tool-tip pose from each
-tracked controller. It is a property of the HandUMI gripper/tool and controller
-mount, not of a connected robot arm. Recalibrate only when that physical
-assembly changes. Fix the tip in a firm indentation. For 25 seconds, keep it
-fixed while rotating the tracked assembly through varied orientations. If the
-same calibrated HandUMI tool is used for another robot, validate and copy the
-result to that robot's identity-bound calibration path; the wizard never
-silently assumes two physical tool assemblies are identical.
+tracked controller. It is a property of the tool and its controller mount, not
+of any robot arm, so it is calibrated once and reused until that physical
+assembly changes.
 
-:::{dropdown} Capture and fit both sides
-Select the tracking device:
+Each side is captured the same way: **wedge the tip into a firm indentation so
+it cannot slide, then rotate the rest of the assembly around it for 25 seconds,
+through as many different orientations as the mount allows.** The tip staying
+put is what makes the fit correct; the variety of orientations is what makes it
+well-conditioned.
 
 ```bash
 TRACKING_DEVICE=meta   # or pico
 ```
 
-Capture the left side:
+### Step 1. Capture and fit the left side
 
 ```bash
 LEFT_RUN="outputs/tcp_pivot_left_$(date +%Y%m%d_%H%M%S)"
 handumi record --output-dir "$LEFT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
-  --cameras left_wrist \
+  --cameras left_wrist --no-voice-control \
   --task "tcp pivot left" --episodes 1 --episode-time-s 25 \
   --tracking-loss-timeout-s 3 --no-sounds
 
@@ -227,12 +226,18 @@ handumi calibrate tcp pivot --device "$TRACKING_DEVICE" --side left \
   --output outputs/calibration/controller_tcp_candidate.yaml
 ```
 
-Repeat for the right side:
+Your hands are busy holding the tool during a pivot capture, so
+`--no-voice-control` keeps the episode on the plain ENTER-then-timer flow
+instead of waiting to be spoken to.
+
+### Step 2. Capture and fit the right side
+
+The same two commands with `right` in place of `left`:
 
 ```bash
 RIGHT_RUN="outputs/tcp_pivot_right_$(date +%Y%m%d_%H%M%S)"
 handumi record --output-dir "$RIGHT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
-  --cameras right_wrist \
+  --cameras right_wrist --no-voice-control \
   --task "tcp pivot right" --episodes 1 --episode-time-s 25 \
   --tracking-loss-timeout-s 3 --no-sounds
 
@@ -240,28 +245,29 @@ handumi calibrate tcp pivot --device "$TRACKING_DEVICE" --side right \
   --parquet "$RIGHT_RUN/data/chunk-000/file-000.parquet" --episode 0 \
   --output outputs/calibration/controller_tcp_candidate.yaml
 ```
-:::
 
-Inspect the result:
+Both sides write into the same candidate file; nothing is applied to the
+project yet.
+
+### Step 3. Check the fit
 
 ```bash
 handumi calibrate tcp inspect \
   outputs/calibration/controller_tcp_candidate.yaml
 ```
 
-Accept a fit when RMS is below 0.50 cm, maximum error is below 1.00 cm, and
-condition is below 500. High RMS means the tip probably slipped; a high
-condition number means the capture lacked rotational variety.
+| Metric | Accept | If it fails |
+|---|---|---|
+| RMS | below 0.50 cm | The tip slipped. Find a deeper indentation and recapture. |
+| Maximum error | below 1.00 cm | As above; check for a moment of lost tracking. |
+| Condition | below 500 | The capture lacked rotational variety. Recapture covering more orientations. |
 
-:::{dropdown} Verify and promote the calibration
-Before editing the project calibration, repeat a short pivot capture. Rotate
-around a stationary tip and confirm the reported residual stays within the
-acceptance limits. Touch the same point with both tips and confirm their
-calibrated positions coincide; touching the table should place both tips near
-`z=0` after session calibration.
+Recapture that side until it passes. Do not promote a fit that does not.
 
-Pivot fitting calibrates translation, not orientation. Preserve the official
-quaternions and symmetrize only the measured positions:
+### Step 4. Promote it into the project
+
+Pivot fitting solves translation only, so keep the official quaternions and
+symmetrize just the measured positions:
 
 ```text
 x = (left.x + right.x) / 2
@@ -271,14 +277,25 @@ left.position  = [x,  y, z]
 right.position = [x, -y, z]
 ```
 
-Update only `position` in `configs/calibration/${TRACKING_DEVICE}_controller_tcp.yaml`
-or the robot-specific calibration file declared in `configs/robots/<robot>.yaml`,
-then run:
+Update only those two `position` values in
+`configs/calibration/${TRACKING_DEVICE}_controller_tcp.yaml`, or in the
+robot-specific calibration file declared in `configs/robots/<robot>.yaml`.
+
+### Step 5. Verify
 
 ```bash
 uv run pytest -q tests/tracking/test_transforms.py \
   tests/scripts/test_replay_in_sim.py
 ```
+
+Then confirm it physically: touch one point with both tips and check that their
+calibrated positions coincide. After session calibration, touching the table
+should place both tips near `z=0`.
+
+:::{note}
+Reusing the tool on another robot still requires validating and copying the
+result to that robot's identity-bound calibration path. The wizard never
+assumes two physical tool assemblies are identical.
 :::
 
 Next: [Record Demonstrations](record.md).

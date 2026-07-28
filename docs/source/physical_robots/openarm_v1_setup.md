@@ -251,4 +251,4 @@ prove that teleoperation is anchored.
 | `following error` | The measured joint did not follow the safe command. Do not increase the limit blindly; inspect the reported side and joint. |
 | `home timeout` | A joint did not enter the home tolerance. The exception reports side, joint, measured value, and target. |
 | Home is mechanically crooked | Recheck mechanical-zero calibration and assembly. Controller-to-TCP calibration is not used during startup home. |
-| Space does nothing | Confirm `PICO controller data is available`, both controls are tracked, the terminal is focused, and `--space-start` is present. |
+| Space does nothing | Confirm `PICO controller data is available`, both controls are tracked, the terminal is focused, and `--space-start` is present. Space is required here because `--skip-feetech` removes the gripper widths the default double-squeeze start reads. |

@@ -47,7 +47,7 @@ and communication is stable.
 Start with simulation and the same robot profile:
 
 ```bash
-handumi teleop --device meta --robot piper --space-start
+handumi teleop --device meta --robot piper
 ```
 
 After tracking, calibration, and simulated motion behave correctly, validate

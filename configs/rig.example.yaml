@@ -9,10 +9,12 @@ cameras:
   workspace:
     index_or_path: 4
 
-# Optional operator defaults. CLI values override these; --resume loads the
-# dataset snapshot before consulting this section.
+# Optional operator defaults, so the usual recording flags can be omitted from
+# the command line. Delete this whole section to fall back to built-in
+# defaults. CLI values override it; --resume loads the dataset snapshot first.
 recording:
   device: meta
+  # Which of the cameras declared above to capture. Defaults to both wrists.
   cameras: [left_wrist, right_wrist]
   width: 640
   height: 480
