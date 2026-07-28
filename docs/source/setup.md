@@ -209,23 +209,21 @@ through as many different orientations as the mount allows.** The tip staying
 put is what makes the fit correct; the variety of orientations is what makes it
 well-conditioned.
 
-```bash
-TRACKING_DEVICE=meta   # or pico
-```
-
 ### Step 1. Capture and fit the left side
 
 ```bash
-LEFT_RUN="outputs/tcp_pivot_left_$(date +%Y%m%d_%H%M%S)"
-handumi record --output-dir "$LEFT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
-  --cameras left_wrist --no-voice-control \
-  --task "tcp pivot left" --episodes 1 --episode-time-s 25 \
-  --tracking-loss-timeout-s 3 --no-sounds
+LEFT=outputs/tcp_pivot_left
+handumi record --output-dir $LEFT --skip-feetech --no-voice-control \
+  --cameras left_wrist --task "tcp pivot left" \
+  --episodes 1 --episode-time-s 25 --tracking-loss-timeout-s 3 --no-sounds
 
-handumi calibrate tcp pivot --device "$TRACKING_DEVICE" --side left \
-  --parquet "$LEFT_RUN/data/chunk-000/file-000.parquet" --episode 0 \
-  --output outputs/calibration/controller_tcp_candidate.yaml
+handumi calibrate tcp pivot --side left --dataset $LEFT
 ```
+
+`--dataset` resolves the recording's parquet and episode, and the fit is
+written to `outputs/calibration/controller_tcp_candidate.yaml`. The tracking
+device comes from `recording.device` in `configs/rig.yaml`; pass `--device` to
+override it.
 
 Your hands are busy holding the tool during a pivot capture, so
 `--no-voice-control` keeps the episode on the plain ENTER-then-timer flow
@@ -236,15 +234,12 @@ instead of waiting to be spoken to.
 The same two commands with `right` in place of `left`:
 
 ```bash
-RIGHT_RUN="outputs/tcp_pivot_right_$(date +%Y%m%d_%H%M%S)"
-handumi record --output-dir "$RIGHT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
-  --cameras right_wrist --no-voice-control \
-  --task "tcp pivot right" --episodes 1 --episode-time-s 25 \
-  --tracking-loss-timeout-s 3 --no-sounds
+RIGHT=outputs/tcp_pivot_right
+handumi record --output-dir $RIGHT --skip-feetech --no-voice-control \
+  --cameras right_wrist --task "tcp pivot right" \
+  --episodes 1 --episode-time-s 25 --tracking-loss-timeout-s 3 --no-sounds
 
-handumi calibrate tcp pivot --device "$TRACKING_DEVICE" --side right \
-  --parquet "$RIGHT_RUN/data/chunk-000/file-000.parquet" --episode 0 \
-  --output outputs/calibration/controller_tcp_candidate.yaml
+handumi calibrate tcp pivot --side right --dataset $RIGHT
 ```
 
 Both sides write into the same candidate file; nothing is applied to the
@@ -253,8 +248,7 @@ project yet.
 ### Step 3. Check the fit
 
 ```bash
-handumi calibrate tcp inspect \
-  outputs/calibration/controller_tcp_candidate.yaml
+handumi calibrate tcp inspect
 ```
 
 | Metric | Accept | If it fails |

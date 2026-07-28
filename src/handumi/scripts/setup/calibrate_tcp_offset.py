@@ -1,15 +1,24 @@
 """Calibrate controller -> physical HandUMI gripper TCP transforms from recorded poses.
 
-The shared calibration file format is:
-
-    configs/calibration/{device}_controller_tcp.yaml
-
-where ``device`` is ``pico`` or ``meta``. The important transform is always:
+The important transform is always:
 
     T_world_tcp = T_world_controller @ T_controller_tcp
 
-Calibration uses recorded pose7 controller data from Parquet/CSV. For PICO this
-is normally ``observation.pico.{left,right}_controller_pose`` in a raw recording.
+That transform belongs to the physical tool assembly -- the controller mount
+plus the gripper tip screwed onto HandUMI -- and not to any robot arm, so the
+calibration files are named after that assembly:
+
+    configs/calibration/controller_tcp/{device}_{tool}.yaml
+
+Robots declare which assembly they were demonstrated with under
+``handumi_tool`` in ``configs/robots/<robot>.yaml`` and point at the matching
+file. Two robots sharing one physical tip share one file; one robot used with
+two different tips needs two.
+
+Calibration uses recorded pose7 controller data. Point ``--dataset`` at a
+recording directory, or pass ``--parquet``/``--csv`` explicitly. Fits are
+written to a candidate file by default, never straight into the project
+calibration -- inspect and promote them deliberately.
 """
 
 from __future__ import annotations
@@ -22,11 +31,9 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from handumi.calibration.control_tcp import (
-    DEFAULT_DEVICE,
     DEFAULT_PARQUET,
     SIDES,
     SUPPORTED_DEVICES,
-    calibration_path_for_device,
     existing_or_identity,
     load_controller_tcp_calibration,
     load_csv_poses,
@@ -40,21 +47,62 @@ from handumi.robots.utils import IDENTITY_POSE7, pose_inv, quat_normalize
 COMMANDS = {"pivot", "orient", "inspect"}
 
 
+DEFAULT_CANDIDATE = Path("outputs/calibration/controller_tcp_candidate.yaml")
+
+# Fall back to the same device `handumi record` assumes when the rig is silent.
+# control_tcp.DEFAULT_DEVICE is PICO, and using it here made the two commands
+# disagree about the same rig.
+FALLBACK_DEVICE = "meta"
+
+
+def _rig_device() -> str | None:
+    """Tracking device from the operator's rig, so --device can be omitted."""
+    from handumi.config import DEFAULT_RIG_CONFIG, load_optional_rig_section
+
+    try:
+        recording = load_optional_rig_section(DEFAULT_RIG_CONFIG, "recording")
+    except SystemExit:
+        return None
+    device = recording.get("device")
+    return str(device) if device in SUPPORTED_DEVICES else None
+
+
 def _device(args: argparse.Namespace) -> str:
-    return args.device_local or args.device
+    return args.device_local or args.device or _rig_device() or FALLBACK_DEVICE
 
 
 def _output_path(args: argparse.Namespace) -> Path:
+    """Where a fit is written.
+
+    Defaults to a candidate file rather than the project calibration: a fit
+    has to clear the acceptance limits and be symmetrized before it is
+    promoted, and pivot alone never determines orientation.
+    """
     if args.output is not None:
         return args.output
-    return calibration_path_for_device(_device(args))
+    return DEFAULT_CANDIDATE
+
+
+def dataset_parquet(dataset: Path) -> Path:
+    """Locate the single parquet of a recording made by ``handumi record``."""
+    matches = sorted(dataset.glob("data/chunk-*/file-*.parquet"))
+    if not matches:
+        raise SystemExit(
+            f"No recording found under {dataset}. Expected "
+            f"{dataset}/data/chunk-000/file-000.parquet from `handumi record`."
+        )
+    return matches[0]
 
 
 def _load_input_poses(args: argparse.Namespace, side: str) -> np.ndarray:
     if args.csv is not None:
         return load_csv_poses(args.csv, side)
+    if getattr(args, "dataset", None) is not None:
+        parquet = dataset_parquet(args.dataset)
+        episode = 0 if args.episode is None else args.episode
+        return load_episode_poses(parquet, episode, side, column=args.column)
     if args.episode is None:
-        raise SystemExit("Use --episode with --parquet, or pass --csv")
+        raise SystemExit("Use --dataset, or --episode with --parquet, or --csv")
     return load_episode_poses(args.parquet, args.episode, side, column=args.column)
 
 
@@ -147,6 +195,12 @@ def add_device_arg(parser: argparse.ArgumentParser) -> None:
 
 
 def add_common_input_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        help="Recording directory from `handumi record`; its parquet and "
+        "first episode are resolved automatically.",
+    )
     parser.add_argument("--parquet", type=Path, default=DEFAULT_PARQUET)
     parser.add_argument("--episode", type=int)
     parser.add_argument("--csv", type=Path, help="CSV with x,y,z,qx,qy,qz,qw and optional side")
@@ -168,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--device", choices=SUPPORTED_DEVICES, default=DEFAULT_DEVICE)
+    parser.add_argument("--device", choices=SUPPORTED_DEVICES, default=None)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     pivot = sub.add_parser(
