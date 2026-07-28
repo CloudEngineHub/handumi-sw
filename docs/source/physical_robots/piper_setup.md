@@ -67,5 +67,5 @@ handumi teleop-real --device meta --robot piper --side both
 ```
 
 For shared controls, safety behavior, and tracking semantics, continue with
-[Teleoperation](../teleoperation.md). For common failures, see
-[Troubleshooting](../troubleshooting.md).
+[Physical Robot Teleoperation](real_teleoperation.md). For common failures,
+see [Troubleshooting](../troubleshooting.md).

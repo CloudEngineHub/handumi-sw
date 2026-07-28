@@ -3,6 +3,10 @@
 Collect robot-free bimanual demonstrations once with HandUMI, then validate,
 retarget, and reuse them across different bimanual arms with parallel grippers.
 
+**Core Workflows** need no robot arm: record with HandUMI, preview an
+embodiment in simulation, then replay and validate the result.
+**Physical Robots** covers everything that commands real hardware.
+
 ```{image} _static/HandUMI.png
 :alt: HandUMI hardware
 :class: handumi-cover
@@ -23,8 +27,8 @@ setup
 :maxdepth: 2
 :caption: Core Workflows
 
-teleoperation
 record
+teleoperation
 workflows/replay_in_sim
 workflows/datasets
 ```
@@ -34,6 +38,7 @@ workflows/datasets
 :maxdepth: 2
 :caption: Physical Robots
 
+physical_robots/real_teleoperation
 physical_robots/piper_setup
 physical_robots/openarm_v1_setup
 ```
