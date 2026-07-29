@@ -28,11 +28,16 @@ class PiperBackend:
         *,
         joint_names: tuple[str, ...],
         max_width_mm: float,
+        side_max_width_mm: dict[str, float] | None = None,
         active_sides: tuple[str, ...] = ("left", "right"),
     ) -> None:
         self.environment = environment
         self.joint_names = tuple(joint_names)
         self.max_width_mm = float(max_width_mm)
+        self.side_max_width_mm = {
+            side: float(width_mm)
+            for side, width_mm in (side_max_width_mm or {}).items()
+        }
         self.active_sides = tuple(active_sides)
         self._last_q: np.ndarray | None = None
 
@@ -44,12 +49,19 @@ class PiperBackend:
         rig_config: Path,
         active_sides: tuple[str, ...] = ("left", "right"),
     ) -> "PiperBackend":
+        settings = load_piper_can_settings(rig_config, runtime.config.real)
         return cls(
-            PiperCanEnvironment(
-                load_piper_can_settings(rig_config, runtime.config.real)
-            ),
+            PiperCanEnvironment(settings),
             joint_names=runtime.joint_names,
             max_width_mm=runtime.config.gripper_max_width_m * 1000.0,
+            side_max_width_mm={
+                side: width_mm
+                for side, width_mm in {
+                    "left": settings.left_gripper_max_width_mm,
+                    "right": settings.right_gripper_max_width_mm,
+                }.items()
+                if width_mm is not None
+            },
             active_sides=active_sides,
         )
 
@@ -95,11 +107,12 @@ class PiperBackend:
     ) -> None:
         self._last_q = np.asarray(q, dtype=np.float32).copy()
         self.environment.set_q(q, self.joint_names)
-        self.environment.set_gripper_widths_mm(
-            {
-                side: float(np.clip(value, 0.0, 1.0)) * self.max_width_mm
-                for side, value in gripper_openings.items()
-            }
+        self.environment.set_gripper_openings(
+            gripper_openings,
+            fallback_max_width_mm={
+                side: self.side_max_width_mm.get(side, self.max_width_mm)
+                for side in gripper_openings
+            },
         )
 
     def hold(self, base_q: np.ndarray) -> np.ndarray:

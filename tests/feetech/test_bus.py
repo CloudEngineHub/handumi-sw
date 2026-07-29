@@ -51,6 +51,17 @@ class FeetechBusRetryTest(unittest.TestCase):
 
         self.assertEqual(bus.read_position(1, retry_delay_s=0), 1234)
 
+    def test_read_position_recovers_sdk_port_after_truncated_response(self):
+        class _Port:
+            is_using = True
+
+        packet = _FakePacket(reads=[IndexError(), (1234, 0, 0)])
+        bus = _bus_with(packet)
+        bus._port_handler = _Port()
+
+        self.assertEqual(bus.read_position(1, retry_delay_s=0), 1234)
+        self.assertFalse(bus._port_handler.is_using)
+
     def test_read_position_reports_last_retry_failure(self):
         packet = _FakePacket(reads=[OSError("no data"), OSError("still no data")])
         bus = _bus_with(packet)

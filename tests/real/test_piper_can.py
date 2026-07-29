@@ -1,5 +1,6 @@
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -7,11 +8,14 @@ import numpy as np
 from handumi.real.piper import (
     PiperCanEnvironment,
     PiperCanSettings,
+    PiperGripperRange,
     PiperJointStreamer,
+    PiperSdkArm,
     load_piper_can_settings,
     piper_mdeg_to_q,
     q_to_piper_mdeg,
 )
+from handumi.real.piper.teleop import PiperBackend
 from handumi.real.piper.driver import step_mdeg_toward
 from handumi.real.streamer import AccelerationLimitedJointTrajectory
 from handumi.robots.registry import RobotRealConfig, load_robot_config
@@ -91,6 +95,28 @@ class PiperCanConfigTest(unittest.TestCase):
         self.assertEqual(settings.max_joint_acceleration_deg_s2, 720)
         self.assertEqual(settings.gripper_effort, 1000)
 
+    def test_loads_per_side_gripper_width_overrides_from_rig(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+
+        with TemporaryDirectory() as tmp:
+            rig = Path(tmp) / "rig.yaml"
+            rig.write_text(
+                "robots:\n"
+                "  piper:\n"
+                "    can:\n"
+                "      left_port: can0\n"
+                "      right_port: can1\n"
+                "    gripper:\n"
+                "      left_max_width_mm: 96\n"
+                "      right_max_width_m: 0.066\n",
+                encoding="utf-8",
+            )
+            settings = load_piper_can_settings(rig)
+
+        self.assertEqual(settings.left_gripper_max_width_mm, 96.0)
+        self.assertEqual(settings.right_gripper_max_width_mm, 66.0)
+
     def test_piper_yaml_real_defaults(self):
         config = load_robot_config("piper")
 
@@ -114,6 +140,35 @@ class PiperCanConfigTest(unittest.TestCase):
 
 
 class PiperUnitsTest(unittest.TestCase):
+    def test_sdk_arm_prefers_controller_gripper_parameter_feedback(self):
+        sdk = mock.Mock()
+        sdk.GetSDKGripperRangeParam.return_value = (0.0, 0.07)
+        sdk.GetGripperTeachingPendantParamFeedback.side_effect = [
+            SimpleNamespace(
+                time_stamp=10.0,
+                arm_gripper_teaching_param_feedback=SimpleNamespace(
+                    max_range_config=0
+                ),
+            ),
+            SimpleNamespace(
+                time_stamp=11.0,
+                arm_gripper_teaching_param_feedback=SimpleNamespace(
+                    max_range_config=100
+                ),
+            ),
+        ]
+        arm = PiperSdkArm.__new__(PiperSdkArm)
+        arm.port = "can0"
+        arm.arm = sdk
+
+        gripper_range = arm.read_gripper_range(timeout_s=0.1)
+
+        self.assertEqual(
+            gripper_range,
+            PiperGripperRange(0, 100_000, "controller"),
+        )
+        sdk.ArmParamEnquiryAndConfig.assert_called_once_with(0x04)
+
     def test_q_to_piper_mdeg_matches_xhuman_home_pose(self):
         q = np.zeros(len(JOINT_NAMES), dtype=np.float32)
         q[JOINT_NAMES.index("left_joint5")] = np.deg2rad(25.0)
@@ -274,6 +329,26 @@ class PiperJointStreamerTest(unittest.TestCase):
 
 
 class PiperCanEnvironmentTest(unittest.TestCase):
+    def test_normalized_openings_use_each_discovered_gripper_range(self):
+        environment = PiperCanEnvironment(
+            PiperCanSettings(left_port="can0", right_port="can1")
+        )
+        environment.streamer = mock.Mock()
+        environment.gripper_ranges = {
+            "left": PiperGripperRange(5000, 100000, "controller"),
+            "right": PiperGripperRange(1000, 80000, "controller"),
+        }
+
+        targets = environment.set_gripper_openings(
+            {"left": 0.0, "right": 1.0},
+            fallback_max_width_mm=66.0,
+        )
+
+        self.assertEqual(targets, {"left": 5000, "right": 80000})
+        environment.streamer.set_gripper_targets_microm.assert_called_once_with(
+            targets
+        )
+
     def test_move_home_temporarily_uses_slow_joint_limit(self):
         settings = PiperCanSettings(
             left_port="can0",
@@ -301,6 +376,24 @@ class PiperCanEnvironmentTest(unittest.TestCase):
         environment.streamer.wait_until_targets.assert_called_once_with(
             timeout_s=12.0,
             tolerance_mdeg=2000.0,
+        )
+
+    def test_backend_uses_per_side_gripper_widths_for_same_normalized_opening(self):
+        environment = mock.Mock()
+        backend = PiperBackend(
+            environment,
+            joint_names=tuple(JOINT_NAMES),
+            max_width_mm=66.0,
+            side_max_width_mm={"left": 96.0, "right": 66.0},
+        )
+        q = np.zeros(len(JOINT_NAMES), dtype=np.float32)
+
+        backend.write(q, {"left": 1.0, "right": 1.0})
+
+        environment.set_q.assert_called_once_with(q, tuple(JOINT_NAMES))
+        environment.set_gripper_openings.assert_called_once_with(
+            {"left": 1.0, "right": 1.0},
+            fallback_max_width_mm={"left": 96.0, "right": 66.0},
         )
 
 

@@ -31,6 +31,33 @@ SIDE_NAMES = ("left", "right")
 
 
 @dataclass(frozen=True)
+class PiperGripperRange:
+    """One Piper gripper command range, in the SDK's micrometer units."""
+
+    min_microm: int
+    max_microm: int
+    source: str
+
+    def __post_init__(self) -> None:
+        if self.max_microm <= self.min_microm:
+            raise ValueError("gripper max_microm must be greater than min_microm")
+
+    @property
+    def min_mm(self) -> float:
+        return self.min_microm / 1000.0
+
+    @property
+    def max_mm(self) -> float:
+        return self.max_microm / 1000.0
+
+    def command_for_opening(self, opening: float) -> int:
+        fraction = float(np.clip(opening, 0.0, 1.0))
+        return int(
+            round(self.min_microm + fraction * (self.max_microm - self.min_microm))
+        )
+
+
+@dataclass(frozen=True)
 class PiperCanSettings:
     """Resolved Piper real-teleop settings from robot defaults + local rig."""
 
@@ -47,6 +74,8 @@ class PiperCanSettings:
     speed_percent: int = 80
     enable_timeout_s: float = 10.0
     gripper_effort: int = 1000
+    left_gripper_max_width_mm: float | None = None
+    right_gripper_max_width_mm: float | None = None
 
 
 def load_piper_can_settings(
@@ -63,6 +92,7 @@ def load_piper_can_settings(
         rig: dict[str, Any] = yaml.safe_load(handle) or {}
 
     can = (((rig.get("robots") or {}).get("piper") or {}).get("can") or {})
+    gripper = (((rig.get("robots") or {}).get("piper") or {}).get("gripper") or {})
     if not isinstance(can, dict):
         raise SystemExit(
             f"Missing or invalid 'robots.piper.can' section in {rig_config}."
@@ -87,7 +117,22 @@ def load_piper_can_settings(
         home_tolerance_deg=defaults.home_tolerance_deg,
         speed_percent=defaults.speed_percent,
         gripper_effort=defaults.gripper_effort,
+        left_gripper_max_width_mm=_optional_gripper_width_mm(gripper, "left"),
+        right_gripper_max_width_mm=_optional_gripper_width_mm(gripper, "right"),
     )
+
+
+def _optional_gripper_width_mm(gripper: dict[str, Any], side: str) -> float | None:
+    value = gripper.get(f"{side}_max_width_mm")
+    if value is None:
+        value_m = gripper.get(f"{side}_max_width_m")
+        if value_m is None:
+            return None
+        value = float(value_m) * 1000.0
+    value_mm = float(value)
+    if value_mm <= 0.0:
+        raise SystemExit(f"robots.piper.gripper.{side}_max_width_mm must be > 0.")
+    return value_mm
 
 
 def piper_arm_joint_indices(
@@ -163,6 +208,7 @@ class PiperArm(Protocol):
     port: str
 
     def read_mdeg(self) -> np.ndarray: ...
+    def read_gripper_range(self, timeout_s: float = 1.0) -> PiperGripperRange: ...
     def send_mdeg(self, cmd: np.ndarray) -> None: ...
     def send_gripper_microm(self, opening_microm: int, effort: int) -> None: ...
     def disconnect(self) -> None: ...
@@ -227,6 +273,44 @@ class PiperSdkArm:
             ],
             dtype=np.int64,
         )
+
+    def read_gripper_range(self, timeout_s: float = 1.0) -> PiperGripperRange:
+        """Read this controller's gripper range, falling back to SDK parameters.
+
+        ``GetSDKGripperRangeParam`` is only a process-local SDK setting. The
+        0x477/0x47E query is what obtains the gripper type/range configured in
+        this particular arm controller.
+        """
+        sdk_min_m, sdk_max_m = self.arm.GetSDKGripperRangeParam()
+        sdk_range = PiperGripperRange(
+            min_microm=int(round(float(sdk_min_m) * 1_000_000.0)),
+            max_microm=int(round(float(sdk_max_m) * 1_000_000.0)),
+            source="sdk",
+        )
+        previous = self.arm.GetGripperTeachingPendantParamFeedback()
+        previous_timestamp = float(previous.time_stamp)
+        self.arm.ArmParamEnquiryAndConfig(0x04)
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while time.monotonic() <= deadline:
+            feedback = self.arm.GetGripperTeachingPendantParamFeedback()
+            timestamp = float(feedback.time_stamp)
+            params = feedback.arm_gripper_teaching_param_feedback
+            max_range_mm = int(params.max_range_config)
+            if timestamp > previous_timestamp and max_range_mm > 0:
+                return PiperGripperRange(
+                    min_microm=sdk_range.min_microm,
+                    max_microm=max_range_mm * 1000,
+                    source="controller",
+                )
+            time.sleep(0.02)
+        log.warning(
+            "[%s] Controller did not return gripper parameters; using SDK range "
+            "%.1f..%.1f mm.",
+            self.port,
+            sdk_range.min_mm,
+            sdk_range.max_mm,
+        )
+        return sdk_range
 
     def send_mdeg(self, cmd: np.ndarray) -> None:
         values = [int(v) for v in np.asarray(cmd, dtype=np.int64)[:ARM_JOINT_COUNT]]
@@ -461,6 +545,7 @@ class PiperCanEnvironment:
         self.settings = settings
         self.arm_factory = arm_factory
         self.arms: dict[str, PiperArm] = {}
+        self.gripper_ranges: dict[str, PiperGripperRange] = {}
         self.streamer: PiperJointStreamer | None = None
 
     def connect(self) -> None:
@@ -477,6 +562,48 @@ class PiperCanEnvironment:
                 self.settings.enable_timeout_s,
                 self.settings.gripper_effort,
             )
+            try:
+                discovered = self.arms[side].read_gripper_range()
+            except Exception as exc:  # noqa: BLE001 - discovery has safe fallback.
+                log.warning(
+                    "Piper %s on %s cannot report its gripper range: %s",
+                    side,
+                    port,
+                    exc,
+                )
+                continue
+            configured_max_mm = getattr(
+                self.settings, f"{side}_gripper_max_width_mm"
+            )
+            if configured_max_mm is not None:
+                discovered = PiperGripperRange(
+                    min_microm=discovered.min_microm,
+                    max_microm=int(round(configured_max_mm * 1000.0)),
+                    source="rig override",
+                )
+            self.gripper_ranges[side] = discovered
+            log.info(
+                "Piper %s gripper range: %.1f..%.1f mm (%s).",
+                side,
+                discovered.min_mm,
+                discovered.max_mm,
+                discovered.source,
+            )
+
+    def start_streaming_current_pose(self) -> None:
+        """Start the command stream without moving arm joints."""
+        if not self.arms:
+            raise RuntimeError("connect() before start_streaming_current_pose()")
+        if self.streamer is not None:
+            return
+        self.streamer = PiperJointStreamer(
+            self.arms,
+            command_rate_hz=self.settings.command_rate_hz,
+            max_joint_speed_deg_s=self.settings.max_joint_speed_deg_s,
+            max_joint_acceleration_deg_s2=self.settings.max_joint_acceleration_deg_s2,
+            gripper_effort=self.settings.gripper_effort,
+        )
+        self.streamer.start()
 
     def home(self, home_targets_mdeg: dict[str, np.ndarray]) -> None:
         if not self.arms:
@@ -531,6 +658,35 @@ class PiperCanEnvironment:
         }
         self.streamer.set_gripper_targets_microm(targets)
 
+    def set_gripper_openings(
+        self,
+        openings: dict[str, float],
+        *,
+        fallback_max_width_mm: float | dict[str, float],
+    ) -> dict[str, int]:
+        """Scale normalized openings with each connected Piper's own range."""
+        if self.streamer is None:
+            raise RuntimeError("home() before set_gripper_openings()")
+        targets: dict[str, int] = {}
+        for side, opening in openings.items():
+            fallback_mm = (
+                fallback_max_width_mm.get(side)
+                if isinstance(fallback_max_width_mm, dict)
+                else fallback_max_width_mm
+            )
+            if fallback_mm is None or float(fallback_mm) <= 0.0:
+                raise ValueError(f"missing positive fallback width for {side}")
+            gripper_range = self.gripper_ranges.get(side)
+            if gripper_range is None:
+                gripper_range = PiperGripperRange(
+                    0,
+                    int(round(float(fallback_mm) * 1000.0)),
+                    "robot config fallback",
+                )
+            targets[side] = gripper_range.command_for_opening(opening)
+        self.streamer.set_gripper_targets_microm(targets)
+        return targets
+
     def set_targets(self, targets_mdeg: dict[str, np.ndarray]) -> None:
         if self.streamer is None:
             raise RuntimeError("home() before set_targets()")
@@ -566,6 +722,7 @@ class PiperCanEnvironment:
                 except Exception as exc:  # pragma: no cover - defensive cleanup
                     log.warning("Failed to disconnect Piper %s: %s", arm.port, exc)
             self.arms.clear()
+            self.gripper_ranges.clear()
             self.streamer = None
 
 
@@ -575,6 +732,7 @@ __all__ = [
     "PiperCanEnvironment",
     "PiperCanSettings",
     "PiperJointStreamer",
+    "PiperGripperRange",
     "PiperSdkArm",
     "format_mdeg",
     "load_piper_can_settings",
