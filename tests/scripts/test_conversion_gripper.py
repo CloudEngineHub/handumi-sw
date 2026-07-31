@@ -7,9 +7,10 @@ import numpy as np
 
 from handumi.dataset.raw import LEFT_GRIPPER_INDEX, RIGHT_GRIPPER_INDEX
 from handumi.scripts.conversion import (
+    _piper_command_states_from_rollout,
     _resolve_cli_profile,
     _resolve_conversion_tcp_calibration,
-    _piper_command_states_from_rollout,
+    _resolve_retarget_mode,
     _write_gripper_joints,
     build_parser,
     process_episode,
@@ -152,36 +153,66 @@ class ConversionTcpCalibrationTest(unittest.TestCase):
 
 
 class ConversionProfileTest(unittest.TestCase):
-    def test_piper_profile_selects_replay_parity_defaults(self):
-        parser = build_parser()
-        args = parser.parse_args(["dataset", "--robot", "piper"])
+    """No embodiment gets a special-cased retarget mode on the CLI.
 
-        _resolve_cli_profile(parser, args)
+    `--retarget-mode auto` is the default for every robot and resolves from the
+    source dataset's workspace metadata, using the same rule replay applies, so
+    conversion and replay cannot disagree about a dataset.
+    """
 
-        self.assertEqual(args.embodiment, "piper")
-        self.assertEqual(args.retarget_mode, "absolute-table")
-        self.assertEqual(
-            args.deployment_calibration,
-            Path("configs/calibration/table/piper.yaml"),
-        )
-        self.assertIsNone(args.gripper_max_width_m)
-
-    def test_piper_profile_rejects_non_parity_retarget_mode(self):
-        parser = build_parser()
-        args = parser.parse_args(
-            ["dataset", "--robot", "piper", "--retarget-mode", "local-relative"]
-        )
-
-        with self.assertRaises(SystemExit):
-            _resolve_cli_profile(parser, args)
-
-    def test_default_profile_remains_axol_local_relative(self):
+    def test_default_profile_only_resolves_embodiment(self):
         parser = build_parser()
         args = parser.parse_args(["dataset"])
 
         _resolve_cli_profile(parser, args)
 
         self.assertEqual(args.embodiment, "axol")
+        self.assertEqual(args.retarget_mode, "auto")
+        self.assertIsNone(args.gripper_max_width_m)
+
+    def test_explicit_embodiment_is_kept_as_is(self):
+        parser = build_parser()
+        args = parser.parse_args(["dataset", "--robot", "piper"])
+
+        _resolve_cli_profile(parser, args)
+
+        self.assertEqual(args.embodiment, "piper")
+        self.assertEqual(args.retarget_mode, "auto")
+
+    def test_auto_resolves_to_absolute_table_from_table_workspace(self):
+        parser = build_parser()
+        args = parser.parse_args(["dataset", "--robot", "piper"])
+        _resolve_cli_profile(parser, args)
+        info = {"handumi": {"tracking_workspace": "table"}}
+
+        _resolve_retarget_mode(parser, args, info)
+
+        self.assertEqual(args.retarget_mode, "absolute-table")
+        self.assertEqual(
+            args.deployment_calibration,
+            Path("configs/calibration/table/piper.yaml"),
+        )
+
+    def test_auto_resolves_to_local_relative_without_table_workspace(self):
+        parser = build_parser()
+        args = parser.parse_args(["dataset", "--robot", "axol"])
+        _resolve_cli_profile(parser, args)
+        info = {"handumi": {}}
+
+        _resolve_retarget_mode(parser, args, info)
+
+        self.assertEqual(args.retarget_mode, "local-relative")
+
+    def test_explicit_retarget_mode_overrides_auto_detection(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            ["dataset", "--robot", "axol", "--retarget-mode", "local-relative"]
+        )
+        _resolve_cli_profile(parser, args)
+        info = {"handumi": {"tracking_workspace": "table"}}
+
+        _resolve_retarget_mode(parser, args, info)
+
         self.assertEqual(args.retarget_mode, "local-relative")
 
     def test_absolute_table_dataset_pairs_are_exact_replay_qpos(self):
