@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from handumi.config import DEFAULT_RIG_CONFIG
+from handumi.feetech import FeetechGripperSampler
 from handumi.feetech.setup import list_feetech_serial_ports
 from handumi.real.registry import REAL_BACKEND_NAMES, make_real_backend
 from handumi.robots.registry import load_embodiment, resolve_home_q
@@ -198,6 +199,7 @@ def _run_real() -> None:
 
     calibration = _load_required_calibration(args)
     tracker = build_tracker(args, calibration, reset_workspace_on_x=False)
+    gripper_pair = None
     grippers = None
     enabled_sides = _enabled_sides(args.side)
     real_env = make_real_backend(
@@ -224,7 +226,17 @@ def _run_real() -> None:
         real_log.info("Starting tracking before moving real arms.")
         tracker.start()
         tracker_started = True
-        grippers = connect_feetech(args)
+        gripper_pair = connect_feetech(args)
+        if gripper_pair is not None:
+            # Keep serial retries off the real-time control loop.  In
+            # particular, a transient Feetech timeout must not abort teleop:
+            # the sampler retains the last valid widths while it retries in
+            # the background, just like the recording paths do.
+            grippers = FeetechGripperSampler(
+                gripper_pair,
+                sample_hz=max(100.0, motion_config.input_rate_hz),
+            )
+            grippers.start()
 
         real_env.setup(repair=not args.skip_can_repair)
         real_env.connect()
@@ -359,7 +371,9 @@ def _run_real() -> None:
                 real_env.disconnect()
             finally:
                 if grippers is not None:
-                    grippers.close()
+                    grippers.stop()
+                if gripper_pair is not None:
+                    gripper_pair.close()
                 if tracker_started:
                     tracker.stop()
 

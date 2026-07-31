@@ -109,6 +109,52 @@ def test_player_applies_ema_at_the_fixed_output_rate():
     assert latest[1]["left"] == pytest.approx(1.0)
 
 
+def test_player_does_not_apply_arm_playback_delay_to_gripper_target():
+    published: list[tuple[float, float]] = []
+    received_new_gripper = threading.Event()
+
+    def write(q, openings):
+        published.append((float(q[0]), openings["left"]))
+        if openings["left"] == 1.0:
+            received_new_gripper.set()
+
+    player = DelayedJointCommandPlayer(
+        write,
+        command_rate_hz=100.0,
+        delay_s=0.2,
+    )
+    now = time.perf_counter()
+    player.start(np.array([0.0]), {"left": 0.0}, time_s=now)
+    try:
+        assert _wait_until(lambda: bool(published))
+        player.push(np.array([1.0]), {"left": 1.0}, time_s=now + 0.01)
+        assert received_new_gripper.wait(timeout=0.1)
+    finally:
+        player.stop()
+
+    first_new_gripper = next(command for command in published if command[1] == 1.0)
+    assert first_new_gripper[0] == pytest.approx(0.0)
+
+
+def test_player_slew_limits_recovered_gripper_jump_without_filtering_ticks():
+    player = DelayedJointCommandPlayer(
+        lambda q, openings: None,
+        command_rate_hz=100.0,
+        delay_s=0.0,
+        gripper_max_rate_per_s=10.0,
+    )
+
+    _, initial = player._smooth(
+        np.array([0.0]), {"left": 0.0}, alpha=1.0, gripper_max_step=0.1
+    )
+    _, recovered = player._smooth(
+        np.array([0.0]), {"left": 1.0}, alpha=1.0, gripper_max_step=0.1
+    )
+
+    assert initial["left"] == 0.0
+    assert recovered["left"] == pytest.approx(0.1)
+
+
 def _wait_until(predicate, timeout_s=0.2):
     deadline = time.perf_counter() + timeout_s
     while time.perf_counter() < deadline:

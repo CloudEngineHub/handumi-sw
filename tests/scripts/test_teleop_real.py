@@ -5,6 +5,7 @@ from unittest import mock
 
 import numpy as np
 
+from handumi.feetech import GripperSample, GripperWidths
 from handumi.feetech.calibration import FeetechConfig, GripperCalibration
 from handumi.scripts.teleop_real import (
     _enabled_tracking_ok,
@@ -14,6 +15,7 @@ from handumi.scripts.teleop_real import (
     parse_args,
 )
 from handumi.teleop.common import start_sides as _start_sides
+from handumi.teleop.common import latest_widths as _latest_widths
 from handumi.teleop.motion import (
     DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
     DEFAULT_COMMAND_RATE_HZ,
@@ -24,6 +26,18 @@ from handumi.teleop.motion import (
 
 
 class TeleopRealArgsTest(unittest.TestCase):
+    def test_latest_widths_uses_sampler_cache(self):
+        widths = GripperWidths.zero()
+        sampler = mock.Mock()
+        sampler.latest.return_value = GripperSample(
+            widths=widths,
+            sample_time_ns=123,
+            sequence=1,
+        )
+
+        self.assertIs(_latest_widths(sampler), widths)
+        sampler.read_normalized_widths.assert_not_called()
+
     def test_defaults_target_piper_without_space_start(self):
         args = parse_args(["--device", "pico"])
 

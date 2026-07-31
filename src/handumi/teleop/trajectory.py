@@ -10,6 +10,8 @@ from typing import Callable, Mapping
 
 import numpy as np
 
+DEFAULT_GRIPPER_MAX_RATE_PER_S = 10.0
+
 
 @dataclass(frozen=True)
 class JointCommand:
@@ -133,13 +135,17 @@ class DelayedJointCommandPlayer:
         command_rate_hz: float,
         delay_s: float,
         ema_time_constant_s: float = 0.0,
+        gripper_max_rate_per_s: float = 0.0,
     ) -> None:
         if command_rate_hz <= 0.0:
             raise ValueError("command_rate_hz must be > 0")
         if ema_time_constant_s < 0.0:
             raise ValueError("ema_time_constant_s must be >= 0")
+        if gripper_max_rate_per_s < 0.0:
+            raise ValueError("gripper_max_rate_per_s must be >= 0")
         self.command_rate_hz = float(command_rate_hz)
         self.ema_time_constant_s = float(ema_time_constant_s)
+        self.gripper_max_rate_per_s = float(gripper_max_rate_per_s)
         self.buffer = DelayedJointCommandBuffer(delay_s)
         self._write = write
         self._stop = threading.Event()
@@ -147,6 +153,8 @@ class DelayedJointCommandPlayer:
         self._thread: threading.Thread | None = None
         self._latest_lock = threading.Lock()
         self._latest: tuple[np.ndarray, dict[str, float]] | None = None
+        self._target_openings_lock = threading.Lock()
+        self._target_openings: dict[str, float] = {}
         self._filtered_q: np.ndarray | None = None
         self._filtered_openings: dict[str, float] = {}
 
@@ -164,6 +172,10 @@ class DelayedJointCommandPlayer:
             openings,
             time_s=time.perf_counter() if time_s is None else time_s,
         )
+        with self._target_openings_lock:
+            self._target_openings = {
+                side: float(value) for side, value in openings.items()
+            }
         self._stop.clear()
         self._error = None
         with self._latest_lock:
@@ -186,6 +198,10 @@ class DelayedJointCommandPlayer:
     ) -> None:
         self.raise_if_failed()
         self.buffer.push(q, openings, time_s=time_s)
+        with self._target_openings_lock:
+            self._target_openings = {
+                side: float(value) for side, value in openings.items()
+            }
 
     def stop(self) -> None:
         self._stop.set()
@@ -222,7 +238,15 @@ class DelayedJointCommandPlayer:
             while not self._stop.is_set():
                 command = self.buffer.sample(next_tick)
                 if command is not None:
-                    filtered = self._smooth(*command, alpha=alpha)
+                    q, _delayed_openings = command
+                    with self._target_openings_lock:
+                        immediate_openings = self._target_openings.copy()
+                    filtered = self._smooth(
+                        q,
+                        immediate_openings,
+                        alpha=alpha,
+                        gripper_max_step=self.gripper_max_rate_per_s * period_s,
+                    )
                     self._write(*filtered)
                     with self._latest_lock:
                         self._latest = (filtered[0].copy(), filtered[1].copy())
@@ -243,12 +267,25 @@ class DelayedJointCommandPlayer:
         openings: dict[str, float],
         *,
         alpha: float,
+        gripper_max_step: float = 0.0,
     ) -> tuple[np.ndarray, dict[str, float]]:
         if self._filtered_q is None or alpha >= 1.0:
             self._filtered_q = q.copy()
         else:
             self._filtered_q += alpha * (q - self._filtered_q)
-        self._filtered_openings = openings.copy()
+        if not self._filtered_openings or gripper_max_step <= 0.0:
+            self._filtered_openings = openings.copy()
+        else:
+            for side, target in openings.items():
+                previous = self._filtered_openings.get(side, target)
+                delta = float(
+                    np.clip(
+                        target - previous,
+                        -gripper_max_step,
+                        gripper_max_step,
+                    )
+                )
+                self._filtered_openings[side] = previous + delta
         return self._filtered_q.copy(), self._filtered_openings.copy()
 
 
@@ -268,6 +305,7 @@ class TeleopCommandStream:
             command_rate_hz=command_rate_hz,
             delay_s=delay_s,
             ema_time_constant_s=ema_time_constant_s,
+            gripper_max_rate_per_s=DEFAULT_GRIPPER_MAX_RATE_PER_S,
         )
 
     def submit(
@@ -301,6 +339,7 @@ class TeleopCommandStream:
 
 
 __all__ = [
+    "DEFAULT_GRIPPER_MAX_RATE_PER_S",
     "DelayedJointCommandBuffer",
     "DelayedJointCommandPlayer",
     "JointCommand",

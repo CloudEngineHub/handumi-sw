@@ -337,9 +337,13 @@ def tracking_sample_time_ns(sample: Any) -> int:
 
 
 def latest_widths(grippers: Any):
-    return (
-        zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
-    )
+    if grippers is None:
+        return zero_gripper_widths()
+    latest = getattr(grippers, "latest", None)
+    if callable(latest):
+        sample = latest()
+        return zero_gripper_widths() if sample is None else sample.widths
+    return grippers.read_normalized_widths()
 
 
 def sample_state(sample, widths=None) -> np.ndarray:
