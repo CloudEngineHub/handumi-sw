@@ -1,7 +1,9 @@
+import sys
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
-from handumi.feetech.bus import FeetechBus
+from handumi.feetech.bus import FeetechBus, _install_reliable_packet_timeout
 
 
 class _FakePacket:
@@ -40,6 +42,48 @@ def _bus_with(packet: _FakePacket) -> FeetechBus:
 
 
 class FeetechBusRetryTest(unittest.TestCase):
+    def test_open_configures_serial_port_exactly_once(self):
+        class _Port:
+            tx_time_per_byte = 0.01
+
+            def __init__(self, name):
+                self.name = name
+                self.baud_calls = []
+
+            def setBaudRate(self, baudrate):
+                self.baud_calls.append(baudrate)
+                return True
+
+            def closePort(self):
+                pass
+
+        port = _Port("/dev/test")
+        sdk = SimpleNamespace(
+            PortHandler=lambda _name: port,
+            PacketHandler=lambda _protocol: object(),
+        )
+        bus = FeetechBus("/dev/test", baudrate=1_000_000)
+
+        with mock.patch.dict(sys.modules, {"scservo_sdk": sdk}):
+            bus.open()
+
+        self.assertEqual(port.baud_calls, [1_000_000])
+
+    def test_reliable_timeout_includes_usb_scheduler_margin(self):
+        class _Port:
+            tx_time_per_byte = 0.01
+
+            def getCurrentTime(self):
+                return 123.0
+
+        port = _Port()
+        _install_reliable_packet_timeout(port)
+
+        port.setPacketTimeout(8)
+
+        self.assertEqual(port.packet_start_time, 123.0)
+        self.assertAlmostEqual(port.packet_timeout, 50.11)
+
     def test_read_position_retries_serial_io_errors(self):
         packet = _FakePacket(
             reads=[
@@ -82,6 +126,20 @@ class FeetechBusRetryTest(unittest.TestCase):
         bus = _bus_with(packet)
 
         self.assertFalse(bus.ping(1))
+
+    def test_ping_model_releases_port_before_retry(self):
+        class _Port:
+            is_using = True
+
+            def clearPort(self):
+                self.is_using = False
+
+        packet = _FakePacket(pings=[IndexError(), (777, 0, 0)])
+        bus = _bus_with(packet)
+        bus._port_handler = _Port()
+
+        self.assertEqual(bus.ping_model(1, retries=1), 777)
+        self.assertFalse(bus._port_handler.is_using)
 
 
 if __name__ == "__main__":

@@ -63,11 +63,15 @@ class FeetechGripperSampler:
         *,
         sample_hz: float = 100.0,
         buffer_seconds: float = 1.0,
+        reconnect_after_errors: int = 2,
     ) -> None:
         if sample_hz <= 0:
             raise ValueError("sample_hz must be greater than zero.")
+        if reconnect_after_errors <= 0:
+            raise ValueError("reconnect_after_errors must be greater than zero.")
         self.grippers = grippers
         self.sample_hz = float(sample_hz)
+        self.reconnect_after_errors = int(reconnect_after_errors)
         self._samples: deque[GripperSample] = deque(
             maxlen=max(8, int(round(sample_hz * buffer_seconds)))
         )
@@ -77,6 +81,8 @@ class FeetechGripperSampler:
         self._sequence = 0
         self._last_error: str | None = None
         self._consecutive_errors = 0
+        self._total_errors = 0
+        self._reconnect_count = 0
 
     def start(self, *, timeout_s: float = 2.0) -> None:
         if self._thread is not None:
@@ -119,6 +125,11 @@ class FeetechGripperSampler:
             samples, key=lambda sample: abs(sample.sample_time_ns - target_time_ns)
         )
 
+    def samples(self) -> tuple[GripperSample, ...]:
+        """Return a stable snapshot of the native-rate sample history."""
+        with self._lock:
+            return tuple(self._samples)
+
     @property
     def last_error(self) -> str | None:
         with self._lock:
@@ -129,13 +140,28 @@ class FeetechGripperSampler:
         with self._lock:
             return self._consecutive_errors
 
+    @property
+    def reconnect_count(self) -> int:
+        with self._lock:
+            return self._reconnect_count
+
+    @property
+    def total_errors(self) -> int:
+        with self._lock:
+            return self._total_errors
+
     def _run(self) -> None:
         interval_s = 1.0 / self.sample_hz
         next_sample = time.perf_counter()
         while not self._stop.is_set():
             started_ns = time.monotonic_ns()
             try:
-                widths = self.grippers.read_normalized_widths()
+                read_fast = getattr(
+                    self.grippers,
+                    "read_normalized_widths_fast",
+                    self.grippers.read_normalized_widths,
+                )
+                widths = read_fast()
                 finished_ns = time.monotonic_ns()
                 self._sequence += 1
                 sample = GripperSample(
@@ -144,16 +170,41 @@ class FeetechGripperSampler:
                     sequence=self._sequence,
                 )
                 with self._lock:
+                    recovered_after = self._consecutive_errors
                     self._samples.append(sample)
                     self._last_error = None
                     self._consecutive_errors = 0
+                if recovered_after:
+                    log.info(
+                        "Feetech sampling recovered after %d failed read(s).",
+                        recovered_after,
+                    )
             except Exception as exc:  # noqa: BLE001 - health gate owns recovery.
                 with self._lock:
                     self._last_error = str(exc)
                     self._consecutive_errors += 1
+                    self._total_errors += 1
                     count = self._consecutive_errors
                 if count == 1:
                     log.warning("Feetech sampling failed: %s", exc)
+                if count % self.reconnect_after_errors == 0:
+                    reconnect = getattr(self.grippers, "reconnect", None)
+                    if callable(reconnect):
+                        try:
+                            reconnect()
+                        except Exception as reconnect_exc:  # noqa: BLE001
+                            with self._lock:
+                                self._last_error = (
+                                    f"{exc}; reconnect failed: {reconnect_exc}"
+                                )
+                            log.warning("Feetech reconnect failed: %s", reconnect_exc)
+                        else:
+                            with self._lock:
+                                self._reconnect_count += 1
+                            log.info(
+                                "Feetech buses reopened after %d consecutive read errors.",
+                                count,
+                            )
 
             next_sample += interval_s
             delay = next_sample - time.perf_counter()
@@ -216,12 +267,35 @@ class FeetechGripperPair:
         self._right_unwrap = _EncoderUnwrapper()
 
     def open(self) -> None:
-        for bus in self._buses.values():
-            bus.open()
+        opened: list[FeetechBus] = []
+        try:
+            for bus in self._buses.values():
+                bus.open()
+                opened.append(bus)
+        except BaseException:
+            for bus in reversed(opened):
+                bus.close()
+            raise
 
     def close(self) -> None:
         for bus in self._buses.values():
             bus.close()
+
+    def reconnect(self) -> None:
+        """Clear and reopen both adapters after an SDK/USB communication stall.
+
+        A Feetech ping performs two serial transactions and proved less reliable
+        than the position read itself on the HandUMI adapters.  The sampler's
+        next real position read is therefore the reconnect health check.
+        """
+        for bus in self._buses.values():
+            try:
+                bus.reset_io()
+            except RuntimeError:
+                pass
+        self.close()
+        time.sleep(0.02)
+        self.open()
 
     def __enter__(self) -> "FeetechGripperPair":
         self.open()
@@ -231,11 +305,28 @@ class FeetechGripperPair:
         self.close()
 
     def read_normalized_widths(self) -> GripperWidths:
+        return self._read_normalized_widths(retries=4, retry_delay_s=0.05)
+
+    def read_normalized_widths_fast(self) -> GripperWidths:
+        """One transaction per side for latency-sensitive background sampling."""
+        return self._read_normalized_widths(retries=0, retry_delay_s=0.0)
+
+    def _read_normalized_widths(
+        self, *, retries: int, retry_delay_s: float
+    ) -> GripperWidths:
         left = _read_width(
-            self._buses[self._left_port], self.config.left, self._left_unwrap
+            self._buses[self._left_port],
+            self.config.left,
+            self._left_unwrap,
+            retries=retries,
+            retry_delay_s=retry_delay_s,
         )
         right = _read_width(
-            self._buses[self._right_port], self.config.right, self._right_unwrap
+            self._buses[self._right_port],
+            self.config.right,
+            self._right_unwrap,
+            retries=retries,
+            retry_delay_s=retry_delay_s,
         )
         return GripperWidths(
             left=left["width_m"],
@@ -253,8 +344,17 @@ def _read_width(
     bus: FeetechBus,
     calibration: GripperCalibration,
     unwrap: _EncoderUnwrapper,
+    *,
+    retries: int = 4,
+    retry_delay_s: float = 0.05,
 ) -> dict[str, float | int]:
-    ticks = unwrap(bus.read_position(calibration.servo_id))
+    ticks = unwrap(
+        bus.read_position(
+            calibration.servo_id,
+            retries=retries,
+            retry_delay_s=retry_delay_s,
+        )
+    )
     normalized = calibration.normalized_width(ticks)
     width_mm = calibration.width_mm(ticks)
     return {

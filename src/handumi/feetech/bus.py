@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from types import MethodType
 from typing import Any, Iterable
 
 
@@ -32,11 +33,17 @@ class FeetechBus:
             ) from exc
 
         port_handler = sdk.PortHandler(self.port)
-        if not port_handler.openPort():
-            raise RuntimeError(f"Could not open Feetech port {self.port}.")
+        _install_reliable_packet_timeout(port_handler)
+        # PortHandler.openPort() already delegates to setBaudRate() and the
+        # latter reopens the serial device. Calling both toggles every adapter
+        # twice, adds substantial reconnect latency, and can reset USB boards
+        # through DTR. Configure and open exactly once.
         if not port_handler.setBaudRate(self.baudrate):
             port_handler.closePort()
-            raise RuntimeError(f"Could not set Feetech baudrate {self.baudrate}.")
+            raise RuntimeError(
+                f"Could not open Feetech port {self.port} at "
+                f"{self.baudrate} baud."
+            )
 
         self._sdk = sdk
         self._port_handler = port_handler
@@ -48,6 +55,15 @@ class FeetechBus:
         self._sdk = None
         self._port_handler = None
         self._packet_handler = None
+
+    def reset_io(self) -> None:
+        """Release a wedged SDK transaction and discard partial reply bytes."""
+        port = self._require_port()
+        clear = getattr(port, "clearPort", None)
+        if callable(clear):
+            clear()
+        if hasattr(port, "is_using"):
+            port.is_using = False
 
     def __enter__(self) -> "FeetechBus":
         self.open()
@@ -64,15 +80,20 @@ class FeetechBus:
             return False
         return _comm_success(comm, self._sdk) and _no_error(error)
 
-    def ping_model(self, servo_id: int) -> int | None:
+    def ping_model(self, servo_id: int, *, retries: int = 2) -> int | None:
         packet = self._require_packet()
-        try:
-            model_number, comm, error = packet.ping(self._require_port(), int(servo_id))
-        except _RETRYABLE_SDK_EXCEPTIONS:
-            return None
-        if not _comm_success(comm, self._sdk) or not _no_error(error):
-            return None
-        return int(model_number)
+        port = self._require_port()
+        for attempt in range(retries + 1):
+            try:
+                model_number, comm, error = packet.ping(port, int(servo_id))
+            except _RETRYABLE_SDK_EXCEPTIONS:
+                self.reset_io()
+            else:
+                if _comm_success(comm, self._sdk) and _no_error(error):
+                    return int(model_number)
+            if attempt < retries:
+                self.reset_io()
+        return None
 
     def scan(self, ids: Iterable[int]) -> list[int]:
         return [int(servo_id) for servo_id in ids if self.ping(int(servo_id))]
@@ -95,6 +116,11 @@ class FeetechBus:
                 # IndexError instead of reporting a clean failure. PySerial can
                 # also raise OSError/SerialException when the port reports ready
                 # but returns no bytes. Treat both as retryable bus I/O failures.
+                # These exceptional exits can bypass the SDK's normal release
+                # of its per-port transaction flag and make later calls fail as
+                # if another operation still owned the port.
+                if hasattr(port, "is_using"):
+                    port.is_using = False
                 last_error = _format_sdk_exception(exc)
             else:
                 if _comm_success(comm, self._sdk) and _no_error(error):
@@ -220,6 +246,23 @@ def _format_sdk_exception(exc: BaseException) -> str:
     if isinstance(exc, IndexError):
         return "truncated response"
     return f"{exc.__class__.__name__}: {exc}"
+
+
+def _install_reliable_packet_timeout(port: Any) -> None:
+    """Apply LeRobot's Feetech SDK timeout workaround to one port handler.
+
+    The PyPI SDK has shipped several incompatible timeout calculations.  A
+    50 ms receive allowance is long enough to survive USB scheduler jitter,
+    while runtime reads remain non-blocking to teleop because they happen in
+    the sampler thread and use a single transaction.
+    """
+
+    def set_packet_timeout(self: Any, packet_length: int) -> None:
+        self.packet_start_time = self.getCurrentTime()
+        transmission_ms = self.tx_time_per_byte * float(packet_length)
+        self.packet_timeout = transmission_ms + (self.tx_time_per_byte * 3.0) + 50.0
+
+    port.setPacketTimeout = MethodType(set_packet_timeout, port)
 
 
 _RETRYABLE_SDK_EXCEPTIONS = (IndexError, OSError)

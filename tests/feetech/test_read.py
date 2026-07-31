@@ -80,3 +80,24 @@ def test_teleop_gripper_read_fails_after_a_successful_port_scan() -> None:
         grippers.read_normalized_widths()
 
     assert left_packet.read_calls == 5
+
+
+def test_sampler_fast_path_never_runs_blocking_retry_train() -> None:
+    config = FeetechConfig(
+        port=None,
+        baudrate=1_000_000,
+        protocol_version=0,
+        left=GripperCalibration(1, 1000, 3000, 80.0, "/dev/ttyACM0"),
+        right=GripperCalibration(6, 1000, 3000, 80.0, "/dev/ttyACM1"),
+    )
+    grippers = FeetechGripperPair(config)
+    left_packet = _PacketWithPingButNoPosition()
+    grippers._buses = {
+        "/dev/ttyACM0": _bus(left_packet),
+        "/dev/ttyACM1": _bus(_PacketWithPingButNoPosition()),
+    }
+
+    with pytest.raises(RuntimeError, match="after 1 attempts"):
+        grippers.read_normalized_widths_fast()
+
+    assert left_packet.read_calls == 1
