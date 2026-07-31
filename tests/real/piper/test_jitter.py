@@ -280,8 +280,8 @@ def _run_sim(runtime, home_q: np.ndarray, args: argparse.Namespace) -> None:
     try:
         started = time.perf_counter()
         for sample in trajectory_samples(
-            runtime,
             home_q,
+            runtime.joint_names,
             duration_s=args.duration_s,
             period_s=args.trajectory_period_s,
             rate_hz=args.rate_hz,
@@ -317,7 +317,6 @@ def _run_real(runtime, home_q: np.ndarray, args: argparse.Namespace) -> None:
         repair=args.repair_can,
     )
     environment = PiperCanEnvironment(settings)
-    max_gripper_width_mm = runtime.config.gripper_max_width_m * 1000.0
     handle, writer = _csv_writer(args.csv, runtime.joint_names)
     errors_deg: list[float] = []
     target_to_command_errors_deg: list[float] = []
@@ -335,8 +334,8 @@ def _run_real(runtime, home_q: np.ndarray, args: argparse.Namespace) -> None:
             for number in range(1, 7)
         ]
         for sample in trajectory_samples(
-            runtime,
             home_q,
+            runtime.joint_names,
             duration_s=args.duration_s,
             period_s=args.trajectory_period_s,
             rate_hz=args.rate_hz,
@@ -344,12 +343,6 @@ def _run_real(runtime, home_q: np.ndarray, args: argparse.Namespace) -> None:
             actual_elapsed_s = time.perf_counter() - started
             target_mdeg = q_to_piper_mdeg(sample.q, runtime.joint_names)
             environment.set_targets(target_mdeg)
-            environment.set_gripper_widths_mm(
-                {
-                    side: opening * max_gripper_width_mm
-                    for side, opening in sample.gripper_openings.items()
-                }
-            )
             commands = environment.latest_commands_mdeg()
             feedback = environment.feedback_mdeg()
             command_q = piper_mdeg_to_q(

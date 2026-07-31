@@ -206,16 +206,29 @@ def _capture_live_ticks(bus: FeetechBus, servo_id: int, prompt: str, interval_s:
     initial: int | None = None
     latest: int | None = None
     while True:
-        latest = bus.read_position(servo_id)
-        if initial is None:
-            initial = latest
-        delta = latest - initial
-        sys.stdout.write(f"\r  ticks={latest:5d}  delta={delta:+6d}")
+        try:
+            latest = bus.read_position(servo_id)
+        except RuntimeError as exc:
+            if latest is None:
+                sys.stdout.write(f"\r  read failed: {exc}")
+            else:
+                sys.stdout.write(
+                    f"\r  ticks={latest:5d}  last read failed: {exc}"
+                )
+        else:
+            if initial is None:
+                initial = latest
+            delta = latest - initial
+            sys.stdout.write(f"\r  ticks={latest:5d}  delta={delta:+6d}")
         sys.stdout.flush()
         ready, _, _ = select.select([sys.stdin], [], [], interval_s)
         if ready:
             sys.stdin.readline()
             sys.stdout.write("\n")
+            if latest is None:
+                raise RuntimeError(
+                    f"Cannot capture servo {servo_id}: no valid encoder value was read."
+                )
             return latest
 
 
