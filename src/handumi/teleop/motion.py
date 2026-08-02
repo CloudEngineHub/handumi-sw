@@ -12,12 +12,12 @@ from handumi.teleop.common import DEFAULT_TELEOP_FPS, TeleopMotionSmoother
 from handumi.teleop.trajectory import TeleopCommandStream
 
 DEFAULT_COMMAND_RATE_HZ = 100.0
-# One 30 Hz source interval plus a small scheduling margin is enough to
-# interpolate between consecutive IK solutions without the 80 ms latency that
-# was previously used by simulation and recording.
-DEFAULT_TRAJECTORY_DELAY_MS = 60.0
-DEFAULT_COMMAND_EMA_TIME_CONSTANT_S = 0.02
-DEFAULT_POSITION_DEADBAND_MM = 0.5
+# This is configurable latency, not an extrapolation horizon. At 30 Hz, 30 ms
+# is slightly shorter than one 33.3 ms source interval, so playback may hold
+# the newest command whenever it lacks the next sample needed to interpolate.
+DEFAULT_TRAJECTORY_DELAY_MS = 50.0
+DEFAULT_COMMAND_EMA_TIME_CONSTANT_S = 0.04
+DEFAULT_POSITION_DEADBAND_MM = 1.0
 DEFAULT_ORIENTATION_DEADBAND_DEG = 0.25
 
 

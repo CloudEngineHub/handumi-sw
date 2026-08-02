@@ -16,6 +16,7 @@ def test_anchor_at_current_source_starts_from_named_home():
         home_q=home,
         enabled_sides=("left", "right"),
         source_world_to_robot_world=np.eye(3, dtype=np.float32),
+        translation_scale=1.0,
     )
     sources = {"left": _pose(0.3, 0.2, 1.0), "right": _pose(0.3, -0.2, 1.0)}
 
@@ -43,6 +44,7 @@ def test_tracking_loss_clears_anchors_and_holds_feedback():
         home_q=runtime.home_q(),
         enabled_sides=("right",),
         source_world_to_robot_world=np.eye(3, dtype=np.float32),
+        translation_scale=1.0,
     )
     held = runtime.home_q()
     held[runtime.arm_joint_indices("right")[0]] = 0.2
@@ -59,3 +61,33 @@ def test_tracking_loss_clears_anchors_and_holds_feedback():
         step.q[runtime.arm_joint_indices("right")],
         held[runtime.arm_joint_indices("right")],
     )
+
+
+def test_translation_scale_multiplies_relative_tcp_translation():
+    runtime = load_embodiment("openarmv1")
+    home = runtime.home_q()
+    sources = {"left": _pose(0.3, 0.2, 1.0), "right": _pose(0.3, -0.2, 1.0)}
+    moved = {**sources, "left": _pose(0.35, 0.2, 1.0)}
+    targets = []
+
+    for scale in (1.0, 2.0):
+        controller = TeleopController(
+            runtime,
+            home_q=home,
+            enabled_sides=("left",),
+            source_world_to_robot_world=np.eye(3, dtype=np.float32),
+            translation_scale=scale,
+        )
+        controller.anchor(sources, {"left": True, "right": True}, ("left",))
+        targets.append(
+            controller.step(
+                moved,
+                {"left": True, "right": True},
+                {"left": 0.0, "right": 0.0},
+            ).target_pose7["left"]
+        )
+
+    home_left, _ = runtime.solver_cls().fk_pose7(home)
+    delta_at_1x = targets[0][:3] - home_left[:3]
+    delta_at_2x = targets[1][:3] - home_left[:3]
+    np.testing.assert_allclose(delta_at_2x, 2.0 * delta_at_1x, atol=1e-6)

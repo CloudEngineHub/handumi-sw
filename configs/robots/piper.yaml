@@ -57,7 +57,7 @@ ik_weights:
   rest: 12.0
   # 4 deg per IK frame.
   max_joint_delta: 0.03490659
-  max_reach: 0.45
+  max_reach: 0.70
 real:
   backend: piper_can
   command_rate_hz: 100

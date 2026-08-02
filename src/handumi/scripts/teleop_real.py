@@ -86,7 +86,7 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--translation-scale",
         type=float,
-        default=1.0,
+        default=1.5,
         help="Scale HandUMI translation deltas before applying them to the robot TCP.",
     )
     parser.add_argument(

@@ -23,39 +23,6 @@ SIDE_CHOICES = ("left", "right", "both")
 # motion faster than a real backend is allowed to stream it.
 DEFAULT_TELEOP_FPS = 30
 DEFAULT_GRIPPER_SAMPLE_HZ = 200.0
-DEFAULT_JOINT_SMOOTHING_ALPHA = 0.5
-# Live teleop is direct by default: the newest tracked TCP pose produces the
-# newest IK command without a causal filter continuing to catch up after the
-# operator stops. The optional smoother remains available for explicit tuning.
-DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S = 0.0
-DEFAULT_POSITION_DEADBAND_M = 0.0
-DEFAULT_ORIENTATION_DEADBAND_RAD = 0.0
-
-
-class JointActionSmoother:
-    """Exponential moving average for post-IK joint commands.
-
-    ``alpha=1`` passes commands through unchanged. The filtered physical
-    command stays separate from the IK seed, so IK always follows the newest
-    controller pose.
-    """
-
-    def __init__(self, alpha: float = DEFAULT_JOINT_SMOOTHING_ALPHA) -> None:
-        if not 0.0 < alpha <= 1.0:
-            raise ValueError("alpha must be in (0, 1].")
-        self.alpha = float(alpha)
-        self._previous: np.ndarray | None = None
-
-    def reset(self, q: np.ndarray | None = None) -> None:
-        self._previous = None if q is None else np.asarray(q, dtype=np.float32).copy()
-
-    def smooth(self, q: np.ndarray) -> np.ndarray:
-        current = np.asarray(q, dtype=np.float32)
-        if self._previous is None or self.alpha >= 1.0:
-            self._previous = current.copy()
-        else:
-            self._previous = self._previous + self.alpha * (current - self._previous)
-        return self._previous.copy()
 
 
 def _normalized_quaternion_xyzw(quaternion: np.ndarray) -> np.ndarray:
@@ -97,10 +64,10 @@ class TeleopMotionSmoother:
 
     def __init__(
         self,
-        time_constant_s: float = DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+        time_constant_s: float = 0.0,
         *,
-        position_deadband_m: float = DEFAULT_POSITION_DEADBAND_M,
-        orientation_deadband_rad: float = DEFAULT_ORIENTATION_DEADBAND_RAD,
+        position_deadband_m: float = 0.0,
+        orientation_deadband_rad: float = 0.0,
     ) -> None:
         if time_constant_s < 0.0:
             raise ValueError("time_constant_s must be >= 0.")

@@ -40,7 +40,7 @@ class TeleopController:
         home_q: np.ndarray,
         enabled_sides: tuple[str, ...],
         source_world_to_robot_world: np.ndarray,
-        translation_scale: float = 1.0,
+        translation_scale: float,
         anchor_z: float | None = None,
     ) -> None:
         self.runtime = runtime

@@ -65,6 +65,11 @@ class TeleopRealArgsTest(unittest.TestCase):
         self.assertTrue(args.space_start)
         _validate_args(args)
 
+    def test_translation_scale_cli_override_is_parsed(self):
+        args = parse_args(["--device", "pico", "--translation-scale", "2.25"])
+
+        self.assertEqual(args.translation_scale, 2.25)
+
     def test_smoothing_configuration_cannot_be_negative(self):
         for option in (
             "--motion-smoothing-time-constant-s",
