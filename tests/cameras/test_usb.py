@@ -8,9 +8,11 @@ import numpy as np
 from handumi.cameras.base import CameraSample
 from handumi.cameras.usb import (
     build_camera_specs,
+    make_camera_device,
     read_camera_samples,
     resolve_camera_ids,
 )
+from handumi.cameras.zedmini import ZedMiniCameraDevice
 
 
 class _SampledCamera:
@@ -99,6 +101,81 @@ class UsbCameraConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "cameras.yaml"
             self.assertEqual(resolve_camera_ids([7, 8], path), [7, 8])
+
+    def test_rig_resolves_opencv_and_zedmini_camera_properties(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cameras.yaml"
+            with path.open("w", encoding="utf-8") as fh:
+                yaml.safe_dump(
+                    {
+                        "cameras": {
+                            "left_wrist": {
+                                "type": "opencv",
+                                "index_or_path": 4,
+                                "width": 640,
+                                "height": 480,
+                                "fps": 30,
+                            },
+                            "workspace": {
+                                "type": "zedmini",
+                                "index_or_path": "/dev/video6",
+                                "width": 1344,
+                                "height": 376,
+                                "fps": 100,
+                            },
+                        }
+                    },
+                    fh,
+                )
+
+            ids = resolve_camera_ids(
+                None, path, camera_names=["left_wrist", "workspace"]
+            )
+            specs, _ = build_camera_specs(
+                ids,
+                camera_names=["left_wrist", "workspace"],
+                laptop_camera=False,
+                laptop_cam_id=0,
+                laptop_cam_name="laptop",
+                rig_config=path,
+            )
+
+        self.assertEqual(specs[0]["type"], "opencv")
+        self.assertEqual(specs[0]["output_width"], 640)
+        self.assertEqual(specs[1]["type"], "zedmini")
+        self.assertEqual(specs[1]["width"], 1344)
+        self.assertEqual(specs[1]["output_width"], 672)
+        self.assertEqual(specs[1]["output_height"], 376)
+        self.assertEqual(specs[1]["fps"], 100)
+        self.assertEqual(specs[1]["name"], "workspace")
+
+    def test_zedmini_keeps_only_the_left_stereo_image(self):
+        camera = ZedMiniCameraDevice("/dev/video6", fps=30, width=1344, height=376)
+        stereo = np.zeros((376, 1344, 3), dtype=np.uint8)
+        stereo[:, :672] = 17
+        stereo[:, 672:] = 231
+
+        left = camera._prepare_image(stereo)
+
+        self.assertEqual(left.shape, (376, 672, 3))
+        self.assertTrue(np.all(left == 17))
+
+    def test_zedmini_factory_validates_supported_uvc_mode(self):
+        spec = {
+            "id": 4,
+            "type": "zedmini",
+            "width": 1344,
+            "height": 376,
+            "fps": 60,
+        }
+        camera = make_camera_device(spec)
+        self.assertIsInstance(camera, ZedMiniCameraDevice)
+        self.assertEqual(camera.index_or_path, 4)
+
+        with self.assertRaisesRegex(ValueError, "1344x376"):
+            make_camera_device({**spec, "width": 1280})
+        with self.assertRaisesRegex(ValueError, "15, 30, 60, or 100"):
+            make_camera_device({**spec, "fps": 25})
 
     def test_timestamped_camera_health_is_recorded(self):
         frame, health = read_camera_samples(

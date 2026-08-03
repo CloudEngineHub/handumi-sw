@@ -2,12 +2,28 @@
 # edit it for the connected cameras, Feetech adapters, and Quest network.
 
 cameras:
+  # index_or_path accepts either an OpenCV integer index (for example 0) or
+  # an explicit Linux device path (for example /dev/video0).
   left_wrist:
+    type: opencv
     index_or_path: 0
+    width: 640
+    height: 480
+    fps: 30
   right_wrist:
+    type: opencv
     index_or_path: 2
+    width: 640
+    height: 480
+    fps: 30
   workspace:
+    # Any logical view can use type: opencv or type: zedmini. ZED Mini captures
+    # stereo UVC; HandUMI keeps only the 672x376 left half.
+    type: opencv
     index_or_path: 4
+    width: 640
+    height: 480
+    fps: 30
 
 # Optional operator defaults, so the usual recording flags can be omitted from
 # the command line. Delete this whole section to fall back to built-in
@@ -16,6 +32,7 @@ recording:
   device: meta
   # Which of the cameras declared above to capture. Defaults to both wrists.
   cameras: [left_wrist, right_wrist]
+  # Fallbacks for legacy camera entries that omit width, height, or fps.
   width: 640
   height: 480
   camera_fps: 30
@@ -40,6 +57,8 @@ robots:
       left_port: can0
       right_port: can1
   openarmv1:
+    backend: openarm_can
+    home_pose: forward_open
     can:
       fd: true
       bitrate: 1000000

@@ -49,6 +49,7 @@ from handumi.calibration.spatial import (
 )
 from handumi.cameras import (
     build_camera_specs,
+    camera_output_size,
     connect_cameras,
     disconnect_cameras,
     read_camera_samples,
@@ -510,13 +511,22 @@ def build_features(
     cam_width: int,
     cam_height: int,
     use_videos: bool,
+    camera_specs: list[dict[str, object]] | None = None,
 ) -> dict:
     img_dtype = "video" if use_videos else "image"
     features: dict = {}
+    specs_by_name = {
+        str(spec["name"]): spec for spec in (camera_specs or [])
+    }
     for cam in cam_names:
+        width, height = camera_output_size(
+            specs_by_name.get(cam, {}),
+            default_width=cam_width,
+            default_height=cam_height,
+        )
         features[f"observation.images.{cam}"] = {
             "dtype": img_dtype,
-            "shape": (cam_height, cam_width, 3),
+            "shape": (height, width, 3),
             "names": ["height", "width", "channel"],
         }
     features["observation.state"] = _tuple_shape(raw_state_feature())
@@ -1343,7 +1353,13 @@ def _print_recording_plan(
         thread_label = "codec-managed" if encoder.threads is None else str(encoder.threads)
         encoder_label = f"{encoder.vcodec} ({kind}, threads/camera={thread_label})"
     camera_label = ", ".join(
-        f"{spec['name']}={spec['id']}" for spec in camera_specs
+        (
+            f"{spec['name']}={spec['id']} ({spec.get('type', 'opencv')}, "
+            f"{camera_output_size(spec, default_width=args.cam_width, default_height=args.cam_height)[0]}x"
+            f"{camera_output_size(spec, default_width=args.cam_width, default_height=args.cam_height)[1]}"
+            f"/{spec.get('fps', args.cam_fps)} fps)"
+        )
+        for spec in camera_specs
     )
     mode = "resume" if args.resume else "new dataset"
     workspace = "table-calibrated" if spatial_session_metadata else "HMD-recentered"
@@ -1351,7 +1367,7 @@ def _print_recording_plan(
     print("\nRecording plan")
     print(f"  Dataset:  {args.output_dir} ({mode})")
     print(f"  Device:   {args.device}; robot profile: {args.robot}")
-    print(f"  Cameras:  {camera_label} @ {args.cam_width}x{args.cam_height}/{args.cam_fps} fps")
+    print(f"  Cameras:  {camera_label}")
     print(f"  Rows:     {args.fps} fps; {episodes} episode(s)")
     print(f"  Feetech:  {'disabled' if args.skip_feetech else 'enabled'}")
     print(f"  Encoder:  {encoder_label}")
@@ -1410,19 +1426,37 @@ def main() -> None:
         laptop_camera=False,
         laptop_cam_id=0,
         laptop_cam_name="laptop",
+        rig_config=args.rig_config,
+        default_fps=args.cam_fps,
+        default_width=args.cam_width,
+        default_height=args.cam_height,
     )
     cam_names = [spec["name"] for spec in camera_specs]
     use_videos = not args.no_video
-    features = build_features(cam_names, args.cam_width, args.cam_height, use_videos)
+    features = build_features(
+        cam_names,
+        args.cam_width,
+        args.cam_height,
+        use_videos,
+        camera_specs=camera_specs,
+    )
     encoder_selection: _VideoEncoderSelection | None = None
     dataset_vcodec = _SOFTWARE_VIDEO_CODEC
     encoder_queue_size = args.encoder_queue_size or max(1, args.fps)
     if use_videos:
+        output_sizes = [
+            camera_output_size(
+                spec,
+                default_width=args.cam_width,
+                default_height=args.cam_height,
+            )
+            for spec in camera_specs
+        ]
         encoder_selection = _select_video_encoder(
             policy=args.encoder,
             requested_vcodec=args.vcodec,
-            width=args.cam_width,
-            height=args.cam_height,
+            width=max(width for width, _ in output_sizes),
+            height=max(height for _, height in output_sizes),
             fps=args.fps,
             camera_count=len(cam_names),
             requested_threads=args.encoder_threads,
@@ -2082,7 +2116,28 @@ def _resume_handumi_metadata(
             "feetech_sample_hz", getattr(args, "feetech_sample_hz", None)
         ),
         "cameras": [
-            {"name": spec["name"], "index_or_path": spec["id"]}
+            {
+                "name": spec["name"],
+                "index_or_path": spec["id"],
+                "type": spec.get("type", "opencv"),
+                "capture_width": spec.get(
+                    "width", getattr(args, "cam_width", 640)
+                ),
+                "capture_height": spec.get(
+                    "height", getattr(args, "cam_height", 480)
+                ),
+                "output_width": camera_output_size(
+                    spec,
+                    default_width=getattr(args, "cam_width", 640),
+                    default_height=getattr(args, "cam_height", 480),
+                )[0],
+                "output_height": camera_output_size(
+                    spec,
+                    default_width=getattr(args, "cam_width", 640),
+                    default_height=getattr(args, "cam_height", 480),
+                )[1],
+                "fps": spec.get("fps", getattr(args, "cam_fps", 30)),
+            }
             for spec in camera_specs
         ],
         "sources": sources,

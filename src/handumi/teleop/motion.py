@@ -15,9 +15,9 @@ DEFAULT_COMMAND_RATE_HZ = 100.0
 # This is configurable latency, not an extrapolation horizon. At 30 Hz, 30 ms
 # is slightly shorter than one 33.3 ms source interval, so playback may hold
 # the newest command whenever it lacks the next sample needed to interpolate.
-DEFAULT_TRAJECTORY_DELAY_MS = 50.0
-DEFAULT_COMMAND_EMA_TIME_CONSTANT_S = 0.04
-DEFAULT_POSITION_DEADBAND_MM = 1.0
+DEFAULT_TRAJECTORY_DELAY_MS = 45.0
+DEFAULT_COMMAND_EMA_TIME_CONSTANT_S = 0.12
+DEFAULT_POSITION_DEADBAND_MM = 0.5
 DEFAULT_ORIENTATION_DEADBAND_DEG = 0.25
 
 

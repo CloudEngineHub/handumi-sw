@@ -20,6 +20,16 @@ class CameraSample:
 class CameraDevice(ABC):
     """Minimal camera interface used by HandUMI recorders."""
 
+    @property
+    @abstractmethod
+    def output_width(self) -> int:
+        """Width of frames exposed to consumers after backend transforms."""
+
+    @property
+    @abstractmethod
+    def output_height(self) -> int:
+        """Height of frames exposed to consumers after backend transforms."""
+
     @abstractmethod
     def connect(self) -> None:
         """Open the camera stream."""

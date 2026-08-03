@@ -44,6 +44,7 @@ import argparse
 import json
 import logging
 import signal
+import sys
 import threading
 import time
 from pathlib import Path
@@ -51,7 +52,6 @@ from typing import Any
 
 import numpy as np
 
-from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset.canonical import canonical_joint_layout, canonicalize_command
 from handumi.dataset.capture import (
     GRIPPER_STALE_TIMEOUT_S,
@@ -67,7 +67,7 @@ from handumi.dataset.raw import (
     feetech_features,
 )
 from handumi.feetech import FeetechGripperPair, FeetechGripperSampler, GripperWidths
-from handumi.real.registry import REAL_BACKEND_NAMES, make_real_backend
+from handumi.real.registry import make_real_backend
 from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.scripts.record import (
     _EscapeStopListener,
@@ -82,8 +82,6 @@ from handumi.synchronization import (
     synchronized_gripper_frame,
 )
 from handumi.teleop.common import (
-    DEFAULT_GRIPPER_SAMPLE_HZ,
-    SIDE_CHOICES,
     KeyboardSpaceListener,
     TeleopLoopTimer,
     TeleopMotionSmoother,
@@ -95,8 +93,11 @@ from handumi.teleop.common import (
 from handumi.teleop.core import TeleopController
 from handumi.teleop.motion import (
     TeleopMotionConfig,
-    add_teleop_motion_arguments,
     validate_teleop_motion_args,
+)
+from handumi.teleop.physical import (
+    add_physical_teleop_arguments,
+    validate_physical_teleop_args,
 )
 from handumi.teleop.session import TeleopSession
 from handumi.teleop.trajectory import TeleopCommandStream
@@ -108,6 +109,7 @@ from handumi.teleop.tracking import TrackingRecoveryPolicy
 from handumi.tracking.base import TrackingProvider
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
+from handumi.visualize import LiveCameraViews
 
 logging.basicConfig(
     level=logging.INFO,
@@ -115,22 +117,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 record_log = logging.getLogger("handumi.record_teleop")
-
-DEFAULT_TRANSLATION_SCALE = 1.0
-SPACE_START_ENABLED = False
-PLAY_SOUNDS = True
-REPAIR_CAN_ON_SETUP = True
-RIG_CONFIG_PATH = DEFAULT_RIG_CONFIG
-CONTROLLER_TCP_CALIBRATION_PATH = None
-FEETECH_PORT_OVERRIDE = None
-REQUIRE_FEETECH_GRIPPERS = True
-META_QUEST_IP_OVERRIDE = None
-META_TCP_PORT_OVERRIDE = None
-META_SYNC_PORT_OVERRIDE = None
-PICO_TRACKING_MODE = "mandos"
-PICO_USE_WIFI = False
-SKIP_ADB_CHECK = False
-
 
 def build_features(
     cam_names: list[str],
@@ -194,15 +180,17 @@ def build_joint_frame(
 
 
 def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
     p = argparse.ArgumentParser(
         description="Record real-robot HandUMI teleoperation demonstrations.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--device", choices=("pico", "meta"), required=True)
-    p.add_argument("--robot", choices=REAL_BACKEND_NAMES, default="piper")
-    p.add_argument("--home-pose", default=None)
-    p.add_argument("--side", choices=SIDE_CHOICES, default="both")
-    add_teleop_motion_arguments(p)
+    p.add_argument(
+        "--help-advanced", action="store_true", help="Show expert hardware options."
+    )
+    add_physical_teleop_arguments(p)
     p.add_argument("--episode-time-s", type=float, default=60.0)
     p.add_argument("--num-episodes", type=int, default=10)
     p.add_argument("--task", type=str, default="HandUMI real teleop recording")
@@ -217,7 +205,30 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Append episodes to the finalized dataset in --output-dir.",
     )
-    args = p.parse_args(argv)
+    if not show_advanced:
+        normal = {
+            "help",
+            "help_advanced",
+            "device",
+            "robot",
+            "side",
+            "space_start",
+            "no_sounds",
+            "episode_time_s",
+            "num_episodes",
+            "task",
+            "output_dir",
+            "resume",
+            "cameras",
+            "no_rerun",
+        }
+        for action in p._actions:
+            if action.dest not in normal:
+                action.help = argparse.SUPPRESS
+    else:
+        p.print_help()
+        raise SystemExit(0)
+    args = p.parse_args(raw_argv)
     _apply_recording_defaults(args)
     return args
 
@@ -227,31 +238,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _apply_recording_defaults(args: argparse.Namespace) -> None:
-    args.translation_scale = DEFAULT_TRANSLATION_SCALE
-    args.space_start = SPACE_START_ENABLED
-    args.no_sounds = not PLAY_SOUNDS
     args.sync_lag_s = SYNC_LAG_S
     args.max_sync_skew_s = MAX_SYNC_SKEW_S
     args.gripper_stale_timeout_s = GRIPPER_STALE_TIMEOUT_S
     args.sensor_loss_timeout_s = SENSOR_LOSS_TIMEOUT_S
-    args.feetech_sample_hz = DEFAULT_GRIPPER_SAMPLE_HZ
+    # Match teleop-real: keep serial reads off the control loop and sample at
+    # least at 100 Hz (or at the input rate when configured above 100 Hz).
+    args.feetech_sample_hz = max(100.0, float(args.fps))
     args.tracking_loss_timeout_s = TRACKING_LOSS_TIMEOUT_S
-    args.skip_can_repair = not REPAIR_CAN_ON_SETUP
-    args.rig_config = RIG_CONFIG_PATH
-    args.controller_tcp_calibration = CONTROLLER_TCP_CALIBRATION_PATH
-    args.feetech_port = FEETECH_PORT_OVERRIDE
-    args.skip_feetech = not REQUIRE_FEETECH_GRIPPERS
-    args.quest_ip = META_QUEST_IP_OVERRIDE
-    args.tcp_port = META_TCP_PORT_OVERRIDE
-    args.sync_port = META_SYNC_PORT_OVERRIDE
-    args.pico_mode = PICO_TRACKING_MODE
-    args.pico_adb = not PICO_USE_WIFI
-    args.pico_wifi = PICO_USE_WIFI
-    args.skip_adb_check = SKIP_ADB_CHECK
+    # PICO defaults to the same ADB transport used by the recording workflow,
+    # while an explicit --pico-wifi selection remains available.
+    if not args.pico_wifi:
+        args.pico_adb = True
 
 
 def _validate_record_args(args: argparse.Namespace) -> None:
     validate_teleop_motion_args(args)
+    validate_physical_teleop_args(args)
     if args.episode_time_s <= 0:
         raise SystemExit("--episode-time-s must be > 0.")
     if args.num_episodes < 0:
@@ -293,6 +296,7 @@ def record_episode(
     tracking_loss_timeout_s: float,
     command_stream: TeleopCommandStream,
     motion_smoother: TeleopMotionSmoother | None = None,
+    camera_views: LiveCameraViews | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, str, np.ndarray]:
     loop_timer = TeleopLoopTimer(fps)
     n_frames = 0
@@ -316,6 +320,8 @@ def record_episode(
     while True:
         loop_start, _ = loop_timer.tick()
         record_time_ns = time.monotonic_ns()
+        if camera_views is not None:
+            camera_views.update()
         if episode_start_ns is None:
             episode_start_ns = record_time_ns
 
@@ -526,6 +532,7 @@ def _run_record() -> None:
     gripper_pair = None
     grippers = None
     tracker_started = False
+    camera_views: LiveCameraViews | None = None
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     motion_config = TeleopMotionConfig.from_args(args)
     motion_smoother = motion_config.make_input_smoother()
@@ -545,10 +552,14 @@ def _run_record() -> None:
         record_log.info("Starting tracking before moving real arms.")
         tracker.start()
         tracker_started = True
+        camera_views = LiveCameraViews.from_args(
+            args, application_id="handumi_teleop_record"
+        )
         gripper_pair = connect_feetech(args)
         if gripper_pair is not None:
             grippers = FeetechGripperSampler(
-                gripper_pair, sample_hz=args.feetech_sample_hz
+                gripper_pair,
+                sample_hz=args.feetech_sample_hz,
             )
             grippers.start()
 
@@ -626,6 +637,7 @@ def _run_record() -> None:
                 tracking_loss_timeout_s=args.tracking_loss_timeout_s,
                 command_stream=command_stream,
                 motion_smoother=motion_smoother,
+                camera_views=camera_views,
             )
             if status == "repeat":
                 record_log.warning("Episode restart requested (%d frames discarded).", n_frames)
@@ -711,6 +723,8 @@ def _run_record() -> None:
                     gripper_pair.close()
                 if tracker_started:
                     tracker.stop()
+                if camera_views is not None:
+                    camera_views.close()
                 log_say("Exiting", play_sounds=play_sounds, blocking=True)
 
 

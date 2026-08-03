@@ -35,7 +35,12 @@ from handumi.calibration.spatial import (
     solve_table_device,
     write_yaml,
 )
-from handumi.cameras.opencv import OpenCVCameraDevice
+from handumi.cameras import (
+    build_camera_specs,
+    make_camera_device,
+    resolve_camera_ids,
+)
+from handumi.cameras.base import CameraDevice
 from handumi.config import DEFAULT_RIG_CONFIG, load_rig_section
 from handumi.robots.utils import IDENTITY_POSE7, pose7_to_mat
 from handumi.tracking.base import TrackingProvider
@@ -90,12 +95,25 @@ def _board_from_rig(path: Path) -> CharucoBoardSpec:
     return CharucoBoardSpec.from_dict(section.get("board"))
 
 
-def _camera(path: Path, name: str, fps: int, width: int, height: int) -> OpenCVCameraDevice:
-    cameras = load_rig_section(path, "cameras")
-    entry = cameras.get(name)
-    if not isinstance(entry, dict) or "index_or_path" not in entry:
-        raise SystemExit(f"Missing cameras.{name}.index_or_path in {path}.")
-    return OpenCVCameraDevice(entry["index_or_path"], fps, width, height)
+def _camera(path: Path, name: str, fps: int, width: int, height: int) -> CameraDevice:
+    camera_ids = resolve_camera_ids(None, path, camera_names=[name])
+    specs, _ = build_camera_specs(
+        camera_ids,
+        camera_names=[name],
+        laptop_camera=False,
+        laptop_cam_id=0,
+        laptop_cam_name="laptop",
+        rig_config=path,
+        default_fps=fps,
+        default_width=width,
+        default_height=height,
+    )
+    return make_camera_device(
+        specs[0],
+        default_fps=fps,
+        default_width=width,
+        default_height=height,
+    )
 
 
 def _camera_source(path: Path, name: str) -> int | str:
@@ -461,7 +479,11 @@ def cmd_intrinsics(args: argparse.Namespace) -> None:
     if len(detections) < args.views:
         raise SystemExit(f"Only {len(detections)} views captured; requested {args.views}.")
     calibrate = calibrate_pinhole if args.camera == "workspace" else calibrate_fisheye
-    intrinsics = calibrate(args.camera, detections, (args.width, args.height))
+    intrinsics = calibrate(
+        args.camera,
+        detections,
+        (camera.output_width, camera.output_height),
+    )
     if intrinsics.mean_error_px > args.max_mean_error_px:
         raise SystemExit(
             f"Mean reprojection error {intrinsics.mean_error_px:.3f}px exceeds "
@@ -961,7 +983,7 @@ def cmd_visualize(args: argparse.Namespace) -> None:
         raise SystemExit("Spatial calibration contains no calibrated cameras.")
 
     intrinsics = {name: _intrinsics(spatial, name) for name in camera_names}
-    cameras: dict[str, OpenCVCameraDevice] = {}
+    cameras: dict[str, CameraDevice] = {}
     tracker = _connect_tracker(args)
     try:
         for name in camera_names:

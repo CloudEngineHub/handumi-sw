@@ -497,6 +497,10 @@ def _run_sim() -> None:
             laptop_camera=False,
             laptop_cam_id=0,
             laptop_cam_name="laptop",
+            rig_config=args.rig_config,
+            default_fps=args.cam_fps,
+            default_width=args.cam_width,
+            default_height=args.cam_height,
         )
         cam_names = [spec["name"] for spec in camera_specs]
         cameras = connect_cameras(

@@ -710,6 +710,28 @@ class ResumeDatasetTest(unittest.TestCase):
                     handumi=handumi,
                 )
 
+    def test_zedmini_feature_uses_the_cropped_left_image_shape(self):
+        features = build_features(
+            ["workspace"],
+            640,
+            480,
+            use_videos=True,
+            camera_specs=[
+                {
+                    "name": "workspace",
+                    "width": 1344,
+                    "height": 376,
+                    "output_width": 672,
+                    "output_height": 376,
+                }
+            ],
+        )
+
+        self.assertEqual(
+            features["observation.images.workspace"]["shape"],
+            (376, 672, 3),
+        )
+
     def test_rejects_calibration_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

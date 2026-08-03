@@ -309,7 +309,7 @@ def latest_widths(grippers: Any):
     latest = getattr(grippers, "latest", None)
     if callable(latest):
         sample = latest()
-        return zero_gripper_widths() if sample is None else sample.widths
+        return zero_gripper_widths() if sample is None else getattr(sample, "widths", zero_gripper_widths())
     return grippers.read_normalized_widths()
 
 

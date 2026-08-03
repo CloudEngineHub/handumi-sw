@@ -22,15 +22,12 @@ Examples:
 import argparse
 import logging
 import sys
-from pathlib import Path
 
-from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech import FeetechGripperSampler
 from handumi.feetech.setup import list_feetech_serial_ports
-from handumi.real.registry import REAL_BACKEND_NAMES, make_real_backend
+from handumi.real.registry import make_real_backend
 from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.teleop.common import (
-    SIDE_CHOICES,
     KeyboardSpaceListener,
     TeleopLoopTimer,
     enabled_sides as _enabled_sides,
@@ -41,8 +38,11 @@ from handumi.teleop.common import (
 from handumi.teleop.core import TeleopController
 from handumi.teleop.motion import (
     TeleopMotionConfig,
-    add_teleop_motion_arguments,
     validate_teleop_motion_args,
+)
+from handumi.teleop.physical import (
+    add_physical_teleop_arguments,
+    validate_physical_teleop_args,
 )
 from handumi.teleop.session import TeleopSession
 from handumi.teleop.hardware import (
@@ -53,6 +53,7 @@ from handumi.teleop.hardware import (
 from handumi.teleop.tracking import TrackingRecoveryPolicy
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
+from handumi.visualize import LiveCameraViews
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,64 +72,9 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--help-advanced", action="store_true", help="Show expert hardware options."
     )
-    parser.add_argument("--device", choices=("pico", "meta"), required=True)
-    parser.add_argument("--robot", choices=REAL_BACKEND_NAMES, default="piper")
-    parser.add_argument(
-        "--home-pose",
-        default=None,
-        help="Override a legacy named home pose. Omit to use the robot home_q.",
-    )
-    parser.add_argument("--side", choices=SIDE_CHOICES, default="both")
-    add_teleop_motion_arguments(parser)
+    add_physical_teleop_arguments(parser)
     parser.add_argument(
         "--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C."
-    )
-    parser.add_argument(
-        "--translation-scale",
-        type=float,
-        default=1.5,
-        help="Scale HandUMI translation deltas before applying them to the robot TCP.",
-    )
-    parser.add_argument(
-        "--space-start",
-        action="store_true",
-        help="Allow keyboard Space to start any unanchored enabled arms.",
-    )
-    parser.add_argument(
-        "--no-sounds", action="store_true", help="Disable spoken feedback."
-    )
-    parser.add_argument(
-        "--controller-tcp-calibration",
-        type=Path,
-        default=None,
-        help="Override the robot/device Controller->TCP setup calibration.",
-    )
-    parser.add_argument(
-        "--rig-config",
-        type=Path,
-        default=DEFAULT_RIG_CONFIG,
-        help="Machine-local Feetech, tracking, and robot CAN configuration.",
-    )
-
-    # Shared Feetech options.
-    parser.add_argument("--feetech-port", type=str, default=None)
-    parser.add_argument("--skip-feetech", action="store_true")
-
-    # Shared tracking options consumed by build_tracker.
-    parser.add_argument("--quest-ip", type=str, default=None)
-    parser.add_argument("--tcp-port", type=int, default=None)
-    parser.add_argument("--sync-port", type=int, default=None)
-    parser.add_argument(
-        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
-    )
-    pico_transport = parser.add_mutually_exclusive_group()
-    pico_transport.add_argument("--pico-adb", action="store_true")
-    pico_transport.add_argument("--pico-wifi", action="store_true")
-    parser.add_argument("--skip-adb-check", action="store_true")
-    parser.add_argument(
-        "--skip-can-repair",
-        action="store_true",
-        help="Validate but do not auto-repair CAN with sudo before connecting.",
     )
     if not show_advanced:
         normal = {
@@ -139,6 +85,8 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
             "side",
             "space_start",
             "no_sounds",
+            "cameras",
+            "no_rerun",
         }
         for action in parser._actions:
             if action.dest not in normal:
@@ -155,12 +103,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _validate_real_args(args: argparse.Namespace) -> None:
     validate_teleop_motion_args(args)
+    validate_physical_teleop_args(args)
     if args.duration_s < 0.0:
         raise SystemExit("--duration-s must be >= 0.")
-    if args.skip_feetech and not args.space_start:
-        raise SystemExit(
-            "--skip-feetech disables double-clap; add --space-start so teleop can begin."
-        )
 
 
 def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> None:
@@ -210,6 +155,7 @@ def _run_real() -> None:
     )
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     tracker_started = False
+    camera_views: LiveCameraViews | None = None
 
     clap = DoubleClapDetector()
     play_sounds = not args.no_sounds
@@ -226,6 +172,9 @@ def _run_real() -> None:
         real_log.info("Starting tracking before moving real arms.")
         tracker.start()
         tracker_started = True
+        camera_views = LiveCameraViews.from_args(
+            args, application_id="handumi_teleop_real"
+        )
         gripper_pair = connect_feetech(args)
         if gripper_pair is not None:
             # Keep serial retries off the real-time control loop.  In
@@ -263,6 +212,8 @@ def _run_real() -> None:
 
         while True:
             loop_start, _ = loop_timer.tick()
+            if camera_views is not None:
+                camera_views.update()
             if episode_start is not None and args.duration_s > 0.0:
                 if loop_start - episode_start >= args.duration_s:
                     break
@@ -376,6 +327,8 @@ def _run_real() -> None:
                     gripper_pair.close()
                 if tracker_started:
                     tracker.stop()
+                if camera_views is not None:
+                    camera_views.close()
 
 
 def main() -> None:

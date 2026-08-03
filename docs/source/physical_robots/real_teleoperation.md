@@ -46,6 +46,17 @@ handumi setup --robot <robot_id> --device meta
 handumi teleop-real --robot <robot_id> --device meta
 ```
 
+The input/IK loop and robot command clock are independent. By default, IK
+produces timestamped targets at 30 Hz and a delayed trajectory stream sends
+interpolated commands at 100 Hz. `--trajectory-delay-ms` controls the
+smoothness/latency tradeoff; inspect the shared advanced options with
+`handumi teleop-real --help-advanced`.
+
+Camera previews use the `left_wrist`, `right_wrist`, and `workspace` entries
+in `configs/rig.yaml`. Any of them may use `type: zedmini`; it keeps the same
+logical name and displays only its left `672×376` image. See
+[Setup and Calibration](../setup.md) for the rig schema.
+
 ## Record a Real-Robot Dataset
 
 Use `handumi teleop-record` when the real robot should be driven live and saved
@@ -60,6 +71,11 @@ This command has its own parser and operational defaults. It does not use
 `--record` on `handumi teleop`; the plain `handumi teleop` command is reserved
 for live simulation. `--resume` with the same `--output-dir` verifies and
 appends to that finalized local dataset.
+
+`teleop-record` uses the same 30 Hz IK → delayed 100 Hz command trajectory and
+the same camera preview backends as `teleop-real`. Its output remains a
+joint-level dataset; use `handumi record` when camera frames must be stored in
+the dataset.
 
 Unlike a robot-free HandUMI capture, this dataset is bound to the robot that
 produced it. To collect demonstrations that can be retargeted to any supported

@@ -8,7 +8,6 @@ import numpy as np
 from handumi.dataset.capture import SYNC_LAG_S
 from handumi.feetech import GripperWidths
 from handumi.scripts.teleop_record import (
-    PICO_TRACKING_MODE,
     _validate_record_args,
     _validate_resume_dataset,
     build_features,
@@ -16,10 +15,10 @@ from handumi.scripts.teleop_record import (
     joint_state_feature,
     parse_args,
 )
+from handumi.scripts.teleop_real import parse_args as parse_real_args
 from handumi.teleop import (
     DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
     DEFAULT_COMMAND_RATE_HZ,
-    DEFAULT_GRIPPER_SAMPLE_HZ,
     DEFAULT_ORIENTATION_DEADBAND_DEG,
     DEFAULT_POSITION_DEADBAND_MM,
     DEFAULT_TELEOP_FPS,
@@ -41,14 +40,16 @@ def _widths() -> GripperWidths:
 
 
 class TeleopRecordSchemaTest(unittest.TestCase):
-    def test_operational_defaults_are_constants_not_cli_flags(self):
+    def test_physical_teleop_defaults_match_live_teleop(self):
         args = parse_args(["--device", "pico", "--output-dir", "outputs/capture"])
+        real_args = parse_real_args(["--device", "pico"])
 
-        self.assertEqual(args.pico_mode, PICO_TRACKING_MODE)
+        self.assertEqual(args.pico_mode, "mandos")
         self.assertTrue(args.pico_adb)
         self.assertFalse(args.pico_wifi)
         self.assertFalse(args.skip_feetech)
         self.assertFalse(args.space_start)
+        self.assertEqual(args.translation_scale, 1.5)
         self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
         self.assertEqual(args.command_rate_hz, DEFAULT_COMMAND_RATE_HZ)
         self.assertEqual(args.trajectory_delay_ms, DEFAULT_TRAJECTORY_DELAY_MS)
@@ -65,12 +66,116 @@ class TeleopRecordSchemaTest(unittest.TestCase):
         )
         self.assertEqual(args.fps, 30)
         self.assertEqual(args.sync_lag_s, SYNC_LAG_S)
-        self.assertEqual(args.feetech_sample_hz, DEFAULT_GRIPPER_SAMPLE_HZ)
+        self.assertEqual(args.feetech_sample_hz, 100.0)
+
+        for attribute in (
+            "robot",
+            "home_pose",
+            "side",
+            "fps",
+            "command_rate_hz",
+            "trajectory_delay_ms",
+            "motion_smoothing_time_constant_s",
+            "motion_position_deadband_mm",
+            "motion_orientation_deadband_deg",
+            "translation_scale",
+            "space_start",
+            "no_sounds",
+            "controller_tcp_calibration",
+            "rig_config",
+            "feetech_port",
+            "skip_feetech",
+            "quest_ip",
+            "tcp_port",
+            "sync_port",
+            "pico_mode",
+            "pico_wifi",
+            "skip_adb_check",
+            "skip_can_repair",
+        ):
+            self.assertEqual(getattr(args, attribute), getattr(real_args, attribute))
+
+    def test_physical_teleop_options_are_configurable(self):
+        args = parse_args(
+            [
+                "--device",
+                "pico",
+                "--output-dir",
+                "outputs/capture",
+                "--space-start",
+                "--skip-feetech",
+                "--pico-wifi",
+                "--translation-scale",
+                "2.25",
+                "--no-sounds",
+                "--skip-can-repair",
+            ]
+        )
+
+        _validate_record_args(args)
+        self.assertTrue(args.space_start)
+        self.assertTrue(args.skip_feetech)
+        self.assertTrue(args.pico_wifi)
+        self.assertFalse(args.pico_adb)
+        self.assertEqual(args.translation_scale, 2.25)
+        self.assertTrue(args.no_sounds)
+        self.assertTrue(args.skip_can_repair)
+
+    def test_rerun_camera_options_are_shared_with_live_teleop(self):
+        record_args = parse_args(
+            [
+                "--device",
+                "pico",
+                "--output-dir",
+                "outputs/capture",
+                "--cameras",
+                "left_wrist,workspace",
+                "--cam-width",
+                "320",
+                "--cam-height",
+                "240",
+            ]
+        )
+        real_args = parse_real_args(
+            [
+                "--device",
+                "pico",
+                "--cameras",
+                "left_wrist,workspace",
+                "--cam-width",
+                "320",
+                "--cam-height",
+                "240",
+            ]
+        )
+
+        self.assertEqual(record_args.cameras, ["left_wrist", "workspace"])
+        self.assertEqual(record_args.cameras, real_args.cameras)
+        self.assertEqual(record_args.cam_width, real_args.cam_width)
+        self.assertEqual(record_args.cam_height, real_args.cam_height)
+
+    def test_explicit_camera_selection_conflicts_with_no_rerun(self):
+        args = parse_args(
+            [
+                "--device",
+                "pico",
+                "--output-dir",
+                "outputs/capture",
+                "--cameras",
+                "workspace",
+                "--no-rerun",
+            ]
+        )
 
         with self.assertRaises(SystemExit):
-            parse_args(["--device", "pico", "--output-dir", "outputs/capture", "--skip-feetech"])
+            _validate_record_args(args)
+
+    def test_skip_feetech_requires_space_start(self):
+        args = parse_args(
+            ["--device", "pico", "--output-dir", "outputs/capture", "--skip-feetech"]
+        )
         with self.assertRaises(SystemExit):
-            parse_args(["--device", "pico", "--output-dir", "outputs/capture", "--pico-wifi"])
+            _validate_record_args(args)
 
     def test_trajectory_configuration_is_validated(self):
         args = parse_args(["--device", "pico", "--output-dir", "outputs/capture", "--command-rate-hz", "0"])

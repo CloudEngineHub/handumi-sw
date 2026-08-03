@@ -33,6 +33,14 @@ class OpenCVCameraDevice(CameraDevice):
         self._perf_to_monotonic_ns = 0
         self._sequence = 0
 
+    @property
+    def output_width(self) -> int:
+        return int(self.width)
+
+    @property
+    def output_height(self) -> int:
+        return int(self.height)
+
     def connect(self) -> None:
         from lerobot.cameras.opencv import OpenCVCamera
         from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
@@ -119,7 +127,7 @@ class OpenCVCameraDevice(CameraDevice):
                         int(round(last_timestamp * 1e9)) + self._perf_to_monotonic_ns
                     )
                     sample = CameraSample(
-                        image=image,
+                        image=self._prepare_image(image),
                         capture_time_ns=capture_time_ns,
                         sequence=self._sequence,
                     )
@@ -129,3 +137,7 @@ class OpenCVCameraDevice(CameraDevice):
                 # The recorder health gate observes the resulting stale sample.
                 pass
             self._monitor_stop.wait(poll_s)
+
+    def _prepare_image(self, image: np.ndarray) -> np.ndarray:
+        """Normalize one backend frame before exposing it to consumers."""
+        return np.asarray(image)

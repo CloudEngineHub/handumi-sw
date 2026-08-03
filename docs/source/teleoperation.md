@@ -51,7 +51,22 @@ their physical device IDs come only from the corresponding entries in
 `configs/rig.yaml`, which is where each camera is declared once. Use
 `--skip-cameras` to run without any camera view.
 
+Camera backend, capture resolution, output resolution, and FPS come from each
+logical view's `cameras.<name>` entry. If one of the three views uses
+`type: zedmini`, it is shown as its cropped `672×376` left image without
+changing the `--cameras` logical name.
+
 Viser shows the robot and Rerun shows tracking and camera trails. Use `--no-rerun` or `--no-viser` when a viewer is not needed.
+
+### Motion timing
+
+Tracking and IK run at `--fps` (30 Hz by default). Their timestamped joint
+targets enter a short delayed buffer; an independent stream samples that
+trajectory at `--command-rate-hz` (100 Hz by default) using
+`t - --trajectory-delay-ms`. This removes 30 Hz command steps without running
+IK repeatedly on the same tracker pose. Simulation, real teleoperation, and
+teleop recording use the same pipeline. Advanced tuning is available through
+`handumi teleop --help-advanced`.
 
 ### Start and Reset
 

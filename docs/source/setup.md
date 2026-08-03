@@ -46,6 +46,30 @@ Keep these machine-local paths in `configs/rig.yaml`; do not commit them as
 portable project configuration.
 :::
 
+### Camera types and resolutions
+
+Declare capture settings for the three logical views: `left_wrist`,
+`right_wrist`, and `workspace`. Each view can use the normal `opencv` backend
+or `zedmini`, which expects the ZED Mini side-by-side UVC mode and exposes only
+its left image:
+
+```yaml
+cameras:
+  workspace:
+    type: zedmini
+    index_or_path: 4
+    width: 1344
+    height: 376
+    fps: 30
+```
+
+For `zedmini`, `width` and `height` describe the captured stereo frame.
+HandUMI keeps `frame[:, :672]`, so previews and datasets contain one
+`672×376` RGB image. The supported rates for this mode are 15, 30, 60, and
+100 FPS. `index_or_path` accepts either an OpenCV integer such as `4` or an
+explicit Linux path such as `/dev/video4`. Per-camera values in `cameras:`
+take precedence over the global camera fallbacks used by older rig files.
+
 ## 2. Calibrate the Grippers
 
 First confirm that both encoders change smoothly while opening and closing:
