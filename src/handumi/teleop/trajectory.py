@@ -10,6 +10,8 @@ from typing import Callable, Mapping
 
 import numpy as np
 
+from handumi.real.streamer import next_periodic_deadline
+
 DEFAULT_GRIPPER_MAX_RATE_PER_S = 10.0
 
 
@@ -22,21 +24,44 @@ class JointCommand:
     openings: dict[str, float]
 
 
+@dataclass(frozen=True)
+class CommandPlayerStats:
+    """Observable timing of the fixed-rate output thread."""
+
+    elapsed_s: float
+    published_commands: int
+    effective_rate_hz: float
+    missed_deadlines: int
+    max_lateness_ms: float
+    max_write_ms: float
+    latest_target_age_ms: float
+
+
 class DelayedJointCommandBuffer:
     """Interpolate timestamped IK results at ``now - delay``.
 
     The buffer retains the sample immediately before the playback cursor and
     all newer samples.  Joint positions and normalized gripper openings are
-    linearly interpolated.  If tracking does not provide the right-hand
-    bracket in time, playback safely holds the newest available command.
+    linearly interpolated. If tracking does not provide the right-hand
+    bracket in time, playback uses an optional bounded velocity bridge and
+    then safely holds the newest predicted command.
     """
 
-    def __init__(self, delay_s: float, *, max_commands: int = 128) -> None:
+    def __init__(
+        self,
+        delay_s: float,
+        *,
+        max_extrapolation_s: float = 0.0,
+        max_commands: int = 128,
+    ) -> None:
         if delay_s < 0.0:
             raise ValueError("delay_s must be >= 0")
+        if max_extrapolation_s < 0.0:
+            raise ValueError("max_extrapolation_s must be >= 0")
         if max_commands < 2:
             raise ValueError("max_commands must be >= 2")
         self.delay_s = float(delay_s)
+        self.max_extrapolation_s = float(max_extrapolation_s)
         self._commands: deque[JointCommand] = deque(maxlen=max_commands)
         self._lock = threading.Lock()
 
@@ -83,9 +108,18 @@ class DelayedJointCommandBuffer:
                 return first.q.copy(), first.openings.copy()
             second = self._commands[1]
             if playback_s >= second.time_s:
-                # With only two commands this is an underflow: holding the
-                # newest target is safer than extrapolating operator motion.
-                return second.q.copy(), second.openings.copy()
+                # Bridge a short producer underflow at the measured IK
+                # velocity.  The horizon is deliberately bounded: it removes
+                # the 30 Hz staircase without letting stale tracking run away.
+                source_dt = second.time_s - first.time_s
+                horizon_s = min(
+                    playback_s - second.time_s,
+                    self.max_extrapolation_s,
+                )
+                if horizon_s <= 0.0:
+                    return second.q.copy(), second.openings.copy()
+                q = second.q + (horizon_s / source_dt) * (second.q - first.q)
+                return q.astype(np.float32), second.openings.copy()
             fraction = (playback_s - first.time_s) / (second.time_s - first.time_s)
             q = first.q + fraction * (second.q - first.q)
             sides = first.openings.keys() | second.openings.keys()
@@ -134,6 +168,7 @@ class DelayedJointCommandPlayer:
         *,
         command_rate_hz: float,
         delay_s: float,
+        max_extrapolation_s: float = 0.0,
         ema_time_constant_s: float = 0.0,
         gripper_max_rate_per_s: float = 0.0,
     ) -> None:
@@ -146,7 +181,10 @@ class DelayedJointCommandPlayer:
         self.command_rate_hz = float(command_rate_hz)
         self.ema_time_constant_s = float(ema_time_constant_s)
         self.gripper_max_rate_per_s = float(gripper_max_rate_per_s)
-        self.buffer = DelayedJointCommandBuffer(delay_s)
+        self.buffer = DelayedJointCommandBuffer(
+            delay_s,
+            max_extrapolation_s=max_extrapolation_s,
+        )
         self._write = write
         self._stop = threading.Event()
         self._error: BaseException | None = None
@@ -157,6 +195,13 @@ class DelayedJointCommandPlayer:
         self._target_openings: dict[str, float] = {}
         self._filtered_q: np.ndarray | None = None
         self._filtered_openings: dict[str, float] = {}
+        self._stats_lock = threading.Lock()
+        self._started_at_s = 0.0
+        self._last_target_at_s = 0.0
+        self._published_commands = 0
+        self._missed_deadlines = 0
+        self._max_lateness_s = 0.0
+        self._max_write_s = 0.0
 
     def start(
         self,
@@ -167,11 +212,19 @@ class DelayedJointCommandPlayer:
     ) -> None:
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("joint command player is already running")
+        started_at = time.perf_counter()
         self.buffer.reset(
             q,
             openings,
-            time_s=time.perf_counter() if time_s is None else time_s,
+            time_s=started_at if time_s is None else time_s,
         )
+        with self._stats_lock:
+            self._started_at_s = started_at
+            self._last_target_at_s = started_at
+            self._published_commands = 0
+            self._missed_deadlines = 0
+            self._max_lateness_s = 0.0
+            self._max_write_s = 0.0
         with self._target_openings_lock:
             self._target_openings = {
                 side: float(value) for side, value in openings.items()
@@ -189,6 +242,14 @@ class DelayedJointCommandPlayer:
         )
         self._thread.start()
 
+    def update_openings(self, openings: Mapping[str, float]) -> None:
+        """Update grippers without fabricating a duplicate arm waypoint."""
+        self.raise_if_failed()
+        with self._target_openings_lock:
+            self._target_openings = {
+                side: float(value) for side, value in openings.items()
+            }
+
     def push(
         self,
         q: np.ndarray,
@@ -198,6 +259,8 @@ class DelayedJointCommandPlayer:
     ) -> None:
         self.raise_if_failed()
         self.buffer.push(q, openings, time_s=time_s)
+        with self._stats_lock:
+            self._last_target_at_s = time.perf_counter()
         with self._target_openings_lock:
             self._target_openings = {
                 side: float(value) for side, value in openings.items()
@@ -222,6 +285,24 @@ class DelayedJointCommandPlayer:
             q, openings = self._latest
             return q.copy(), openings.copy()
 
+    def stats(self) -> CommandPlayerStats:
+        now_s = time.perf_counter()
+        with self._stats_lock:
+            elapsed_s = max(0.0, now_s - self._started_at_s)
+            published = self._published_commands
+            return CommandPlayerStats(
+                elapsed_s=elapsed_s,
+                published_commands=published,
+                effective_rate_hz=(published / elapsed_s if elapsed_s > 0.0 else 0.0),
+                missed_deadlines=self._missed_deadlines,
+                max_lateness_ms=self._max_lateness_s * 1000.0,
+                max_write_ms=self._max_write_s * 1000.0,
+                latest_target_age_ms=max(
+                    0.0, now_s - self._last_target_at_s
+                )
+                * 1000.0,
+            )
+
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -236,7 +317,11 @@ class DelayedJointCommandPlayer:
         next_tick = time.perf_counter()
         try:
             while not self._stop.is_set():
-                command = self.buffer.sample(next_tick)
+                # Sample in actual time.  Sampling an old scheduled deadline
+                # after a process stall would briefly replay stale motion.
+                tick_s = time.perf_counter()
+                lateness_s = max(0.0, tick_s - next_tick)
+                command = self.buffer.sample(tick_s)
                 if command is not None:
                     q, _delayed_openings = command
                     with self._target_openings_lock:
@@ -247,16 +332,30 @@ class DelayedJointCommandPlayer:
                         alpha=alpha,
                         gripper_max_step=self.gripper_max_rate_per_s * period_s,
                     )
+                    write_start_s = time.perf_counter()
                     self._write(*filtered)
+                    write_s = time.perf_counter() - write_start_s
                     with self._latest_lock:
                         self._latest = (filtered[0].copy(), filtered[1].copy())
-                next_tick += period_s
-                remaining_s = next_tick - time.perf_counter()
+                now_s = time.perf_counter()
+                regular_deadline = next_tick + period_s
+                missed = (
+                    int((now_s - regular_deadline) // period_s) + 1
+                    if regular_deadline <= now_s
+                    else 0
+                )
+                with self._stats_lock:
+                    if command is not None:
+                        self._published_commands += 1
+                        self._max_write_s = max(self._max_write_s, write_s)
+                    self._missed_deadlines += missed
+                    self._max_lateness_s = max(
+                        self._max_lateness_s, lateness_s
+                    )
+                next_tick = next_periodic_deadline(next_tick, period_s, now_s)
+                remaining_s = next_tick - now_s
                 if remaining_s > 0.0:
                     self._stop.wait(remaining_s)
-                else:
-                    # Do not burst old commands after a scheduler stall.
-                    next_tick = time.perf_counter()
         except BaseException as exc:
             self._error = exc
             self._stop.set()
@@ -299,11 +398,13 @@ class TeleopCommandStream:
         command_rate_hz: float,
         delay_s: float,
         ema_time_constant_s: float,
+        max_extrapolation_s: float = 0.0,
     ) -> None:
         self.player = DelayedJointCommandPlayer(
             write,
             command_rate_hz=command_rate_hz,
             delay_s=delay_s,
+            max_extrapolation_s=max_extrapolation_s,
             ema_time_constant_s=ema_time_constant_s,
             gripper_max_rate_per_s=DEFAULT_GRIPPER_MAX_RATE_PER_S,
         )
@@ -330,8 +431,15 @@ class TeleopCommandStream:
     def stop(self) -> None:
         self.player.stop()
 
+    def update_openings(self, openings: Mapping[str, float]) -> None:
+        if self.player.running:
+            self.player.update_openings(openings)
+
     def latest(self) -> tuple[np.ndarray, dict[str, float]] | None:
         return self.player.latest()
+
+    def stats(self) -> CommandPlayerStats:
+        return self.player.stats()
 
     @property
     def running(self) -> bool:
@@ -340,6 +448,7 @@ class TeleopCommandStream:
 
 __all__ = [
     "DEFAULT_GRIPPER_MAX_RATE_PER_S",
+    "CommandPlayerStats",
     "DelayedJointCommandBuffer",
     "DelayedJointCommandPlayer",
     "JointCommand",

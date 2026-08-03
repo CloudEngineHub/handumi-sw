@@ -192,11 +192,15 @@ class BimanualKinematicsSolver:
             return self._with_locked_joints(q_current)
 
         q_prev = self._with_locked_joints(q_current)
-        left_fk, right_fk = self.fk(q_prev)
+        if left_pose is not None and right_pose is not None:
+            left_fk = right_fk = None
+        else:
+            left_fk, right_fk = self.fk(q_prev)
         tgt_pos = []
         tgt_wxyz = []
         for pose, fallback in ((left_pose, left_fk), (right_pose, right_fk)):
             if pose is None:
+                assert fallback is not None
                 tgt_pos.append(np.asarray(fallback.translation(), dtype=np.float32))
                 tgt_wxyz.append(np.asarray(fallback.rotation().wxyz, dtype=np.float32))
             else:

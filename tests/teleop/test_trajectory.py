@@ -32,6 +32,32 @@ def test_delayed_buffer_holds_latest_command_on_underflow():
     assert openings == {"left": 1.0}
 
 
+def test_delayed_buffer_bridges_short_underflow_at_recent_velocity():
+    buffer = DelayedJointCommandBuffer(
+        delay_s=0.02,
+        max_extrapolation_s=0.03,
+    )
+    buffer.reset(np.array([0.0]), {"left": 0.0}, time_s=1.00)
+    buffer.push(np.array([1.0]), {"left": 1.0}, time_s=1.04)
+
+    q, _ = buffer.sample(1.07)  # playback=1.05: extrapolate 10 ms
+
+    np.testing.assert_allclose(q, [1.25])
+
+
+def test_delayed_buffer_caps_extrapolation_during_long_tracking_pause():
+    buffer = DelayedJointCommandBuffer(
+        delay_s=0.0,
+        max_extrapolation_s=0.03,
+    )
+    buffer.reset(np.array([0.0]), {}, time_s=1.00)
+    buffer.push(np.array([1.0]), {}, time_s=1.04)
+
+    q, _ = buffer.sample(2.00)
+
+    np.testing.assert_allclose(q, [1.75])
+
+
 def test_reset_discards_an_old_trajectory_epoch():
     buffer = DelayedJointCommandBuffer(delay_s=0.08)
     buffer.reset(np.array([0.0]), {"left": 0.0}, time_s=1.00)
@@ -136,6 +162,23 @@ def test_player_does_not_apply_arm_playback_delay_to_gripper_target():
     assert first_new_gripper[0] == pytest.approx(0.0)
 
 
+def test_player_updates_gripper_without_adding_an_arm_waypoint():
+    player = DelayedJointCommandPlayer(
+        lambda q, openings: None,
+        command_rate_hz=100.0,
+        delay_s=0.04,
+    )
+    now = time.perf_counter()
+    player.start(np.array([0.0]), {"left": 0.0}, time_s=now)
+    try:
+        player.update_openings({"left": 1.0})
+        with player._target_openings_lock:
+            assert player._target_openings == {"left": 1.0}
+        assert len(player.buffer._commands) == 1
+    finally:
+        player.stop()
+
+
 def test_player_slew_limits_recovered_gripper_jump_without_filtering_ticks():
     player = DelayedJointCommandPlayer(
         lambda q, openings: None,
@@ -168,6 +211,7 @@ def _wait_until(predicate, timeout_s=0.2):
     ("kwargs", "message"),
     (
         ({"delay_s": -0.1}, "delay_s"),
+        ({"delay_s": 0.1, "max_extrapolation_s": -0.1}, "max_extrapolation_s"),
         ({"delay_s": 0.1, "max_commands": 1}, "max_commands"),
     ),
 )

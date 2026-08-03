@@ -79,6 +79,8 @@ class TeleopRecordSchemaTest(unittest.TestCase):
             "motion_position_deadband_mm",
             "motion_orientation_deadband_deg",
             "translation_scale",
+            "translation_deadzone_mm",
+            "tracking_stale_ms",
             "space_start",
             "no_sounds",
             "controller_tcp_calibration",

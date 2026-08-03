@@ -55,6 +55,26 @@ def test_teleop_real_routes_to_real_module():
     target_main.assert_called_once_with()
 
 
+def test_real_teleop_defaults_jax_to_low_latency_cpu(monkeypatch):
+    monkeypatch.delenv("JAX_PLATFORMS", raising=False)
+    module = SimpleNamespace(main=mock.Mock())
+
+    with mock.patch.object(cli.importlib, "import_module", return_value=module):
+        cli.main(["teleop-real", "--device", "pico"])
+
+    assert cli.os.environ["JAX_PLATFORMS"] == "cpu"
+
+
+def test_real_teleop_respects_explicit_jax_platform(monkeypatch):
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda")
+    module = SimpleNamespace(main=mock.Mock())
+
+    with mock.patch.object(cli.importlib, "import_module", return_value=module):
+        cli.main(["teleop-real", "--device", "pico"])
+
+    assert cli.os.environ["JAX_PLATFORMS"] == "cuda"
+
+
 def test_teleop_record_routes_to_record_module():
     target_main = mock.Mock()
     module = SimpleNamespace(main=target_main)

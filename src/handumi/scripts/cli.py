@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +120,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     path, command = match
     rest = values[len(path) :]
+    if path in {("teleop-real",), ("teleop-record",)}:
+        # This IK is a tiny latency-sensitive dense solve. On the supported
+        # NVIDIA setup, CPU execution has far lower tail latency than CUDA.
+        # Respect an explicit user override for benchmarking/debugging.
+        os.environ.setdefault("JAX_PLATFORMS", "cpu")
     module = importlib.import_module(command.module)
     previous_argv = sys.argv
     try:

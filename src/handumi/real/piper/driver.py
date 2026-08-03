@@ -19,7 +19,10 @@ import numpy as np
 import yaml
 
 from handumi.config import DEFAULT_RIG_CONFIG, EXAMPLE_RIG_CONFIG
-from handumi.real.streamer import AccelerationLimitedJointTrajectory
+from handumi.real.streamer import (
+    AccelerationLimitedJointTrajectory,
+    next_periodic_deadline,
+)
 from handumi.robots.registry import RobotRealConfig
 
 log = logging.getLogger("handumi.real.piper")
@@ -523,10 +526,11 @@ class PiperJointStreamer:
                     if gripper is not None:
                         arm.send_gripper_microm(gripper, self.gripper_effort)
 
-                next_time += period
-                remaining = next_time - time.perf_counter()
+                now = time.perf_counter()
+                next_time = next_periodic_deadline(next_time, period, now)
+                remaining = next_time - now
                 if remaining > 0.0:
-                    time.sleep(remaining)
+                    self._stop.wait(remaining)
         except BaseException as exc:
             self._error = exc
             self._stop.set()

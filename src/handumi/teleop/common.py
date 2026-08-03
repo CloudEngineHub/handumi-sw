@@ -8,7 +8,7 @@ import termios
 import threading
 import time
 import tty
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -23,6 +23,53 @@ SIDE_CHOICES = ("left", "right", "both")
 # motion faster than a real backend is allowed to stream it.
 DEFAULT_TELEOP_FPS = 30
 DEFAULT_GRIPPER_SAMPLE_HZ = 200.0
+
+
+class BestEffortPeriodicWorker:
+    """Run disposable peripheral work without blocking the control loop."""
+
+    def __init__(
+        self,
+        callback: Callable[[], Any],
+        *,
+        rate_hz: float,
+        thread_name: str,
+    ) -> None:
+        if rate_hz <= 0.0:
+            raise ValueError("rate_hz must be > 0")
+        self.callback = callback
+        self.period_s = 1.0 / float(rate_hz)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=thread_name,
+            daemon=True,
+        )
+        self.error: BaseException | None = None
+
+    def start(self) -> None:
+        if not self._thread.is_alive():
+            self._thread.start()
+
+    def close(self, *, timeout_s: float = 2.0) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=max(0.0, timeout_s))
+
+    def _run(self) -> None:
+        next_tick = time.monotonic()
+        try:
+            while not self._stop.is_set():
+                self.callback()
+                now = time.monotonic()
+                next_tick += self.period_s
+                if next_tick <= now:
+                    # Preview work is disposable; never replay missed frames.
+                    next_tick = now + self.period_s
+                self._stop.wait(max(0.0, next_tick - now))
+        except BaseException as exc:
+            self.error = exc
+            self._stop.set()
 
 
 def _normalized_quaternion_xyzw(quaternion: np.ndarray) -> np.ndarray:
@@ -173,6 +220,11 @@ class TeleopMotionSmoother:
             self._joint_q = self._joint_q + alpha * (current - self._joint_q)
         self._last_joint_time_s = float(now_s)
         return self._joint_q.copy()
+
+    def restore_joint_command(self, q: np.ndarray) -> None:
+        """Forget a computed joint result that was superseded before publish."""
+        self._joint_q = np.asarray(q, dtype=np.float32).copy()
+        self._last_joint_time_s = None
 
     def _alpha(self, dt_s: float) -> float:
         if self.time_constant_s == 0.0:

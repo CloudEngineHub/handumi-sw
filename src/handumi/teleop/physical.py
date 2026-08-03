@@ -11,6 +11,8 @@ from handumi.teleop.common import SIDE_CHOICES
 from handumi.teleop.motion import add_teleop_motion_arguments
 
 DEFAULT_TRANSLATION_SCALE = 1.5
+DEFAULT_TRANSLATION_DEADZONE_MM = 2.0
+DEFAULT_TRACKING_STALE_MS = 150.0
 
 
 def _camera_list(value: str) -> list[str]:
@@ -38,6 +40,21 @@ def add_physical_teleop_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=DEFAULT_TRANSLATION_SCALE,
         help="Scale HandUMI translation deltas before applying them to the robot TCP.",
+    )
+    parser.add_argument(
+        "--translation-deadzone-mm",
+        type=float,
+        default=DEFAULT_TRANSLATION_DEADZONE_MM,
+        help=(
+            "Ignore radial controller motion around its anchor, with a continuous "
+            "transition into the configured translation scale."
+        ),
+    )
+    parser.add_argument(
+        "--tracking-stale-ms",
+        type=float,
+        default=DEFAULT_TRACKING_STALE_MS,
+        help="Cancel and require re-anchoring if tracking stops advancing.",
     )
     parser.add_argument(
         "--space-start",
@@ -101,6 +118,12 @@ def add_physical_teleop_arguments(parser: argparse.ArgumentParser) -> None:
 
 def validate_physical_teleop_args(args: argparse.Namespace) -> None:
     """Validate safety constraints shared by physical teleop frontends."""
+    if args.translation_scale <= 0.0:
+        raise SystemExit("--translation-scale must be > 0.")
+    if args.translation_deadzone_mm < 0.0:
+        raise SystemExit("--translation-deadzone-mm must be >= 0.")
+    if args.tracking_stale_ms <= 0.0:
+        raise SystemExit("--tracking-stale-ms must be > 0.")
     if args.skip_feetech and not args.space_start:
         raise SystemExit(
             "--skip-feetech disables clap control; add --space-start so teleop can begin."
@@ -114,7 +137,9 @@ def validate_physical_teleop_args(args: argparse.Namespace) -> None:
 
 
 __all__ = [
+    "DEFAULT_TRACKING_STALE_MS",
     "DEFAULT_TRANSLATION_SCALE",
+    "DEFAULT_TRANSLATION_DEADZONE_MM",
     "add_physical_teleop_arguments",
     "validate_physical_teleop_args",
 ]

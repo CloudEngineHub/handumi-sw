@@ -13,7 +13,11 @@ from typing import Any, Callable, Protocol
 import numpy as np
 import yaml
 
-from handumi.real.streamer import JointStreamer, step_toward
+from handumi.real.streamer import (
+    JointStreamer,
+    next_periodic_deadline,
+    step_toward,
+)
 
 log = logging.getLogger(__name__)
 
@@ -381,11 +385,10 @@ class OpenArmJointStreamer(JointStreamer):
                         )
                 with self._lock:
                     self._feedback = feedback
-                next_tick += period
-                if (remaining := next_tick - time.monotonic()) > 0:
-                    time.sleep(remaining)
-                else:
-                    next_tick = time.monotonic()
+                now = time.monotonic()
+                next_tick = next_periodic_deadline(next_tick, period, now)
+                if (remaining := next_tick - now) > 0:
+                    self._stop.wait(remaining)
         except BaseException as exc:
             self._error = exc
             self._stop.set()

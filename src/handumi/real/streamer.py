@@ -7,6 +7,23 @@ import threading
 import numpy as np
 
 
+def next_periodic_deadline(
+    previous_deadline: float,
+    period_s: float,
+    now_s: float,
+) -> float:
+    """Return the next tick without replaying deadlines missed under load.
+
+    A real-time command streamer must never turn a scheduler pause into a burst
+    of back-to-back hardware commands.  If the regular next deadline has
+    already passed, skip it and resume one full period after ``now_s``.
+    """
+    regular_deadline = float(previous_deadline) + float(period_s)
+    if regular_deadline <= now_s:
+        return float(now_s) + float(period_s)
+    return regular_deadline
+
+
 class AccelerationLimitedJointTrajectory:
     """Online latest-target trajectory with velocity and acceleration limits.
 
@@ -156,4 +173,9 @@ class JointStreamer:
         raise NotImplementedError
 
 
-__all__ = ["AccelerationLimitedJointTrajectory", "JointStreamer", "step_toward"]
+__all__ = [
+    "AccelerationLimitedJointTrajectory",
+    "JointStreamer",
+    "next_periodic_deadline",
+    "step_toward",
+]

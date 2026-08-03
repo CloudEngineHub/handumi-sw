@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from handumi.robots.registry import load_embodiment
 from handumi.teleop.core import TeleopController
@@ -91,3 +92,35 @@ def test_translation_scale_multiplies_relative_tcp_translation():
     delta_at_1x = targets[0][:3] - home_left[:3]
     delta_at_2x = targets[1][:3] - home_left[:3]
     np.testing.assert_allclose(delta_at_2x, 2.0 * delta_at_1x, atol=1e-6)
+
+
+def test_translation_deadzone_filters_jitter_then_applies_scale_continuously():
+    runtime = load_embodiment("openarmv1")
+    home = runtime.home_q()
+    sources = {"left": _pose(0.3, 0.2, 1.0), "right": _pose(0.3, -0.2, 1.0)}
+    controller = TeleopController(
+        runtime,
+        home_q=home,
+        enabled_sides=("left",),
+        source_world_to_robot_world=np.eye(3, dtype=np.float32),
+        translation_scale=1.5,
+        translation_deadzone_m=0.01,
+    )
+    controller.anchor(sources, {"left": True, "right": True}, ("left",))
+    home_left, _ = runtime.solver_cls().fk_pose7(home)
+
+    inside = controller.step(
+        {**sources, "left": _pose(0.305, 0.2, 1.0)},
+        {"left": True, "right": True},
+        {"left": 0.0, "right": 0.0},
+    ).target_pose7["left"]
+    outside = controller.step(
+        {**sources, "left": _pose(0.33, 0.2, 1.0)},
+        {"left": True, "right": True},
+        {"left": 0.0, "right": 0.0},
+    ).target_pose7["left"]
+
+    np.testing.assert_allclose(inside[:3], home_left[:3], atol=1e-6)
+    assert np.linalg.norm(outside[:3] - home_left[:3]) == pytest.approx(
+        0.03, abs=1e-6
+    )

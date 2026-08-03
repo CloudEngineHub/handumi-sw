@@ -23,6 +23,11 @@ from handumi.teleop.motion import (
     DEFAULT_POSITION_DEADBAND_MM,
     DEFAULT_TRAJECTORY_DELAY_MS,
 )
+from handumi.teleop.physical import (
+    DEFAULT_TRACKING_STALE_MS,
+    DEFAULT_TRANSLATION_DEADZONE_MM,
+    DEFAULT_TRANSLATION_SCALE,
+)
 
 
 class TeleopRealArgsTest(unittest.TestCase):
@@ -44,6 +49,11 @@ class TeleopRealArgsTest(unittest.TestCase):
         self.assertEqual(args.robot, "piper")
         self.assertEqual(args.fps, 30)
         self.assertEqual(args.command_rate_hz, DEFAULT_COMMAND_RATE_HZ)
+        self.assertEqual(args.translation_scale, DEFAULT_TRANSLATION_SCALE)
+        self.assertEqual(
+            args.translation_deadzone_mm, DEFAULT_TRANSLATION_DEADZONE_MM
+        )
+        self.assertEqual(args.tracking_stale_ms, DEFAULT_TRACKING_STALE_MS)
         self.assertEqual(args.trajectory_delay_ms, DEFAULT_TRAJECTORY_DELAY_MS)
         self.assertEqual(
             args.motion_smoothing_time_constant_s,
@@ -69,6 +79,20 @@ class TeleopRealArgsTest(unittest.TestCase):
         args = parse_args(["--device", "pico", "--translation-scale", "2.25"])
 
         self.assertEqual(args.translation_scale, 2.25)
+
+    def test_translation_scale_must_be_positive(self):
+        args = parse_args(["--device", "pico", "--translation-scale", "0"])
+
+        with self.assertRaises(SystemExit):
+            _validate_args(args)
+
+    def test_tracking_freshness_and_deadzone_are_validated(self):
+        for option, value in (
+            ("--tracking-stale-ms", "0"),
+            ("--translation-deadzone-mm", "-1"),
+        ):
+            with self.assertRaises(SystemExit):
+                _validate_args(parse_args(["--device", "pico", option, value]))
 
     def test_smoothing_configuration_cannot_be_negative(self):
         for option in (

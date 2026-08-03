@@ -6,6 +6,7 @@ import pytest
 from handumi.teleop.motion import (
     DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
     DEFAULT_COMMAND_RATE_HZ,
+    DEFAULT_MAX_EXTRAPOLATION_MS,
     DEFAULT_ORIENTATION_DEADBAND_DEG,
     DEFAULT_POSITION_DEADBAND_MM,
     DEFAULT_TRAJECTORY_DELAY_MS,
@@ -30,6 +31,9 @@ def test_shared_motion_defaults_build_one_normalized_configuration():
     assert config.command_rate_hz == DEFAULT_COMMAND_RATE_HZ == 100.0
     assert config.trajectory_delay_s == pytest.approx(
         DEFAULT_TRAJECTORY_DELAY_MS / 1000.0
+    )
+    assert config.max_extrapolation_s == pytest.approx(
+        DEFAULT_MAX_EXTRAPOLATION_MS / 1000.0
     )
     assert config.command_ema_time_constant_s == DEFAULT_COMMAND_EMA_TIME_CONSTANT_S
     assert config.position_deadband_m == pytest.approx(
@@ -58,6 +62,9 @@ def test_config_builds_the_fixed_rate_ema_command_stream():
     assert stream.player.command_rate_hz == config.command_rate_hz
     assert stream.player.buffer.delay_s == config.trajectory_delay_s
     assert (
+        stream.player.buffer.max_extrapolation_s == config.max_extrapolation_s
+    )
+    assert (
         stream.player.ema_time_constant_s == config.command_ema_time_constant_s
     )
 
@@ -68,6 +75,7 @@ def test_config_builds_the_fixed_rate_ema_command_stream():
         ("--fps", "0"),
         ("--command-rate-hz", "0"),
         ("--trajectory-delay-ms", "-1"),
+        ("--max-extrapolation-ms", "-1"),
         ("--motion-smoothing-time-constant-s", "-1"),
         ("--motion-position-deadband-mm", "-1"),
         ("--motion-orientation-deadband-deg", "-1"),

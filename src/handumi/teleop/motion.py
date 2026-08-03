@@ -12,12 +12,15 @@ from handumi.teleop.common import DEFAULT_TELEOP_FPS, TeleopMotionSmoother
 from handumi.teleop.trajectory import TeleopCommandStream
 
 DEFAULT_COMMAND_RATE_HZ = 100.0
-# This is configurable latency, not an extrapolation horizon. At 30 Hz, 30 ms
-# is slightly shorter than one 33.3 ms source interval, so playback may hold
-# the newest command whenever it lacks the next sample needed to interpolate.
-DEFAULT_TRAJECTORY_DELAY_MS = 45.0
-DEFAULT_COMMAND_EMA_TIME_CONSTANT_S = 0.12
-DEFAULT_POSITION_DEADBAND_MM = 0.5
+# One 30 Hz frame plus a small scheduling margin gives the 100 Hz player two
+# real IK endpoints to interpolate. Prediction is restricted to 5 ms, so the
+# normal path is interpolation rather than speculative controller motion.
+DEFAULT_TRAJECTORY_DELAY_MS = 40.0
+DEFAULT_MAX_EXTRAPOLATION_MS = 5.0
+DEFAULT_COMMAND_EMA_TIME_CONSTANT_S = 0.0
+# Translation jitter is handled relative to the controller anchor. A per-frame
+# deadband would quantize slow intentional motion into delayed jumps.
+DEFAULT_POSITION_DEADBAND_MM = 0.0
 DEFAULT_ORIENTATION_DEADBAND_DEG = 0.25
 
 
@@ -28,6 +31,7 @@ class TeleopMotionConfig:
     input_rate_hz: float = DEFAULT_TELEOP_FPS
     command_rate_hz: float = DEFAULT_COMMAND_RATE_HZ
     trajectory_delay_s: float = DEFAULT_TRAJECTORY_DELAY_MS / 1000.0
+    max_extrapolation_s: float = DEFAULT_MAX_EXTRAPOLATION_MS / 1000.0
     command_ema_time_constant_s: float = DEFAULT_COMMAND_EMA_TIME_CONSTANT_S
     position_deadband_m: float = DEFAULT_POSITION_DEADBAND_MM / 1000.0
     orientation_deadband_rad: float = np.deg2rad(DEFAULT_ORIENTATION_DEADBAND_DEG)
@@ -39,6 +43,7 @@ class TeleopMotionConfig:
             input_rate_hz=float(args.fps),
             command_rate_hz=float(args.command_rate_hz),
             trajectory_delay_s=float(args.trajectory_delay_ms) / 1000.0,
+            max_extrapolation_s=float(args.max_extrapolation_ms) / 1000.0,
             command_ema_time_constant_s=float(
                 args.motion_smoothing_time_constant_s
             ),
@@ -69,6 +74,7 @@ class TeleopMotionConfig:
             write,
             command_rate_hz=self.command_rate_hz,
             delay_s=self.trajectory_delay_s,
+            max_extrapolation_s=self.max_extrapolation_s,
             ema_time_constant_s=self.command_ema_time_constant_s,
         )
 
@@ -99,6 +105,14 @@ def add_teleop_motion_arguments(
         help=transform("Small playback window used to interpolate adjacent IK results."),
     )
     parser.add_argument(
+        "--max-extrapolation-ms",
+        type=float,
+        default=DEFAULT_MAX_EXTRAPOLATION_MS,
+        help=transform(
+            "Maximum constant-velocity bridge for a late tracking/IK sample."
+        ),
+    )
+    parser.add_argument(
         "--motion-smoothing-time-constant-s",
         type=float,
         default=DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
@@ -126,6 +140,8 @@ def validate_teleop_motion_args(args: argparse.Namespace) -> None:
         raise SystemExit("--command-rate-hz must be > 0.")
     if args.trajectory_delay_ms < 0.0:
         raise SystemExit("--trajectory-delay-ms must be >= 0.")
+    if args.max_extrapolation_ms < 0.0:
+        raise SystemExit("--max-extrapolation-ms must be >= 0.")
     if args.motion_smoothing_time_constant_s < 0.0:
         raise SystemExit("--motion-smoothing-time-constant-s must be >= 0.")
     if args.motion_position_deadband_mm < 0.0:
@@ -137,6 +153,7 @@ def validate_teleop_motion_args(args: argparse.Namespace) -> None:
 __all__ = [
     "DEFAULT_COMMAND_EMA_TIME_CONSTANT_S",
     "DEFAULT_COMMAND_RATE_HZ",
+    "DEFAULT_MAX_EXTRAPOLATION_MS",
     "DEFAULT_ORIENTATION_DEADBAND_DEG",
     "DEFAULT_POSITION_DEADBAND_MM",
     "DEFAULT_TRAJECTORY_DELAY_MS",

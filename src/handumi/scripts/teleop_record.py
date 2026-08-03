@@ -43,12 +43,16 @@ Common options:
 import argparse
 import json
 import logging
+import os
 import signal
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any
+
+# Real-time IK favors CPU tail latency; an explicit environment override wins.
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import numpy as np
 
@@ -517,6 +521,7 @@ def _run_record() -> None:
         enabled_sides=enabled_sides,
         source_world_to_robot_world=_tracking_world_map(args.device),
         translation_scale=args.translation_scale,
+        translation_deadzone_m=args.translation_deadzone_mm / 1000.0,
     )
     controller.warmup()
     _validate_feetech_ready(args)
@@ -568,9 +573,12 @@ def _run_record() -> None:
         record_log.info("Selected home pose: %s", home_pose_name)
         real_env.home(home_q)
         record_log.info(
-            "Joint trajectory playback: %.1f Hz with %.0f ms delay.",
+            "Joint trajectory playback: %.1f Hz, %.0f ms delay, "
+            "%.0f ms max bridge, %.0f ms EMA.",
             args.command_rate_hz,
             args.trajectory_delay_ms,
+            args.max_extrapolation_ms,
+            args.motion_smoothing_time_constant_s * 1000.0,
         )
         space_listener.start()
 
@@ -692,6 +700,12 @@ def _run_record() -> None:
                     "action_semantics": "next_step_teleop_joint_command",
                     "trajectory_command_rate_hz": args.command_rate_hz,
                     "trajectory_delay_ms": args.trajectory_delay_ms,
+                    "trajectory_max_extrapolation_ms": args.max_extrapolation_ms,
+                    "trajectory_ema_time_constant_s": (
+                        args.motion_smoothing_time_constant_s
+                    ),
+                    "translation_scale": args.translation_scale,
+                    "translation_deadzone_mm": args.translation_deadzone_mm,
                     "observation_action_alignment": (
                         "observation.state[t] is canonical backend feedback; "
                         "action[t] is the next recorded teleop command."
