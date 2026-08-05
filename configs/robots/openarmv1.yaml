@@ -44,7 +44,7 @@ ik_weights:
   pos: 100.0
   ori: 10.0
   rest: 3.0
-  max_joint_delta: 0.08726646
+  max_joint_delta: 0.03333333
 # Offline replay may follow recorded targets faster than real-time teleoperation.
 # This does not change the real OpenArm command-rate or speed safety limits below.
 replay:
