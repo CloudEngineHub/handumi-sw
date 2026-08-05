@@ -69,6 +69,12 @@ class TeleopRealArgsTest(unittest.TestCase):
         self.assertFalse(args.space_start)
         _validate_args(args)
 
+    def test_skip_cameras_is_available(self):
+        args = parse_args(["--device", "pico", "--skip-cameras"])
+
+        self.assertTrue(args.skip_cameras)
+        _validate_args(args)
+
     def test_space_start_is_opt_in(self):
         args = parse_args(["--device", "pico", "--space-start"])
 

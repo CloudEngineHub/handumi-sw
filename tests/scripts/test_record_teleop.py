@@ -7,6 +7,7 @@ import numpy as np
 
 from handumi.dataset.capture import SYNC_LAG_S
 from handumi.feetech import GripperWidths
+from handumi.scripts.teleop_real import parse_args as parse_real_args
 from handumi.scripts.teleop_record import (
     _validate_record_args,
     _validate_resume_dataset,
@@ -15,7 +16,6 @@ from handumi.scripts.teleop_record import (
     joint_state_feature,
     parse_args,
 )
-from handumi.scripts.teleop_real import parse_args as parse_real_args
 from handumi.teleop import (
     DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
     DEFAULT_COMMAND_RATE_HZ,
@@ -57,9 +57,7 @@ class TeleopRecordSchemaTest(unittest.TestCase):
             args.motion_smoothing_time_constant_s,
             DEFAULT_COMMAND_EMA_TIME_CONSTANT_S,
         )
-        self.assertEqual(
-            args.motion_position_deadband_mm, DEFAULT_POSITION_DEADBAND_MM
-        )
+        self.assertEqual(args.motion_position_deadband_mm, DEFAULT_POSITION_DEADBAND_MM)
         self.assertEqual(
             args.motion_orientation_deadband_deg,
             DEFAULT_ORIENTATION_DEADBAND_DEG,
@@ -156,6 +154,21 @@ class TeleopRecordSchemaTest(unittest.TestCase):
         self.assertEqual(record_args.cam_width, real_args.cam_width)
         self.assertEqual(record_args.cam_height, real_args.cam_height)
 
+    def test_skip_cameras_matches_live_teleop(self):
+        record_args = parse_args(
+            [
+                "--device",
+                "pico",
+                "--output-dir",
+                "outputs/capture",
+                "--skip-cameras",
+            ]
+        )
+        real_args = parse_real_args(["--device", "pico", "--skip-cameras"])
+
+        self.assertTrue(record_args.skip_cameras)
+        self.assertEqual(record_args.skip_cameras, real_args.skip_cameras)
+
     def test_explicit_camera_selection_conflicts_with_no_rerun(self):
         args = parse_args(
             [
@@ -180,11 +193,29 @@ class TeleopRecordSchemaTest(unittest.TestCase):
             _validate_record_args(args)
 
     def test_trajectory_configuration_is_validated(self):
-        args = parse_args(["--device", "pico", "--output-dir", "outputs/capture", "--command-rate-hz", "0"])
+        args = parse_args(
+            [
+                "--device",
+                "pico",
+                "--output-dir",
+                "outputs/capture",
+                "--command-rate-hz",
+                "0",
+            ]
+        )
         with self.assertRaises(SystemExit):
             _validate_record_args(args)
 
-        args = parse_args(["--device", "pico", "--output-dir", "outputs/capture", "--trajectory-delay-ms", "-1"])
+        args = parse_args(
+            [
+                "--device",
+                "pico",
+                "--output-dir",
+                "outputs/capture",
+                "--trajectory-delay-ms",
+                "-1",
+            ]
+        )
         with self.assertRaises(SystemExit):
             _validate_record_args(args)
 

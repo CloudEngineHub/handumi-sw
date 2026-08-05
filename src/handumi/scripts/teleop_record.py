@@ -1,4 +1,3 @@
-
 """Record joint-level real-robot teleoperation demonstrations.
 
 This is the recording sibling of ``handumi teleop-real``. The operator drives
@@ -77,7 +76,6 @@ from handumi.scripts.record import (
     _EscapeStopListener,
     _robot_metadata,
     _wait_for_clap,
-    _wait_for_tracking,
     build_tracker,
     connect_feetech,
 )
@@ -86,15 +84,30 @@ from handumi.synchronization import (
     synchronized_gripper_frame,
 )
 from handumi.teleop.common import (
+    BestEffortPeriodicWorker,
     KeyboardSpaceListener,
     TeleopLoopTimer,
     TeleopMotionSmoother,
+)
+from handumi.teleop.common import (
     enabled_sides as _enabled_sides,
+)
+from handumi.teleop.common import (
     enabled_tracking_ok as _enabled_tracking_ok,
+)
+from handumi.teleop.common import (
     latest_widths as _latest_widths,
+)
+from handumi.teleop.common import (
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.hardware import (
+    load_required_controller_tcp_calibration as _load_required_calibration,
+)
+from handumi.teleop.hardware import (
+    validate_feetech_ready as _validate_feetech_ready,
+)
 from handumi.teleop.motion import (
     TeleopMotionConfig,
     validate_teleop_motion_args,
@@ -104,12 +117,8 @@ from handumi.teleop.physical import (
     validate_physical_teleop_args,
 )
 from handumi.teleop.session import TeleopSession
+from handumi.teleop.tracking import LatestTrackingSampler, TrackingRecoveryPolicy
 from handumi.teleop.trajectory import TeleopCommandStream
-from handumi.teleop.hardware import (
-    load_required_controller_tcp_calibration as _load_required_calibration,
-    validate_feetech_ready as _validate_feetech_ready,
-)
-from handumi.teleop.tracking import TrackingRecoveryPolicy
 from handumi.tracking.base import TrackingProvider
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
@@ -121,6 +130,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 record_log = logging.getLogger("handumi.record_teleop")
+
 
 def build_features(
     cam_names: list[str],
@@ -224,6 +234,7 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
             "output_dir",
             "resume",
             "cameras",
+            "skip_cameras",
             "no_rerun",
         }
         for action in p._actions:
@@ -276,9 +287,43 @@ def _validate_record_args(args: argparse.Namespace) -> None:
             raise SystemExit(f"--{name.replace('_', '-')} must be greater than zero.")
 
 
+def _wait_for_tracking_sampler(
+    tracking_sampler: LatestTrackingSampler,
+    stop_event: threading.Event,
+    *,
+    enabled_sides: tuple[str, ...],
+    tracking_stale_ms: float,
+    poll_s: float = 0.05,
+) -> bool:
+    """Wait for a fresh sample without polling the tracking SDK inline."""
+    last_report = float("-inf")
+    while not stop_event.is_set():
+        now = time.monotonic()
+        snapshot = tracking_sampler.latest()
+        if snapshot is not None:
+            sample = snapshot.sample
+            side_tracked = {
+                "left": sample.left_tracked,
+                "right": sample.right_tracked,
+            }
+            if snapshot.age_s(
+                now
+            ) <= tracking_stale_ms / 1000.0 and _enabled_tracking_ok(
+                side_tracked, enabled_sides
+            ):
+                record_log.info("Enabled controllers tracked; recording gate open.")
+                return True
+        if now - last_report >= 2.0:
+            record_log.warning("Waiting for fresh controller tracking ...")
+            last_report = now
+        stop_event.wait(poll_s)
+    return False
+
+
 def record_episode(
     *,
     tracker: TrackingProvider,
+    tracking_sampler: LatestTrackingSampler,
     grippers: FeetechGripperSampler | FeetechGripperPair | None,
     real_env,
     controller: TeleopController,
@@ -298,9 +343,9 @@ def record_episode(
     gripper_stale_timeout_s: float,
     sensor_loss_timeout_s: float,
     tracking_loss_timeout_s: float,
+    tracking_stale_ms: float,
     command_stream: TeleopCommandStream,
     motion_smoother: TeleopMotionSmoother | None = None,
-    camera_views: LiveCameraViews | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, str, np.ndarray]:
     loop_timer = TeleopLoopTimer(fps)
     n_frames = 0
@@ -319,13 +364,18 @@ def record_episode(
     teleop_session = TeleopSession(controller, motion_smoother)
     observations: list[np.ndarray] = []
     commands: list[np.ndarray] = []
+    last_processed_tracking_time_ns: int | None = None
+    timing_next_log_s = time.perf_counter() + 5.0
+    timing_ik_total_s = 0.0
+    timing_ik_max_s = 0.0
+    timing_ik_samples = 0
+    timing_tracking_age_max_s = 0.0
+    timing_discarded_ik = 0
     command_stream.stop()
 
     while True:
         loop_start, _ = loop_timer.tick()
         record_time_ns = time.monotonic_ns()
-        if camera_views is not None:
-            camera_views.update()
         if episode_start_ns is None:
             episode_start_ns = record_time_ns
 
@@ -337,9 +387,25 @@ def record_episode(
         if start_t is not None and loop_start - start_t >= episode_time_s:
             break
 
-        sample = tracker.latest()
+        tracking_snapshot = tracking_sampler.latest()
+        if tracking_snapshot is None:
+            immediate_widths = _latest_widths(grippers)
+            space_listener.consume_space()
+            clap_detector.update_side(
+                immediate_widths.left_mm,
+                immediate_widths.right_mm,
+                loop_start,
+            )
+            loop_timer.sleep(loop_start)
+            continue
+        sample = tracking_snapshot.sample
+        tracking_age_s = tracking_snapshot.age_s(loop_start)
+        timing_tracking_age_max_s = max(timing_tracking_age_max_s, tracking_age_s)
+        tracking_stale = tracking_age_s > tracking_stale_ms / 1000.0
         side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
-        tracking_ok = _enabled_tracking_ok(side_tracked, enabled_sides)
+        tracking_ok = not tracking_stale and _enabled_tracking_ok(
+            side_tracked, enabled_sides
+        )
 
         if not controller.active and not tracking_ok:
             tracking_recovery.reset()
@@ -354,13 +420,25 @@ def record_episode(
             continue
 
         if not tracking_ok:
-            if tracking_recovery.note_missing(loop_start):
+            if tracking_recovery.note_missing(
+                loop_start,
+                observed_since=(
+                    tracking_snapshot.fresh_at_s if tracking_stale else None
+                ),
+            ):
                 command_stream.stop()
                 held = real_env.hold(q)
                 controller.tracking_lost(held)
                 motion_smoother.reset(held)
                 q = held
-                record_log.warning("Tracking lost; robot command held and episode discarded.")
+                record_log.warning(
+                    "Tracking lost%s; robot command held and episode discarded.",
+                    (
+                        f" (sample age {tracking_age_s * 1000.0:.0f} ms)"
+                        if tracking_stale
+                        else ""
+                    ),
+                )
                 log_say("tracking lost", play_sounds=play_sounds)
             if (
                 tracking_recovery.lost
@@ -372,8 +450,11 @@ def record_episode(
                 break
             recover = getattr(tracker, "recover", None)
             if callable(recover) and tracking_recovery.should_recover(loop_start):
-                if recover():
-                    record_log.info("Tracking recovered; double clap or Space to re-anchor.")
+                acquired, recovered = tracking_sampler.try_source_call(recover)
+                if acquired and recovered:
+                    record_log.info(
+                        "Tracking recovered; double clap or Space to re-anchor."
+                    )
                     log_say("tracking recovered", play_sounds=play_sounds)
             loop_timer.sleep(loop_start)
             continue
@@ -381,7 +462,6 @@ def record_episode(
             record_log.info("Tracking stream recovered; waiting for a fresh anchor.")
         tracking_recovery.reset()
 
-        observation_q = real_env.read(base_q=q)
         immediate_widths = _latest_widths(grippers)
         start_sides = pending_start_sides
         pending_start_sides = ()
@@ -401,27 +481,85 @@ def record_episode(
             commands.clear()
             break
 
+        inputs = teleop_session.inputs(sample, immediate_widths)
+        fresh_tracking = (
+            last_processed_tracking_time_ns is None
+            or tracking_snapshot.source_time_ns != last_processed_tracking_time_ns
+        )
+        if not fresh_tracking and not start_sides:
+            command_stream.update_openings(inputs.openings)
+            real_env.check_health()
+            loop_timer.sleep(loop_start)
+            continue
+
+        observation_q = real_env.read(base_q=q)
+        controller_q_before_ik = controller.q.copy()
+        ik_start_s = time.perf_counter()
         teleop_frame = teleop_session.advance(
-            teleop_session.inputs(sample, immediate_widths),
+            inputs,
             now_s=loop_start,
             start_sides=start_sides,
         )
+        ik_elapsed_s = time.perf_counter() - ik_start_s
+        timing_ik_total_s += ik_elapsed_s
+        timing_ik_max_s = max(timing_ik_max_s, ik_elapsed_s)
+        timing_ik_samples += 1
+        newest_after_ik = tracking_sampler.latest()
+        if (
+            newest_after_ik is not None
+            and newest_after_ik.source_time_ns != tracking_snapshot.source_time_ns
+            and not start_sides
+        ):
+            controller.q = controller_q_before_ik
+            motion_smoother.restore_joint_command(controller_q_before_ik)
+            timing_discarded_ik += 1
+            real_env.check_health()
+            continue
         anchored = teleop_frame.anchored_sides
         if anchored and start_t is None:
             start_t = loop_start
-            record_log.info("Teleop episode started after anchoring %s.", "/".join(anchored))
+            record_log.info(
+                "Teleop episode started after anchoring %s.", "/".join(anchored)
+            )
             log_say("recording episode", play_sounds=play_sounds)
 
         action_q = teleop_frame.q
         command_stream.submit(
             action_q,
             teleop_frame.inputs.openings,
-            time_s=loop_start,
+            time_s=tracking_snapshot.fresh_at_s,
             active=controller.active,
             new_epoch=bool(anchored),
         )
+        last_processed_tracking_time_ns = tracking_snapshot.source_time_ns
         real_env.check_health()
         q = action_q
+
+        timing_now_s = time.perf_counter()
+        if command_stream.running and timing_now_s >= timing_next_log_s:
+            output_stats = command_stream.stats()
+            record_log.info(
+                "Control timing: output=%.1f Hz, missed=%d, "
+                "tracking_age_max=%.0f ms, IK_avg/max=%.1f/%.1f ms, "
+                "backend_write_max=%.1f ms, stale_IK_discarded=%d.",
+                output_stats.effective_rate_hz,
+                output_stats.missed_deadlines,
+                timing_tracking_age_max_s * 1000.0,
+                (
+                    timing_ik_total_s / timing_ik_samples * 1000.0
+                    if timing_ik_samples
+                    else 0.0
+                ),
+                timing_ik_max_s * 1000.0,
+                output_stats.max_write_ms,
+                timing_discarded_ik,
+            )
+            timing_next_log_s = timing_now_s + 5.0
+            timing_ik_total_s = 0.0
+            timing_ik_max_s = 0.0
+            timing_ik_samples = 0
+            timing_tracking_age_max_s = 0.0
+            timing_discarded_ik = 0
 
         played_command = command_stream.latest()
         if played_command is None:
@@ -508,6 +646,9 @@ def _run_record() -> None:
 
     record_log.info("Loading %s IK solver.", args.robot)
     runtime = load_embodiment(args.robot)
+    import jax
+
+    record_log.info("IK compute platform: %s.", jax.default_backend())
     try:
         home_pose_name, home_q = resolve_home_q(
             runtime, rig_config=args.rig_config, explicit_name=args.home_pose
@@ -537,7 +678,9 @@ def _run_record() -> None:
     gripper_pair = None
     grippers = None
     tracker_started = False
+    tracking_sampler: LatestTrackingSampler | None = None
     camera_views: LiveCameraViews | None = None
+    camera_worker: BestEffortPeriodicWorker | None = None
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     motion_config = TeleopMotionConfig.from_args(args)
     motion_smoother = motion_config.make_input_smoother()
@@ -557,9 +700,21 @@ def _run_record() -> None:
         record_log.info("Starting tracking before moving real arms.")
         tracker.start()
         tracker_started = True
+        tracking_sampler = LatestTrackingSampler(
+            tracker.latest,
+            sample_rate_hz=motion_config.input_rate_hz,
+        )
+        tracking_sampler.start()
         camera_views = LiveCameraViews.from_args(
             args, application_id="handumi_teleop_record"
         )
+        if camera_views is not None:
+            camera_worker = BestEffortPeriodicWorker(
+                camera_views.update,
+                rate_hz=args.cam_fps,
+                thread_name="handumi-record-camera-preview",
+            )
+            camera_worker.start()
         gripper_pair = connect_feetech(args)
         if gripper_pair is not None:
             grippers = FeetechGripperSampler(
@@ -572,6 +727,7 @@ def _run_record() -> None:
         real_env.connect()
         record_log.info("Selected home pose: %s", home_pose_name)
         real_env.home(home_q)
+        motion_smoother.reset(home_q)
         record_log.info(
             "Joint trajectory playback: %.1f Hz, %.0f ms delay, "
             "%.0f ms max bridge, %.0f ms EMA.",
@@ -585,7 +741,9 @@ def _run_record() -> None:
         from handumi.dataset import EpisodeResult, write_dataset
 
         layout = canonical_joint_layout(runtime)
-        existing_episodes = _existing_episode_count(args.output_dir) if args.resume else 0
+        existing_episodes = (
+            _existing_episode_count(args.output_dir) if args.resume else 0
+        )
         results: list[EpisodeResult] = []
         record_log.info("Recording vector dataset at: %s", args.output_dir)
 
@@ -597,7 +755,12 @@ def _run_record() -> None:
         ) and not stop_event.is_set():
             ep_num = existing_episodes + recorded + 1
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
-            if not _wait_for_tracking(tracker, stop_event):
+            if not _wait_for_tracking_sampler(
+                tracking_sampler,
+                stop_event,
+                enabled_sides=enabled_sides,
+                tracking_stale_ms=args.tracking_stale_ms,
+            ):
                 break
             record_log.info("--- Episode %d/%s ---", ep_num, ep_total)
             if restart_active:
@@ -624,6 +787,7 @@ def _run_record() -> None:
             controller.reset()
             states, actions, n_frames, status, _ = record_episode(
                 tracker=tracker,
+                tracking_sampler=tracking_sampler,
                 grippers=grippers,
                 real_env=real_env,
                 controller=controller,
@@ -643,12 +807,14 @@ def _run_record() -> None:
                 gripper_stale_timeout_s=args.gripper_stale_timeout_s,
                 sensor_loss_timeout_s=args.sensor_loss_timeout_s,
                 tracking_loss_timeout_s=args.tracking_loss_timeout_s,
+                tracking_stale_ms=args.tracking_stale_ms,
                 command_stream=command_stream,
                 motion_smoother=motion_smoother,
-                camera_views=camera_views,
             )
             if status == "repeat":
-                record_log.warning("Episode restart requested (%d frames discarded).", n_frames)
+                record_log.warning(
+                    "Episode restart requested (%d frames discarded).", n_frames
+                )
                 log_say("Restart recording", play_sounds=play_sounds)
                 real_env.move_home(home_q)
                 restart_active = True
@@ -658,7 +824,9 @@ def _run_record() -> None:
                 "sensor_unhealthy",
                 "interrupted",
             }:
-                record_log.warning("Episode discarded (%s, %d frames).", status, n_frames)
+                record_log.warning(
+                    "Episode discarded (%s, %d frames).", status, n_frames
+                )
                 log_say("Episode discarded", play_sounds=play_sounds)
                 if status == "interrupted":
                     break
@@ -721,7 +889,9 @@ def _run_record() -> None:
                     "repo_id": args.repo_id,
                 },
             )
-        record_log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, args.output_dir)
+        record_log.info(
+            "Done. Recorded %d episode(s). Dataset at: %s", recorded, args.output_dir
+        )
     finally:
         escape_listener.stop()
         space_listener.close()
@@ -736,7 +906,11 @@ def _run_record() -> None:
                 if gripper_pair is not None:
                     gripper_pair.close()
                 if tracker_started:
+                    if tracking_sampler is not None:
+                        tracking_sampler.stop()
                     tracker.stop()
+                if camera_worker is not None:
+                    camera_worker.close()
                 if camera_views is not None:
                     camera_views.close()
                 log_say("Exiting", play_sounds=play_sounds, blocking=True)

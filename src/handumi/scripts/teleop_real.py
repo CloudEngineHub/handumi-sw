@@ -92,6 +92,7 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
             "space_start",
             "no_sounds",
             "cameras",
+            "skip_cameras",
             "no_rerun",
         }
         for action in parser._actions:
