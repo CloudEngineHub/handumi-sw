@@ -77,6 +77,13 @@ class DoubleClapDetectorTest(unittest.TestCase):
         self.assertIsNone(det.update_side(50.0, 50.0, 0.2))
         self.assertEqual(det.update_side(2.0, 50.0, 0.3), "left")
 
+    def test_reports_both_triggering_sides(self):
+        det = DoubleClapDetector(window_s=1.2)
+        self.assertEqual(det.update_sides(50.0, 50.0, 0.0), ())
+        self.assertEqual(det.update_sides(2.0, 2.0, 0.1), ())
+        self.assertEqual(det.update_sides(50.0, 50.0, 0.2), ())
+        self.assertEqual(det.update_sides(2.0, 2.0, 0.3), ("left", "right"))
+
     def _clap(self, det, t, left=True, right=True):
         """One clap: open -> closed -> (returns result of the closed sample)."""
         det.update(50.0, 50.0, t)

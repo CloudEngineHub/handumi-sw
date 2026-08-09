@@ -78,10 +78,14 @@ again:
   stop.
 - Tracking loss cancels pending motion and holds the latest command.
 
-Two optional ways to start exist for when squeezing a gripper is impractical —
-neither replaces the double-squeeze, which stays active in every mode:
+Two optional ways to start exist for when squeezing a gripper is impractical:
 
 - `--space-start`: also start idle arms by pressing Space in the terminal.
   Space only *starts*; it is not a stop or pause key.
 - `--auto-start`: start on their own once controller tracking has been valid
   for `--auto-start-delay-s` (default 5), with no gesture at all.
+
+`handumi teleop-record` uses side-specific gestures for episode collection:
+left starts, right saves and advances to an automatically started next episode,
+and both grippers together discard. See
+[Record a Real-Robot Dataset](physical_robots/real_teleoperation.md#episode-gestures).

@@ -40,6 +40,15 @@ class DoubleClapDetector:
 
     def update_side(self, left_mm: float, right_mm: float, now_s: float) -> str | None:
         """Return the side that double-clapped, preferring right if both fire."""
+        triggered = self.update_sides(left_mm, right_mm, now_s)
+        if "right" in triggered:
+            return "right"
+        return triggered[0] if triggered else None
+
+    def update_sides(
+        self, left_mm: float, right_mm: float, now_s: float
+    ) -> tuple[str, ...]:
+        """Return every side that completed a double clap in this sample."""
         triggered: list[str] = []
         for side, mm in (("left", left_mm), ("right", right_mm)):
             if mm > self._open_mm:
@@ -56,6 +65,4 @@ class DoubleClapDetector:
                     triggered.append(side)
                 else:
                     self._last_clap_t[side] = now_s
-        if "right" in triggered:
-            return "right"
-        return triggered[0] if triggered else None
+        return tuple(triggered)

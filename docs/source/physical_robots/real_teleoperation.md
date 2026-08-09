@@ -77,6 +77,24 @@ the same camera preview backends as `teleop-real`. Its output remains a
 joint-level dataset; use `handumi record` when camera frames must be stored in
 the dataset.
 
+### Episode gestures
+
+The two grippers control continuous episode collection:
+
+1. Double-squeeze the **left gripper** to start the first episode.
+2. Double-squeeze the **right gripper** to save it. The robot returns home and
+   the next episode starts automatically.
+3. Double-squeeze **both grippers** to discard the active episode. The robot
+   returns home and waits for another left-gripper double-squeeze before
+   recording its replacement.
+
+The bilateral gesture may be staggered by up to 200 ms. This prevents small
+sampling differences between grippers from turning a discard into a start or
+save. `Esc` and `Ctrl+C` discard the active episode and stop the session.
+
+With `--space-start`, Space remains an alternative way to start an episode;
+the gripper gestures above remain available.
+
 Unlike a robot-free HandUMI capture, this dataset is bound to the robot that
 produced it. To collect demonstrations that can be retargeted to any supported
 embodiment later, record with HandUMI alone.

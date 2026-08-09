@@ -88,6 +88,12 @@ For example, `--output-dir outputs/handumi-demo` stores the dataset in that
 directory, and `--resume` verifies and reads the same finalized dataset before
 recording additional episodes.
 
+`teleop-record` has a dedicated continuous-collection gesture protocol: double
+squeeze left to start, right to save and automatically start the next episode,
+or both to discard. See the
+[real-robot episode gesture guide](physical_robots/real_teleoperation.md#episode-gestures)
+for the complete behavior.
+
 ## Streaming Video Encoding
 
 Video is encoded continuously while an episode is recorded. HandUMI probes the

@@ -8,10 +8,11 @@ LeRobot row stores canonical robot joints directly:
 * ``action`` is the next joint command produced by the teleop controller.
 
 Before recording, controller->TCP calibration and Feetech calibration must be
-available. Episode control matches ``handumi record --clap-control``:
+available. Episode control is optimized for continuous real-robot collection:
 
-* double-squeeze right: start or stop/save the current episode
-* double-squeeze left while recording: discard and restart the same episode
+* double-squeeze left: start the first or replacement episode
+* double-squeeze right: save the current episode and start the next one
+* double-squeeze both grippers: discard the current episode
 * ``Esc`` / ``Ctrl+C``: discard the active episode and stop
 
 PICO tracking uses ADB.
@@ -32,7 +33,6 @@ Common options:
 * ``--robot``         Registered real backend, for example piper or openarmv1.
 * ``--side``          left|right|both enabled arms.
 * ``--fps``           Recording/control frequency in Hz.
-* ``--episode-time-s`` Maximum episode duration in seconds.
 * ``--num-episodes``  Number of episodes to record; 0 means until stopped.
 * ``--task``          Task description stored in the dataset.
 * ``--output-dir``    Destination directory, for example ``outputs/piper-demo``.
@@ -75,7 +75,6 @@ from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.scripts.record import (
     _EscapeStopListener,
     _robot_metadata,
-    _wait_for_clap,
     build_tracker,
     connect_feetech,
 )
@@ -130,6 +129,67 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 record_log = logging.getLogger("handumi.record_teleop")
+
+
+class _BilateralClapArbiter:
+    """Resolve near-simultaneous side events into one bilateral gesture."""
+
+    def __init__(self, *, bilateral_window_s: float = 0.2) -> None:
+        self._bilateral_window_s = bilateral_window_s
+        self._pending_side: str | None = None
+        self._pending_since_s = 0.0
+
+    def reset(self) -> None:
+        self._pending_side = None
+        self._pending_since_s = 0.0
+
+    def update(
+        self,
+        detector: DoubleClapDetector,
+        widths: GripperWidths,
+        now_s: float,
+    ) -> str | None:
+        """Return ``left``, ``right`` or ``both`` after chord arbitration."""
+        triggered = detector.update_sides(widths.left_mm, widths.right_mm, now_s)
+        if len(triggered) == 2:
+            self.reset()
+            return "both"
+
+        new_side = triggered[0] if triggered else None
+        if self._pending_side is not None:
+            pending_side = self._pending_side
+            deadline_s = self._pending_since_s + self._bilateral_window_s
+            if (
+                new_side is not None
+                and new_side != pending_side
+                and now_s <= deadline_s
+            ):
+                self.reset()
+                return "both"
+            if now_s >= deadline_s:
+                self.reset()
+                if new_side is not None:
+                    self._pending_side = new_side
+                    self._pending_since_s = now_s
+                return pending_side
+
+        if new_side is not None:
+            self._pending_side = new_side
+            self._pending_since_s = now_s
+        return None
+
+
+def _episode_gesture_action(
+    gesture: str | None, *, recording: bool
+) -> str | None:
+    """Map a resolved gripper gesture to the episode state transition."""
+    if gesture == "left" and not recording:
+        return "start"
+    if gesture == "right" and recording:
+        return "save"
+    if gesture == "both" and recording:
+        return "discard"
+    return None
 
 
 def build_features(
@@ -205,7 +265,6 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--help-advanced", action="store_true", help="Show expert hardware options."
     )
     add_physical_teleop_arguments(p)
-    p.add_argument("--episode-time-s", type=float, default=60.0)
     p.add_argument("--num-episodes", type=int, default=10)
     p.add_argument("--task", type=str, default="HandUMI real teleop recording")
     p.add_argument(
@@ -228,7 +287,6 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
             "side",
             "space_start",
             "no_sounds",
-            "episode_time_s",
             "num_episodes",
             "task",
             "output_dir",
@@ -270,8 +328,6 @@ def _apply_recording_defaults(args: argparse.Namespace) -> None:
 def _validate_record_args(args: argparse.Namespace) -> None:
     validate_teleop_motion_args(args)
     validate_physical_teleop_args(args)
-    if args.episode_time_s <= 0:
-        raise SystemExit("--episode-time-s must be > 0.")
     if args.num_episodes < 0:
         raise SystemExit("--num-episodes must be >= 0.")
     for name in (
@@ -332,7 +388,7 @@ def record_episode(
     enabled_sides: tuple[str, ...],
     space_listener: KeyboardSpaceListener,
     clap_detector: DoubleClapDetector,
-    episode_time_s: float,
+    clap_arbiter: _BilateralClapArbiter,
     fps: int,
     task: str,
     stop_event: threading.Event,
@@ -384,18 +440,15 @@ def record_episode(
             observations.clear()
             commands.clear()
             break
-        if start_t is not None and loop_start - start_t >= episode_time_s:
-            break
 
         tracking_snapshot = tracking_sampler.latest()
         if tracking_snapshot is None:
             immediate_widths = _latest_widths(grippers)
             space_listener.consume_space()
-            clap_detector.update_side(
-                immediate_widths.left_mm,
-                immediate_widths.right_mm,
-                loop_start,
+            clap_detector.update_sides(
+                immediate_widths.left_mm, immediate_widths.right_mm, loop_start
             )
+            clap_arbiter.reset()
             loop_timer.sleep(loop_start)
             continue
         sample = tracking_snapshot.sample
@@ -411,11 +464,10 @@ def record_episode(
             tracking_recovery.reset()
             immediate_widths = _latest_widths(grippers)
             space_listener.consume_space()
-            clap_detector.update_side(
-                immediate_widths.left_mm,
-                immediate_widths.right_mm,
-                loop_start,
+            clap_detector.update_sides(
+                immediate_widths.left_mm, immediate_widths.right_mm, loop_start
             )
+            clap_arbiter.reset()
             loop_timer.sleep(loop_start)
             continue
 
@@ -467,16 +519,19 @@ def record_episode(
         pending_start_sides = ()
         if space_listener.consume_space():
             start_sides = controller.idle_sides()
-        clap_side = clap_detector.update_side(
-            immediate_widths.left_mm, immediate_widths.right_mm, loop_start
+        clap_gesture = clap_arbiter.update(
+            clap_detector, immediate_widths, loop_start
         )
-        if clap_side == "right":
-            if start_t is not None:
-                status = "recorded"
-                break
+        gesture_action = _episode_gesture_action(
+            clap_gesture, recording=start_t is not None
+        )
+        if gesture_action == "start":
             start_sides = enabled_sides
-        elif clap_side == "left" and start_t is not None:
-            status = "repeat"
+        elif gesture_action == "save":
+            status = "recorded"
+            break
+        elif gesture_action == "discard":
+            status = "discarded"
             observations.clear()
             commands.clear()
             break
@@ -748,8 +803,9 @@ def _run_record() -> None:
         record_log.info("Recording vector dataset at: %s", args.output_dir)
 
         clap_detector = DoubleClapDetector()
+        clap_arbiter = _BilateralClapArbiter()
         recorded = 0
-        restart_active = False
+        auto_start_next = False
         while (
             args.num_episodes <= 0 or recorded < args.num_episodes
         ) and not stop_event.is_set():
@@ -763,28 +819,23 @@ def _run_record() -> None:
             ):
                 break
             record_log.info("--- Episode %d/%s ---", ep_num, ep_total)
-            if restart_active:
-                restart_active = False
-                record_log.info("  Restarting episode %d immediately ...", ep_num)
+            start_immediately = auto_start_next
+            auto_start_next = False
+            if start_immediately:
+                record_log.info("  Starting episode %d automatically ...", ep_num)
             elif not args.space_start:
                 record_log.info(
-                    "  Double-squeeze right gripper to start episode %d ...",
+                    "  Double-squeeze left gripper to start episode %d ...",
                     ep_num,
                 )
-                if not _wait_for_clap(
-                    grippers,
-                    clap_detector,
-                    stop_event,
-                    side="right",
-                ):
-                    break
             else:
                 record_log.info(
                     "  Press Space%s to start episode %d ...",
-                    " or double-squeeze right gripper" if not args.skip_feetech else "",
+                    " or double-squeeze left gripper" if not args.skip_feetech else "",
                     ep_num,
                 )
             controller.reset()
+            clap_arbiter.reset()
             states, actions, n_frames, status, _ = record_episode(
                 tracker=tracker,
                 tracking_sampler=tracking_sampler,
@@ -796,12 +847,12 @@ def _run_record() -> None:
                 enabled_sides=enabled_sides,
                 space_listener=space_listener,
                 clap_detector=clap_detector,
-                episode_time_s=args.episode_time_s,
+                clap_arbiter=clap_arbiter,
                 fps=args.fps,
                 task=args.task,
                 stop_event=stop_event,
                 play_sounds=play_sounds,
-                initial_start_sides=enabled_sides if not args.space_start else (),
+                initial_start_sides=enabled_sides if start_immediately else (),
                 sync_lag_s=args.sync_lag_s,
                 max_sync_skew_s=args.max_sync_skew_s,
                 gripper_stale_timeout_s=args.gripper_stale_timeout_s,
@@ -811,13 +862,12 @@ def _run_record() -> None:
                 command_stream=command_stream,
                 motion_smoother=motion_smoother,
             )
-            if status == "repeat":
+            if status == "discarded":
                 record_log.warning(
-                    "Episode restart requested (%d frames discarded).", n_frames
+                    "Episode discarded by bilateral gesture (%d frames).", n_frames
                 )
-                log_say("Restart recording", play_sounds=play_sounds)
+                log_say("Episode discarded", play_sounds=play_sounds)
                 real_env.move_home(home_q)
-                restart_active = True
                 continue
             if n_frames == 0 or status in {
                 "tracking_lost",
@@ -849,6 +899,7 @@ def _run_record() -> None:
                 play_sounds=play_sounds,
             )
             real_env.move_home(home_q)
+            auto_start_next = True
 
         if results:
             write_dataset(

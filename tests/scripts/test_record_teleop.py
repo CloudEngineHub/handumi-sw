@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -9,6 +10,8 @@ from handumi.dataset.capture import SYNC_LAG_S
 from handumi.feetech import GripperWidths
 from handumi.scripts.teleop_real import parse_args as parse_real_args
 from handumi.scripts.teleop_record import (
+    _BilateralClapArbiter,
+    _episode_gesture_action,
     _validate_record_args,
     _validate_resume_dataset,
     build_features,
@@ -41,6 +44,41 @@ def _widths() -> GripperWidths:
 
 
 class TeleopRecordSchemaTest(unittest.TestCase):
+    def test_episode_gesture_protocol(self):
+        self.assertEqual(
+            _episode_gesture_action("left", recording=False), "start"
+        )
+        self.assertEqual(_episode_gesture_action("right", recording=True), "save")
+        self.assertEqual(
+            _episode_gesture_action("both", recording=True), "discard"
+        )
+        self.assertIsNone(_episode_gesture_action("right", recording=False))
+        self.assertIsNone(_episode_gesture_action("left", recording=True))
+        self.assertIsNone(_episode_gesture_action("both", recording=False))
+
+    def test_clap_arbiter_delays_a_single_side(self):
+        detector = mock.Mock()
+        detector.update_sides.side_effect = [("left",), ()]
+        arbiter = _BilateralClapArbiter(bilateral_window_s=0.2)
+
+        self.assertIsNone(arbiter.update(detector, _widths(), 1.0))
+        self.assertEqual(arbiter.update(detector, _widths(), 1.2), "left")
+
+    def test_clap_arbiter_combines_staggered_sides(self):
+        detector = mock.Mock()
+        detector.update_sides.side_effect = [("left",), ("right",)]
+        arbiter = _BilateralClapArbiter(bilateral_window_s=0.2)
+
+        self.assertIsNone(arbiter.update(detector, _widths(), 1.0))
+        self.assertEqual(arbiter.update(detector, _widths(), 1.1), "both")
+
+    def test_clap_arbiter_reports_simultaneous_sides_immediately(self):
+        detector = mock.Mock()
+        detector.update_sides.return_value = ("left", "right")
+        arbiter = _BilateralClapArbiter(bilateral_window_s=0.2)
+
+        self.assertEqual(arbiter.update(detector, _widths(), 1.0), "both")
+
     def test_physical_teleop_defaults_match_live_teleop(self):
         args = parse_args(["--device", "pico", "--output-dir", "outputs/capture"])
         real_args = parse_real_args(["--device", "pico"])
