@@ -24,6 +24,7 @@ from handumi.teleop import (
     DEFAULT_TELEOP_FPS,
     DEFAULT_TRAJECTORY_DELAY_MS,
 )
+from handumi.teleop.physical import DEFAULT_TRANSLATION_SCALE
 
 
 def _widths() -> GripperWidths:
@@ -49,7 +50,7 @@ class TeleopRecordSchemaTest(unittest.TestCase):
         self.assertFalse(args.pico_wifi)
         self.assertFalse(args.skip_feetech)
         self.assertFalse(args.space_start)
-        self.assertEqual(args.translation_scale, 1.5)
+        self.assertEqual(args.translation_scale, DEFAULT_TRANSLATION_SCALE)
         self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
         self.assertEqual(args.command_rate_hz, DEFAULT_COMMAND_RATE_HZ)
         self.assertEqual(args.trajectory_delay_ms, DEFAULT_TRAJECTORY_DELAY_MS)

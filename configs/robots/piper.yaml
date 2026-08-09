@@ -53,8 +53,8 @@ controller_tcp_calibrations:
   pico: configs/calibration/controller_tcp/pico.yaml
 ik_weights:
   pos: 100.0
-  ori: 4.5
-  rest: 12.0
+  ori: 10
+  rest: 15.0
   # 4 deg per IK frame.
   max_joint_delta: 0.03490659
   max_reach: 0.70

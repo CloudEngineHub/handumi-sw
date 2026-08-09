@@ -205,8 +205,8 @@ class PiperTeleopSimConfigTest(unittest.TestCase):
         config = load_robot_config("piper")
 
         self.assertEqual(config.ik_weights.pos_weight, 100.0)
-        self.assertEqual(config.ik_weights.ori_weight, 4.5)
-        self.assertEqual(config.ik_weights.rest_weight, 12.0)
+        self.assertEqual(config.ik_weights.ori_weight, 10.0)
+        self.assertEqual(config.ik_weights.rest_weight, 15.0)
 
     def test_piper_selects_validated_meta_tcp_calibration(self):
         config = load_robot_config("piper")

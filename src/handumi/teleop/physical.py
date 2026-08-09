@@ -10,7 +10,7 @@ from handumi.real.registry import REAL_BACKEND_NAMES
 from handumi.teleop.common import SIDE_CHOICES
 from handumi.teleop.motion import add_teleop_motion_arguments
 
-DEFAULT_TRANSLATION_SCALE = 1.5
+DEFAULT_TRANSLATION_SCALE = 1.7
 DEFAULT_TRANSLATION_DEADZONE_MM = 2.0
 DEFAULT_TRACKING_STALE_MS = 150.0
 
