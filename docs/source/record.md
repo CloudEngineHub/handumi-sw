@@ -94,6 +94,13 @@ or both to discard. See the
 [real-robot episode gesture guide](physical_robots/real_teleoperation.md#episode-gestures)
 for the complete behavior.
 
+Unlike the earlier preview-only behavior, `teleop-record` stores every selected
+camera as a LeRobot v3 `video` feature in the same dataset as the real-robot
+joint observations and actions. Its dataset writer runs on a dedicated thread;
+camera devices and MP4 encoders also have their own workers, so disk and codec
+work does not execute in the robot-control loop. The terminal reports the
+writer queue alongside the live control timing.
+
 ## Streaming Video Encoding
 
 Video is encoded continuously while an episode is recorded. HandUMI probes the
@@ -121,6 +128,11 @@ not match the episode, HandUMI discards the episode before appending its rows to
 Parquet. `--encoder-threads` and `--encoder-queue-size` are advanced diagnostic
 overrides; increasing the queue does not fix an encoder that is consistently
 slower than capture.
+
+`teleop-record` uses this same transactional streaming path automatically. If
+its bounded background dataset queue fills, the active episode is discarded to
+preserve exact alignment between video, state, and action instead of slowing
+robot control.
 
 ## Controls
 

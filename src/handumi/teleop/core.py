@@ -95,6 +95,24 @@ class TeleopController:
         self.q = self.home_q.copy()
         return self.q.copy()
 
+    def park(self, sides: tuple[str, ...]) -> tuple[str, ...]:
+        """Deactivate selected arms and send their joints back to home.
+
+        Unlike :meth:`reset`, this preserves the anchors and joint commands of
+        every other arm so a bimanual teleop session can park one side without
+        interrupting the other.
+        """
+        parked: list[str] = []
+        for side in sides:
+            if side not in self.enabled_sides:
+                continue
+            self.anchors[side] = None
+            self.tracking_hold_sides.discard(side)
+            indices = self.side_indices[side]
+            self.q[indices] = self.home_q[indices]
+            parked.append(side)
+        return tuple(parked)
+
     def tracking_lost(self, held_q: np.ndarray) -> None:
         """Cancel motion and keep recovered arms at the backend's held pose."""
         for side in self.enabled_sides:

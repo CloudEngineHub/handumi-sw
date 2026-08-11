@@ -89,3 +89,7 @@ Two optional ways to start exist for when squeezing a gripper is impractical:
 left starts, right saves and advances to an automatically started next episode,
 and both grippers together discard. See
 [Record a Real-Robot Dataset](physical_robots/real_teleoperation.md#episode-gestures).
+The selected camera views are recorded as LeRobot MP4 features. Dataset writes
+and encoding run outside the control loop, and the terminal displays episode,
+elapsed-time, frame-count, queue-depth, and control-timing status while data is
+being collected.

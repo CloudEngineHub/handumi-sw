@@ -73,9 +73,17 @@ for live simulation. `--resume` with the same `--output-dir` verifies and
 appends to that finalized local dataset.
 
 `teleop-record` uses the same 30 Hz IK → delayed 100 Hz command trajectory and
-the same camera preview backends as `teleop-real`. Its output remains a
-joint-level dataset; use `handumi record` when camera frames must be stored in
-the dataset.
+the same camera backends as `teleop-real`. The selected camera streams are
+stored as native LeRobot v3 video features alongside the joint-level state and
+action columns. Each MP4 is written under
+`videos/observation.images.<camera>/chunk-*/file-*.mp4` and is referenced by
+the episode metadata in `meta/episodes/`.
+
+Camera acquisition, Rerun preview, robot command playback, video encoding, and
+LeRobot dataset writing run independently. The 30 Hz control loop only queues
+an aligned dataset row; it does not wait for MP4 encoding. The writer queue is
+bounded so an encoder that cannot keep up causes the current episode to be
+discarded instead of increasing robot-control lag or silently dropping frames.
 
 ### Episode gestures
 
@@ -94,6 +102,22 @@ save. `Esc` and `Ctrl+C` discard the active episode and stop the session.
 
 With `--space-start`, Space remains an alternative way to start an episode;
 the gripper gestures above remain available.
+
+### Recording display
+
+At the start of every episode the terminal shows the episode number, current
+state, and the complete gesture guide. While recording, a `● REC` line is
+updated every five seconds with elapsed time, captured frames, writer-queue
+depth, robot output rate, missed deadlines, tracking age, IK time, and backend
+write latency. A growing writer queue indicates storage or encoding pressure;
+the robot loop remains isolated, but the episode will be discarded if the
+bounded queue fills.
+
+Holding a **robot** gripper completely closed for two seconds parks only that
+arm at home. This timer observes the opening delivered to the robot backend,
+not the raw HandUMI measurement. Opening the corresponding HandUMI gripper
+wakes and re-anchors the parked arm. Double-squeeze episode gestures continue
+to use the HandUMI grippers.
 
 Unlike a robot-free HandUMI capture, this dataset is bound to the robot that
 produced it. To collect demonstrations that can be retargeted to any supported

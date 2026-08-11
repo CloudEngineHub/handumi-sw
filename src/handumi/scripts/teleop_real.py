@@ -10,8 +10,9 @@ Safety behavior:
 
 * controller->TCP calibration is required;
 * the robot homes before teleop starts;
-* arms stay idle until double-clap or explicit ``--space-start``;
-* double-clap during teleop clears anchors and returns home.
+* opening a HandUMI gripper activates and anchors that arm;
+* a robot gripper held fully closed for two seconds parks that arm at home;
+* reopening the corresponding HandUMI gripper re-anchors that arm for use.
 
 Examples:
 
@@ -42,6 +43,11 @@ from handumi.teleop.common import (
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.hardware import (
+    load_required_controller_tcp_calibration as _load_required_calibration,
+    validate_feetech_ports_exist,
+    validate_feetech_ready as _validate_feetech_ready,
+)
 from handumi.teleop.motion import (
     TeleopMotionConfig,
     validate_teleop_motion_args,
@@ -51,13 +57,11 @@ from handumi.teleop.physical import (
     validate_physical_teleop_args,
 )
 from handumi.teleop.session import TeleopSession
-from handumi.teleop.hardware import (
-    load_required_controller_tcp_calibration as _load_required_calibration,
-    validate_feetech_ports_exist,
-    validate_feetech_ready as _validate_feetech_ready,
+from handumi.teleop.standby import (
+    GRIPPER_PARK_HOLD_S,
+    GripperHomeStandby,
 )
 from handumi.teleop.tracking import LatestTrackingSampler, TrackingRecoveryPolicy
-from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
 from handumi.visualize import LiveCameraViews
 
@@ -67,6 +71,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 real_log = logging.getLogger("handumi.teleop_real")
+
 
 def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -170,7 +175,10 @@ def _run_real() -> None:
     camera_views: LiveCameraViews | None = None
     camera_worker: BestEffortPeriodicWorker | None = None
 
-    clap = DoubleClapDetector()
+    # Match teleop-record: with Feetech enabled, every arm starts parked and
+    # can only be anchored by opening its corresponding HandUMI gripper.
+    # --space-start remains the fallback for --skip-feetech.
+    home_standby = GripperHomeStandby(initial_standby=not args.skip_feetech)
     play_sounds = not args.no_sounds
     motion_config = TeleopMotionConfig.from_args(args)
     loop_timer = TeleopLoopTimer(motion_config.input_rate_hz)
@@ -223,6 +231,21 @@ def _run_real() -> None:
         real_env.connect()
         real_env.home(home_q)
         motion_smoother.reset(home_q)
+        startup_widths = _latest_widths(grippers)
+        command_stream.submit(
+            home_q,
+            {
+                "left": float(startup_widths.left_normalized),
+                "right": float(startup_widths.right_normalized),
+            },
+            time_s=time.perf_counter(),
+            active=True,
+            new_epoch=True,
+        )
+        real_log.info(
+            "Continuous gripper synchronization started; arms remain at home "
+            "until their HandUMI gripper opens."
+        )
         real_log.info(
             "Joint trajectory playback: %.1f Hz, %.0f ms delay, "
             "%.0f ms max bridge, %.0f ms EMA.",
@@ -235,13 +258,13 @@ def _run_real() -> None:
         space_listener.start()
         if args.space_start:
             real_log.info(
-                "Real %s is at home. Start idle arms with Space, or double clap "
-                "to start enabled arms.",
+                "Real %s is at home. Open a HandUMI gripper to start that arm; "
+                "Space starts idle arms when Feetech is disabled.",
                 args.robot,
             )
         else:
             real_log.info(
-                "Real %s is at home. Double clap a gripper to start enabled arms.",
+                "Real %s is at home. Open a HandUMI gripper to start that arm.",
                 args.robot,
             )
 
@@ -254,9 +277,14 @@ def _run_real() -> None:
             tracking_snapshot = tracking_sampler.latest()
             if tracking_snapshot is None:
                 widths = _latest_widths(grippers)
+                command_stream.update_openings(
+                    {
+                        "left": float(widths.left_normalized),
+                        "right": float(widths.right_normalized),
+                    }
+                )
                 if args.space_start:
                     space_listener.consume_space()
-                clap.update(widths.left_mm, widths.right_mm, loop_start)
                 loop_timer.sleep(loop_start)
                 continue
             sample = tracking_snapshot.sample
@@ -278,13 +306,23 @@ def _run_real() -> None:
             if not controller.active and not tracking_ok:
                 tracking_recovery.reset()
                 widths = _latest_widths(grippers)
+                command_stream.update_openings(
+                    {
+                        "left": float(widths.left_normalized),
+                        "right": float(widths.right_normalized),
+                    }
+                )
                 if args.space_start:
                     space_listener.consume_space()
-                clap.update(widths.left_mm, widths.right_mm, loop_start)
                 loop_timer.sleep(loop_start)
                 continue
 
             if not tracking_ok:
+                widths = _latest_widths(grippers)
+                openings = {
+                    "left": float(widths.left_normalized),
+                    "right": float(widths.right_normalized),
+                }
                 if tracking_recovery.note_missing(
                     loop_start,
                     observed_since=(
@@ -294,8 +332,16 @@ def _run_real() -> None:
                     command_stream.stop()
                     held = real_env.hold(q)
                     controller.tracking_lost(held)
+                    home_standby.enter_standby(enabled_sides)
                     motion_smoother.reset(held)
                     q = held
+                    command_stream.submit(
+                        held,
+                        openings,
+                        time_s=loop_start,
+                        active=True,
+                        new_epoch=True,
+                    )
                     real_log.warning(
                         "Tracking lost%s; pending motion cancelled at the current "
                         "robot command. Re-anchor after recovery.",
@@ -311,46 +357,65 @@ def _run_real() -> None:
                     acquired, recovered = tracking_sampler.try_source_call(recover)
                     if acquired and recovered:
                         real_log.info(
-                            "Tracking recovered; double clap or Space to re-anchor."
+                            "Tracking recovered; open the HandUMI gripper to re-anchor."
                         )
                         log_say("tracking recovered", play_sounds=play_sounds)
+                command_stream.update_openings(openings)
                 loop_timer.sleep(loop_start)
                 continue
             if tracking_recovery.lost:
-                real_log.info("Tracking stream is valid again; waiting for a fresh anchor.")
+                real_log.info(
+                    "Tracking stream is valid again; waiting for a fresh anchor."
+                )
             tracking_recovery.reset()
 
             widths = _latest_widths(grippers)
             inputs = teleop_session.inputs(sample, widths)
             start_sides: tuple[str, ...] = ()
-            if args.space_start and space_listener.consume_space():
-                start_sides = controller.idle_sides()
-                if start_sides:
-                    real_log.info("Space pressed; starting %s.", "/".join(start_sides))
-            if clap.update(widths.left_mm, widths.right_mm, loop_start):
-                if controller.active:
-                    command_stream.stop()
-                    q = controller.reset()
-                    motion_smoother.reset(home_q)
-                    episode_start = None
-                    frame = 0
-                    last_processed_tracking_time_ns = None
+            played_command = command_stream.latest()
+            if grippers is not None and played_command is not None:
+                _, robot_openings = played_command
+                park_sides, wake_sides = home_standby.update(
+                    robot_openings,
+                    loop_start,
+                    enabled_sides,
+                    wake_openings=inputs.openings,
+                )
+            else:
+                park_sides, wake_sides = (), ()
+            if park_sides:
+                parked = controller.park(park_sides)
+                if parked:
                     real_log.info(
-                        "Double clap detected; teleop reset, robot returning home slowly."
+                        "Robot %s gripper held closed for %.1fs; arm returning home "
+                        "and entering standby.",
+                        "/".join(parked),
+                        GRIPPER_PARK_HOLD_S,
                     )
-                    log_say("returning home", play_sounds=play_sounds)
-                    real_env.move_home(home_q)
-                    log_say("teleop reset", play_sounds=play_sounds)
-                    continue
-                start_sides = enabled_sides
-                real_log.info("Double clap detected; starting %s.", "/".join(start_sides))
+                    for side in parked:
+                        log_say(f"{side} arm standby", play_sounds=play_sounds)
+            if wake_sides:
+                start_sides = wake_sides
+                real_log.info(
+                    "HandUMI %s gripper reopened; waking and re-anchoring arm.",
+                    "/".join(wake_sides),
+                )
+            if args.space_start and space_listener.consume_space():
+                space_sides = tuple(
+                    side
+                    for side in controller.idle_sides()
+                    if side not in start_sides and not home_standby.is_standby(side)
+                )
+                start_sides += space_sides
+                if space_sides:
+                    real_log.info("Space pressed; starting %s.", "/".join(space_sides))
 
             fresh_tracking = (
                 last_processed_tracking_time_ns is None
                 or tracking_snapshot.source_time_ns
                 != last_processed_tracking_time_ns
             )
-            if not fresh_tracking and not start_sides:
+            if not fresh_tracking and not start_sides and not park_sides:
                 command_stream.update_openings(inputs.openings)
                 real_env.check_health()
                 loop_timer.sleep(loop_start)
@@ -371,6 +436,7 @@ def _run_real() -> None:
                 and newest_after_ik.source_time_ns
                 != tracking_snapshot.source_time_ns
                 and not start_sides
+                and not park_sides
             ):
                 # Never publish an IK result for a frame superseded while the
                 # solve was running. It would be a visibly delayed correction.
@@ -401,7 +467,9 @@ def _run_real() -> None:
                 q,
                 inputs.openings,
                 time_s=tracking_snapshot.fresh_at_s,
-                active=controller.active,
+                # A park transition must publish its home target even when it
+                # just deactivated the final active arm.
+                active=controller.active or bool(park_sides),
                 new_epoch=anchored_this_frame,
             )
             last_processed_tracking_time_ns = tracking_snapshot.source_time_ns

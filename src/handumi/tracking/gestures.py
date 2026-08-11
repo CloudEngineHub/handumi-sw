@@ -34,6 +34,12 @@ class DoubleClapDetector:
         self._armed = {"left": True, "right": True}  # seen open since last clap
         self._last_clap_t: dict[str, float | None] = {"left": None, "right": None}
 
+    def reset(self) -> None:
+        """Forget partial gestures when an episode boundary is crossed."""
+        for side in self._armed:
+            self._armed[side] = True
+            self._last_clap_t[side] = None
+
     def update(self, left_mm: float, right_mm: float, now_s: float) -> bool:
         """Feed one width sample; returns True when either side double-claps."""
         return self.update_side(left_mm, right_mm, now_s) is not None
