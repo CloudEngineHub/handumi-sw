@@ -59,9 +59,9 @@ controller_tcp_calibrations:
   meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
   pico: configs/calibration/controller_tcp/pico.yaml
 ik_weights:
-  pos: 100.0
-  ori: 15
-  rest: 25.0
+  pos: 125.0
+  ori: 20.0
+  rest: 20.0
   # 4 deg per IK frame.
   max_joint_delta: 0.03490659
   max_reach: 0.70
