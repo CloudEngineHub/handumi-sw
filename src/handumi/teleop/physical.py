@@ -13,7 +13,7 @@ from handumi.teleop.standby import GRIPPER_PARK_HOLD_S
 
 DEFAULT_TRANSLATION_SCALE = 1.7
 DEFAULT_TRACKING_STALE_MS = 150.0
-DEFAULT_PARK_MAX_JOINT_SPEED_DEG_S = 10.0
+DEFAULT_PARK_MAX_JOINT_SPEED_DEG_S = 30.0
 
 
 def _camera_list(value: str) -> list[str]:

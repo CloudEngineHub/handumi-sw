@@ -136,6 +136,7 @@ from handumi.teleop.motion import (
     validate_teleop_motion_args,
 )
 from handumi.teleop.physical import (
+    DEFAULT_PARK_MAX_JOINT_SPEED_DEG_S,
     add_physical_teleop_arguments,
     validate_physical_teleop_args,
 )
@@ -652,7 +653,7 @@ def record_episode(
     tracking_stale_ms: float,
     command_stream: TeleopCommandStream,
     park_hold_s: float = GRIPPER_PARK_HOLD_S,
-    park_max_joint_speed_deg_s: float = 10.0,
+    park_max_joint_speed_deg_s: float = DEFAULT_PARK_MAX_JOINT_SPEED_DEG_S,
     joint_filter: AdaptiveJointFilter | None = None,
     home_standby: GripperHomeStandby | None = None,
     dataset_writer: AsyncLeRobotWriter | None = None,
