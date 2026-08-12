@@ -15,7 +15,7 @@ import numpy as np
 
 from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
 from handumi.teleop.common import (
-    TeleopMotionSmoother,
+    AdaptiveJointFilter,
     sample_state,
     tracking_sample_time_ns,
 )
@@ -55,10 +55,10 @@ class TeleopSession:
     def __init__(
         self,
         controller: TeleopController,
-        motion_smoother: TeleopMotionSmoother,
+        joint_filter: AdaptiveJointFilter,
     ) -> None:
         self.controller = controller
-        self.motion_smoother = motion_smoother
+        self.joint_filter = joint_filter
 
     @staticmethod
     def inputs(sample: Any, widths: Any) -> TeleopInputs:
@@ -87,19 +87,29 @@ class TeleopSession:
         *,
         now_s: float,
         start_sides: tuple[str, ...] = (),
+        exact_sides: tuple[str, ...] = (),
     ) -> TeleopFrame:
         """Transform normalized inputs into the next robot command."""
-        self.motion_smoother.anchor_sources(inputs.raw_source_poses, start_sides)
-        source_poses = self.motion_smoother.smooth_source_poses(
-            inputs.raw_source_poses,
-            inputs.side_tracked,
-            inputs.sample_time_ns,
-        )
+        source_poses = {
+            side: np.asarray(pose, dtype=np.float32).copy()
+            for side, pose in inputs.raw_source_poses.items()
+        }
         anchored_sides = self.controller.anchor(
             source_poses, inputs.side_tracked, start_sides
         )
         step = self.controller.step(source_poses, inputs.side_tracked, inputs.openings)
-        q = self.motion_smoother.smooth_joint_command(step.q, now_s)
+        exact_indices = tuple(
+            dict.fromkeys(
+                index
+                for side in exact_sides
+                for index in self.controller.side_indices[side]
+            )
+        )
+        q = self.joint_filter.filter(
+            step.q,
+            now_s,
+            exact_indices=exact_indices,
+        )
         return TeleopFrame(
             inputs=inputs,
             source_poses=source_poses,
@@ -107,3 +117,11 @@ class TeleopSession:
             step=step,
             q=q,
         )
+
+    def snapshot_filter(self):
+        """Capture the filter before an IK solve that may be superseded."""
+        return self.joint_filter.snapshot()
+
+    def restore_filter(self, state) -> None:
+        """Discard filter state produced for an unpublished IK solution."""
+        self.joint_filter.restore(state)

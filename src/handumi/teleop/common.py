@@ -72,164 +72,158 @@ class BestEffortPeriodicWorker:
             self._stop.set()
 
 
-def _normalized_quaternion_xyzw(quaternion: np.ndarray) -> np.ndarray:
-    value = np.asarray(quaternion, dtype=np.float32).reshape(4)
-    norm = float(np.linalg.norm(value))
-    if norm < 1e-8:
-        return np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-    return (value / norm).astype(np.float32)
+class AdaptiveJointFilter:
+    """Velocity-adaptive low-pass for IK joint targets.
 
-
-def _slerp_xyzw(start: np.ndarray, end: np.ndarray, fraction: float) -> np.ndarray:
-    """Interpolate quaternions on their shortest arc."""
-    first = _normalized_quaternion_xyzw(start)
-    second = _normalized_quaternion_xyzw(end)
-    dot = float(np.dot(first, second))
-    if dot < 0.0:
-        second = -second
-        dot = -dot
-    dot = float(np.clip(dot, -1.0, 1.0))
-    if dot > 0.9995:
-        return _normalized_quaternion_xyzw(first + fraction * (second - first))
-    angle = float(np.arccos(dot))
-    sine = float(np.sin(angle))
-    return _normalized_quaternion_xyzw(
-        (np.sin((1.0 - fraction) * angle) / sine) * first
-        + (np.sin(fraction * angle) / sine) * second
-    )
-
-
-class TeleopMotionSmoother:
-    """Shared causal pose and joint-command low-pass for live teleoperation.
-
-    It filters calibrated controller TCP poses before retargeting/IK, then
-    filters the IK command that is rendered, sent to hardware, or recorded.
-    The filter advances from timestamps, so every frontend has the same
-    behaviour at 30, 60, or 100 Hz.  ``time_constant_s=0`` disables it for
-    diagnosis without changing any other part of the pipeline.
+    This is a vectorized One Euro filter. It uses a low cutoff while a joint is
+    nearly stationary, then raises that cutoff with measured joint velocity so
+    deliberate motion remains responsive. Unlike a deadband, every finite
+    target contributes to the output and the command converges exactly when
+    the operator stops.
     """
 
     def __init__(
         self,
-        time_constant_s: float = 0.0,
         *,
-        position_deadband_m: float = 0.0,
-        orientation_deadband_rad: float = 0.0,
+        sample_rate_hz: float,
+        min_cutoff_hz: float,
+        velocity_coefficient: float,
+        derivative_cutoff_hz: float,
+        filtered_indices: tuple[int, ...] | None = None,
     ) -> None:
-        if time_constant_s < 0.0:
-            raise ValueError("time_constant_s must be >= 0.")
-        if position_deadband_m < 0.0:
-            raise ValueError("position_deadband_m must be >= 0.")
-        if orientation_deadband_rad < 0.0:
-            raise ValueError("orientation_deadband_rad must be >= 0.")
-        self.time_constant_s = float(time_constant_s)
-        self.position_deadband_m = float(position_deadband_m)
-        self.orientation_deadband_rad = float(orientation_deadband_rad)
-        self._source_poses: dict[str, np.ndarray] = {}
-        self._last_source_time_ns: int | None = None
-        self._joint_q: np.ndarray | None = None
-        self._last_joint_time_s: float | None = None
+        if sample_rate_hz <= 0.0:
+            raise ValueError("sample_rate_hz must be > 0")
+        if min_cutoff_hz <= 0.0:
+            raise ValueError("min_cutoff_hz must be > 0")
+        if velocity_coefficient < 0.0:
+            raise ValueError("velocity_coefficient must be >= 0")
+        if derivative_cutoff_hz <= 0.0:
+            raise ValueError("derivative_cutoff_hz must be > 0")
+        self.nominal_dt_s = 1.0 / float(sample_rate_hz)
+        self.min_cutoff_hz = float(min_cutoff_hz)
+        self.velocity_coefficient = float(velocity_coefficient)
+        self.derivative_cutoff_hz = float(derivative_cutoff_hz)
+        self.filtered_indices = (
+            None
+            if filtered_indices is None
+            else tuple(dict.fromkeys(int(index) for index in filtered_indices))
+        )
+        if self.filtered_indices and min(self.filtered_indices) < 0:
+            raise ValueError("filtered joint indices must be >= 0")
+        self._raw_q: np.ndarray | None = None
+        self._filtered_q: np.ndarray | None = None
+        self._filtered_velocity: np.ndarray | None = None
+        self._last_time_s: float | None = None
 
     def reset(self, q: np.ndarray | None = None) -> None:
-        self._source_poses.clear()
-        self._last_source_time_ns = None
-        self._joint_q = None if q is None else np.asarray(q, dtype=np.float32).copy()
-        self._last_joint_time_s = None
+        value = None if q is None else np.asarray(q, dtype=np.float32).copy()
+        self._raw_q = None if value is None else value.copy()
+        self._filtered_q = None if value is None else value.copy()
+        self._filtered_velocity = (
+            None if value is None else np.zeros_like(value, dtype=np.float32)
+        )
+        self._last_time_s = None
 
-    def anchor_sources(
-        self, source_poses: dict[str, np.ndarray], sides: tuple[str, ...]
-    ) -> None:
-        """Make a newly anchored controller pose exact (never lagged)."""
-        for side in sides:
-            if side in source_poses:
-                self._source_poses[side] = np.asarray(
-                    source_poses[side], dtype=np.float32
-                ).copy()
-
-    def smooth_source_poses(
+    def snapshot(
         self,
-        source_poses: dict[str, np.ndarray],
-        side_tracked: dict[str, bool],
-        sample_time_ns: int,
-    ) -> dict[str, np.ndarray]:
-        """Filter only fresh tracker frames and preserve untracked poses."""
-        timestamp = int(sample_time_ns)
-        is_fresh = self._last_source_time_ns is None or timestamp > self._last_source_time_ns
-        if is_fresh:
-            if self._last_source_time_ns is None:
-                alpha = 1.0
-            else:
-                dt_s = min((timestamp - self._last_source_time_ns) * 1e-9, 0.25)
-                alpha = self._alpha(dt_s)
-            for side, current_value in source_poses.items():
-                if not side_tracked.get(side, False):
-                    continue
-                current = np.asarray(current_value, dtype=np.float32)
-                previous = self._source_poses.get(side)
-                if previous is None:
-                    filtered = current.copy()
-                else:
-                    position = current[:3]
-                    if (
-                        np.linalg.norm(position - previous[:3])
-                        <= self.position_deadband_m
-                    ):
-                        position = previous[:3]
-                    orientation = current[3:7]
-                    dot = abs(
-                        float(
-                            np.dot(
-                                _normalized_quaternion_xyzw(previous[3:7]),
-                                _normalized_quaternion_xyzw(orientation),
-                            )
-                        )
-                    )
-                    angle = 2.0 * float(np.arccos(np.clip(dot, -1.0, 1.0)))
-                    if angle <= self.orientation_deadband_rad:
-                        orientation = previous[3:7]
-                    if alpha >= 1.0:
-                        filtered = current.copy()
-                        filtered[:3] = position
-                        filtered[3:7] = orientation
-                    else:
-                        filtered = previous.copy()
-                        filtered[:3] += alpha * (position - filtered[:3])
-                        filtered[3:7] = _slerp_xyzw(
-                            previous[3:7], orientation, alpha
-                        )
-                self._source_poses[side] = filtered
-            self._last_source_time_ns = timestamp
+    ) -> tuple[
+        np.ndarray | None,
+        np.ndarray | None,
+        np.ndarray | None,
+        float | None,
+    ]:
+        """Capture state so a superseded IK solve can be discarded exactly."""
+        return (
+            None if self._raw_q is None else self._raw_q.copy(),
+            None if self._filtered_q is None else self._filtered_q.copy(),
+            (
+                None
+                if self._filtered_velocity is None
+                else self._filtered_velocity.copy()
+            ),
+            self._last_time_s,
+        )
 
-        return {
-            side: self._source_poses.get(side, np.asarray(pose, dtype=np.float32)).copy()
-            for side, pose in source_poses.items()
-        }
+    def restore(
+        self,
+        state: tuple[
+            np.ndarray | None,
+            np.ndarray | None,
+            np.ndarray | None,
+            float | None,
+        ],
+    ) -> None:
+        raw_q, filtered_q, filtered_velocity, last_time_s = state
+        self._raw_q = None if raw_q is None else raw_q.copy()
+        self._filtered_q = None if filtered_q is None else filtered_q.copy()
+        self._filtered_velocity = (
+            None if filtered_velocity is None else filtered_velocity.copy()
+        )
+        self._last_time_s = last_time_s
 
-    def smooth_joint_command(self, q: np.ndarray, now_s: float) -> np.ndarray:
-        """Return the time-normalized filtered joint command."""
+    def filter(
+        self,
+        q: np.ndarray,
+        now_s: float,
+        *,
+        exact_indices: tuple[int, ...] = (),
+    ) -> np.ndarray:
         current = np.asarray(q, dtype=np.float32)
-        if self._joint_q is None:
-            self._joint_q = current.copy()
+        if current.ndim != 1 or not np.all(np.isfinite(current)):
+            raise ValueError("joint command must be a finite one-dimensional vector")
+        if not np.isfinite(now_s):
+            raise ValueError("joint command timestamp must be finite")
+        if (
+            self._raw_q is None
+            or self._filtered_q is None
+            or self._filtered_velocity is None
+            or self._raw_q.shape != current.shape
+        ):
+            self.reset(current)
+            self._last_time_s = float(now_s)
+            return current.copy()
+
+        dt_s = self.nominal_dt_s
+        if self._last_time_s is not None:
+            dt_s = min(max(float(now_s) - self._last_time_s, 1e-6), 0.25)
+
+        raw_velocity = (current - self._raw_q) / dt_s
+        derivative_alpha = self._alpha(self.derivative_cutoff_hz, dt_s)
+        self._filtered_velocity += derivative_alpha * (
+            raw_velocity - self._filtered_velocity
+        )
+        cutoff_hz = self.min_cutoff_hz + self.velocity_coefficient * np.abs(
+            self._filtered_velocity
+        )
+        alpha = 1.0 - np.exp(-2.0 * np.pi * cutoff_hz * dt_s)
+
+        if self.filtered_indices is None:
+            self._filtered_q += alpha * (current - self._filtered_q)
         else:
-            dt_s = (
-                0.0
-                if self._last_joint_time_s is None
-                else min(max(float(now_s) - self._last_joint_time_s, 0.0), 0.25)
+            indices = np.asarray(self.filtered_indices, dtype=np.intp)
+            if indices.size and int(np.max(indices)) >= current.size:
+                raise ValueError("filtered joint index is outside the command vector")
+            passthrough = np.ones(current.size, dtype=bool)
+            passthrough[indices] = False
+            self._filtered_q[indices] += alpha[indices] * (
+                current[indices] - self._filtered_q[indices]
             )
-            alpha = self._alpha(dt_s)
-            self._joint_q = self._joint_q + alpha * (current - self._joint_q)
-        self._last_joint_time_s = float(now_s)
-        return self._joint_q.copy()
+            self._filtered_q[passthrough] = current[passthrough]
 
-    def restore_joint_command(self, q: np.ndarray) -> None:
-        """Forget a computed joint result that was superseded before publish."""
-        self._joint_q = np.asarray(q, dtype=np.float32).copy()
-        self._last_joint_time_s = None
+        if exact_indices:
+            exact = np.asarray(exact_indices, dtype=np.intp)
+            if int(np.min(exact)) < 0 or int(np.max(exact)) >= current.size:
+                raise ValueError("exact joint index is outside the command vector")
+            self._filtered_q[exact] = current[exact]
+            self._filtered_velocity[exact] = 0.0
 
-    def _alpha(self, dt_s: float) -> float:
-        if self.time_constant_s == 0.0:
-            return 1.0
-        return float(1.0 - np.exp(-max(dt_s, 0.0) / self.time_constant_s))
+        self._raw_q = current.copy()
+        self._last_time_s = float(now_s)
+        return self._filtered_q.copy()
+
+    @staticmethod
+    def _alpha(cutoff_hz: float, dt_s: float) -> float:
+        return float(1.0 - np.exp(-2.0 * np.pi * cutoff_hz * dt_s))
 
 
 class TeleopLoopTimer:
@@ -361,7 +355,11 @@ def latest_widths(grippers: Any):
     latest = getattr(grippers, "latest", None)
     if callable(latest):
         sample = latest()
-        return zero_gripper_widths() if sample is None else getattr(sample, "widths", zero_gripper_widths())
+        return (
+            zero_gripper_widths()
+            if sample is None
+            else getattr(sample, "widths", zero_gripper_widths())
+        )
     return grippers.read_normalized_widths()
 
 

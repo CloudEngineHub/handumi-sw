@@ -11,7 +11,7 @@ Safety behavior:
 * controller->TCP calibration is required;
 * the robot homes before teleop starts;
 * opening a HandUMI gripper activates and anchors that arm;
-* a robot gripper held fully closed for two seconds parks that arm at home;
+* a robot gripper held fully closed for three seconds parks that arm at home;
 * reopening the corresponding HandUMI gripper re-anchors that arm for use.
 
 Examples:
@@ -24,7 +24,10 @@ import argparse
 import logging
 import os
 import sys
+import threading
 import time
+
+import numpy as np
 
 # Also cover direct execution instead of the ``handumi`` command router.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -57,10 +60,7 @@ from handumi.teleop.physical import (
     validate_physical_teleop_args,
 )
 from handumi.teleop.session import TeleopSession
-from handumi.teleop.standby import (
-    GRIPPER_PARK_HOLD_S,
-    GripperHomeStandby,
-)
+from handumi.teleop.standby import GripperHomeStandby
 from handumi.teleop.tracking import LatestTrackingSampler, TrackingRecoveryPolicy
 from handumi.utils.speech import log_say
 from handumi.visualize import LiveCameraViews
@@ -87,6 +87,11 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C."
     )
+    parser.add_argument(
+        "--joint-debug",
+        action="store_true",
+        help="Log per-arm IK, filtered, and streamed joint positions once per second.",
+    )
     if not show_advanced:
         normal = {
             "help",
@@ -99,6 +104,7 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
             "cameras",
             "skip_cameras",
             "no_rerun",
+            "joint_debug",
         }
         for action in parser._actions:
             if action.dest not in normal:
@@ -128,6 +134,136 @@ def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> No
     )
 
 
+class _JointMotionDiagnostics:
+    """Cheap rolling diagnostics for finding joint-space chatter."""
+
+    def __init__(self, joint_names: tuple[str, ...], indices: tuple[int, ...]) -> None:
+        self.joint_names = joint_names
+        self.indices = np.asarray(indices, dtype=np.intp)
+        self.reset()
+
+    def reset(self) -> None:
+        size = len(self.joint_names)
+        self.samples = 0
+        self.previous_raw: np.ndarray | None = None
+        self.previous_filtered: np.ndarray | None = None
+        self.previous_raw_step: np.ndarray | None = None
+        self.max_raw_step = np.zeros(size, dtype=np.float32)
+        self.max_filtered_step = np.zeros(size, dtype=np.float32)
+        self.max_filter_correction = np.zeros(size, dtype=np.float32)
+        self.roughness = np.zeros(size, dtype=np.float32)
+
+    def observe(self, raw_q: np.ndarray, filtered_q: np.ndarray) -> None:
+        raw = np.asarray(raw_q, dtype=np.float32)
+        filtered = np.asarray(filtered_q, dtype=np.float32)
+        self.max_filter_correction = np.maximum(
+            self.max_filter_correction, np.abs(raw - filtered)
+        )
+        if self.previous_raw is not None and self.previous_filtered is not None:
+            raw_step = raw - self.previous_raw
+            filtered_step = filtered - self.previous_filtered
+            self.max_raw_step = np.maximum(self.max_raw_step, np.abs(raw_step))
+            self.max_filtered_step = np.maximum(
+                self.max_filtered_step, np.abs(filtered_step)
+            )
+            if self.previous_raw_step is not None:
+                self.roughness += np.abs(raw_step - self.previous_raw_step)
+            self.previous_raw_step = raw_step
+        self.previous_raw = raw.copy()
+        self.previous_filtered = filtered.copy()
+        self.samples += 1
+
+    def summary(self) -> str:
+        if self.samples < 2 or self.indices.size == 0:
+            return "joint_motion=no fresh samples"
+        candidates = self.indices
+        roughest = int(candidates[np.argmax(self.roughness[candidates])])
+        roughness_per_step = self.roughness[roughest] / max(1, self.samples - 2)
+        return (
+            f"roughest={self.joint_names[roughest]}, "
+            f"IK_roughness={np.rad2deg(roughness_per_step):.2f} deg/step^2, "
+            f"IK_step_max={np.rad2deg(self.max_raw_step[roughest]):.2f} deg, "
+            f"filtered_step_max={np.rad2deg(self.max_filtered_step[roughest]):.2f} deg, "
+            "filter_correction_max="
+            f"{np.rad2deg(self.max_filter_correction[roughest]):.2f} deg"
+        )
+
+
+class _LatestJointFeedback:
+    """Cache robot feedback off the latency-sensitive teleop loop."""
+
+    def __init__(self, read, base_q: np.ndarray) -> None:
+        self._read = read
+        self._base_q = np.asarray(base_q, dtype=np.float32).copy()
+        self._lock = threading.Lock()
+        self._latest: np.ndarray | None = None
+
+    def update(self) -> None:
+        value = np.asarray(self._read(base_q=self._base_q), dtype=np.float32)
+        with self._lock:
+            self._latest = value.copy()
+
+    def latest(self) -> np.ndarray | None:
+        with self._lock:
+            return None if self._latest is None else self._latest.copy()
+
+
+def _motion_joint_indices(runtime, enabled_sides: tuple[str, ...]) -> tuple[int, ...]:
+    finger_indices = {
+        finger.index
+        for fingers in (runtime.finger_joints or {}).values()
+        for finger in fingers
+    }
+    return tuple(
+        dict.fromkeys(
+            index
+            for side in enabled_sides
+            for index in runtime.arm_joint_indices(side)
+            if index not in finger_indices
+        )
+    )
+
+
+def _log_joint_debug(
+    runtime,
+    enabled_sides: tuple[str, ...],
+    raw_q: np.ndarray,
+    filtered_q: np.ndarray,
+    streamed_q: np.ndarray | None,
+    feedback_q: np.ndarray | None,
+) -> None:
+    finger_indices = {
+        finger.index
+        for fingers in (runtime.finger_joints or {}).values()
+        for finger in fingers
+    }
+    streamed = filtered_q if streamed_q is None else streamed_q
+    for side in enabled_sides:
+        indices = [
+            index
+            for index in runtime.arm_joint_indices(side)
+            if index not in finger_indices
+        ]
+        names = [runtime.joint_names[index] for index in indices]
+        raw_deg = np.round(np.rad2deg(raw_q[indices]), 1).tolist()
+        filtered_deg = np.round(np.rad2deg(filtered_q[indices]), 1).tolist()
+        streamed_deg = np.round(np.rad2deg(streamed[indices]), 1).tolist()
+        feedback_deg = (
+            None
+            if feedback_q is None
+            else np.round(np.rad2deg(feedback_q[indices]), 1).tolist()
+        )
+        real_log.info(
+            "Joint debug %s %s (deg): IK=%s filtered=%s streamed=%s feedback=%s",
+            side,
+            names,
+            raw_deg,
+            filtered_deg,
+            streamed_deg,
+            feedback_deg,
+        )
+
+
 def _run_real() -> None:
     args = _parse_real_args()
     _validate_real_args(args)
@@ -150,7 +286,6 @@ def _run_real() -> None:
         enabled_sides=_enabled_sides(args.side),
         source_world_to_robot_world=_tracking_world_map(args.device),
         translation_scale=args.translation_scale,
-        translation_deadzone_m=args.translation_deadzone_mm / 1000.0,
     )
     q = home_q.copy()
     real_log.info("Selected home pose: %s", home_pose_name)
@@ -174,19 +309,29 @@ def _run_real() -> None:
     tracking_sampler: LatestTrackingSampler | None = None
     camera_views: LiveCameraViews | None = None
     camera_worker: BestEffortPeriodicWorker | None = None
+    feedback_sampler: _LatestJointFeedback | None = None
+    feedback_worker: BestEffortPeriodicWorker | None = None
 
     # Match teleop-record: with Feetech enabled, every arm starts parked and
     # can only be anchored by opening its corresponding HandUMI gripper.
     # --space-start remains the fallback for --skip-feetech.
-    home_standby = GripperHomeStandby(initial_standby=not args.skip_feetech)
+    home_standby = GripperHomeStandby(
+        hold_s=args.gripper_park_hold_s,
+        initial_standby=not args.skip_feetech,
+    )
     play_sounds = not args.no_sounds
     motion_config = TeleopMotionConfig.from_args(args)
     loop_timer = TeleopLoopTimer(motion_config.input_rate_hz)
-    motion_smoother = motion_config.make_input_smoother()
-    teleop_session = TeleopSession(controller, motion_smoother)
+    motion_joint_indices = _motion_joint_indices(runtime, enabled_sides)
+    joint_filter = motion_config.make_joint_filter(
+        filtered_indices=motion_joint_indices
+    )
+    teleop_session = TeleopSession(controller, joint_filter)
+    joint_diagnostics = _JointMotionDiagnostics(
+        runtime.joint_names, motion_joint_indices
+    )
     command_stream = motion_config.make_command_stream(real_env.write)
     episode_start: float | None = None
-    frame = 0
     last_processed_tracking_time_ns: int | None = None
     tracking_recovery = TrackingRecoveryPolicy()
     timing_next_log_s = time.perf_counter() + 5.0
@@ -195,6 +340,9 @@ def _run_real() -> None:
     timing_ik_samples = 0
     timing_tracking_age_max_s = 0.0
     timing_discarded_ik = 0
+    timing_playback_counts = (0, 0, 0)
+    joint_debug_next_log_s = time.perf_counter() + 1.0
+    feedback_error_reported = False
 
     try:
         real_log.info("Starting tracking before moving real arms.")
@@ -230,7 +378,15 @@ def _run_real() -> None:
         real_env.setup(repair=not args.skip_can_repair)
         real_env.connect()
         real_env.home(home_q)
-        motion_smoother.reset(home_q)
+        if args.joint_debug:
+            feedback_sampler = _LatestJointFeedback(real_env.read, home_q)
+            feedback_worker = BestEffortPeriodicWorker(
+                feedback_sampler.update,
+                rate_hz=10.0,
+                thread_name="handumi-joint-feedback-debug",
+            )
+            feedback_worker.start()
+        joint_filter.reset(home_q)
         startup_widths = _latest_widths(grippers)
         command_stream.submit(
             home_q,
@@ -248,11 +404,14 @@ def _run_real() -> None:
         )
         real_log.info(
             "Joint trajectory playback: %.1f Hz, %.0f ms delay, "
-            "%.0f ms max bridge, %.0f ms EMA.",
+            "%.0f ms max bridge, %.0f ms EMA; adaptive IK filter "
+            "cutoff=%.1f Hz + %.1f*|dq/dt|.",
             args.command_rate_hz,
             args.trajectory_delay_ms,
             args.max_extrapolation_ms,
             args.motion_smoothing_time_constant_s * 1000.0,
+            args.joint_filter_min_cutoff_hz,
+            args.joint_filter_velocity_coefficient,
         )
 
         space_listener.start()
@@ -333,7 +492,7 @@ def _run_real() -> None:
                     held = real_env.hold(q)
                     controller.tracking_lost(held)
                     home_standby.enter_standby(enabled_sides)
-                    motion_smoother.reset(held)
+                    joint_filter.reset(held)
                     q = held
                     command_stream.submit(
                         held,
@@ -386,15 +545,34 @@ def _run_real() -> None:
             if park_sides:
                 parked = controller.park(park_sides)
                 if parked:
+                    park_indices = tuple(
+                        index
+                        for index in motion_joint_indices
+                        if any(
+                            index in controller.side_indices[side] for side in parked
+                        )
+                    )
+                    command_stream.limit_joint_rates(
+                        park_indices,
+                        np.deg2rad(args.park_max_joint_speed_deg_s),
+                    )
                     real_log.info(
                         "Robot %s gripper held closed for %.1fs; arm returning home "
                         "and entering standby.",
                         "/".join(parked),
-                        GRIPPER_PARK_HOLD_S,
+                        args.gripper_park_hold_s,
                     )
                     for side in parked:
                         log_say(f"{side} arm standby", play_sounds=play_sounds)
             if wake_sides:
+                wake_indices = tuple(
+                    index
+                    for index in motion_joint_indices
+                    if any(
+                        index in controller.side_indices[side] for side in wake_sides
+                    )
+                )
+                command_stream.clear_joint_rate_limits(wake_indices)
                 start_sides = wake_sides
                 real_log.info(
                     "HandUMI %s gripper reopened; waking and re-anchoring arm.",
@@ -422,9 +600,13 @@ def _run_real() -> None:
                 continue
 
             controller_q_before_ik = controller.q.copy()
+            filter_before_ik = teleop_session.snapshot_filter()
             ik_start_s = time.perf_counter()
             teleop_frame = teleop_session.advance(
-                inputs, now_s=loop_start, start_sides=start_sides
+                inputs,
+                now_s=loop_start,
+                start_sides=start_sides,
+                exact_sides=park_sides,
             )
             ik_elapsed_s = time.perf_counter() - ik_start_s
             timing_ik_total_s += ik_elapsed_s
@@ -441,7 +623,7 @@ def _run_real() -> None:
                 # Never publish an IK result for a frame superseded while the
                 # solve was running. It would be a visibly delayed correction.
                 controller.q = controller_q_before_ik
-                motion_smoother.restore_joint_command(controller_q_before_ik)
+                teleop_session.restore_filter(filter_before_ik)
                 timing_discarded_ik += 1
                 real_env.check_health()
                 continue
@@ -453,16 +635,18 @@ def _run_real() -> None:
 
             if episode_start is None and anchored_this_frame:
                 episode_start = loop_start
-                frame = 0
                 timing_next_log_s = time.perf_counter() + 5.0
                 timing_ik_total_s = 0.0
                 timing_ik_max_s = 0.0
                 timing_ik_samples = 0
                 timing_tracking_age_max_s = 0.0
                 timing_discarded_ik = 0
+                timing_playback_counts = (0, 0, 0)
+                joint_diagnostics.reset()
                 real_log.info("Teleop timer started.")
 
             q = teleop_frame.q
+            joint_diagnostics.observe(teleop_frame.step.q, q)
             command_stream.submit(
                 q,
                 inputs.openings,
@@ -476,12 +660,46 @@ def _run_real() -> None:
             real_env.check_health()
 
             timing_now_s = time.perf_counter()
+            if args.joint_debug and timing_now_s >= joint_debug_next_log_s:
+                if (
+                    feedback_worker is not None
+                    and feedback_worker.error is not None
+                    and not feedback_error_reported
+                ):
+                    real_log.warning(
+                        "Joint feedback debug sampler stopped: %s",
+                        feedback_worker.error,
+                    )
+                    feedback_error_reported = True
+                latest_command = command_stream.latest()
+                _log_joint_debug(
+                    runtime,
+                    enabled_sides,
+                    teleop_frame.step.q,
+                    q,
+                    None if latest_command is None else latest_command[0],
+                    None if feedback_sampler is None else feedback_sampler.latest(),
+                )
+                joint_debug_next_log_s = timing_now_s + 1.0
             if command_stream.running and timing_now_s >= timing_next_log_s:
                 output_stats = command_stream.stats()
+                playback_counts = (
+                    output_stats.interpolated_commands,
+                    output_stats.extrapolated_commands,
+                    output_stats.held_commands,
+                )
+                playback_window = tuple(
+                    max(0, current - previous)
+                    for current, previous in zip(
+                        playback_counts, timing_playback_counts, strict=True
+                    )
+                )
                 real_log.info(
                     "Control timing: output=%.1f Hz, missed=%d, "
                     "tracking_age_max=%.0f ms, IK_avg/max=%.1f/%.1f ms, "
-                    "backend_write_max=%.1f ms, stale_IK_discarded=%d.",
+                    "backend_write_max=%.1f ms, output_lateness_max=%.1f ms, "
+                    "target_age=%.0f ms, playback(i/x/h)=%d/%d/%d, "
+                    "stale_IK_discarded=%d; %s.",
                     output_stats.effective_rate_hz,
                     output_stats.missed_deadlines,
                     timing_tracking_age_max_s * 1000.0,
@@ -492,7 +710,11 @@ def _run_real() -> None:
                     ),
                     timing_ik_max_s * 1000.0,
                     output_stats.max_write_ms,
+                    output_stats.max_lateness_ms,
+                    output_stats.latest_target_age_ms,
+                    *playback_window,
                     timing_discarded_ik,
+                    joint_diagnostics.summary(),
                 )
                 timing_next_log_s = timing_now_s + 5.0
                 timing_ik_total_s = 0.0
@@ -500,10 +722,10 @@ def _run_real() -> None:
                 timing_ik_samples = 0
                 timing_tracking_age_max_s = 0.0
                 timing_discarded_ik = 0
+                timing_playback_counts = playback_counts
+                joint_diagnostics.reset()
 
             loop_timer.sleep(loop_start)
-            if episode_start is not None:
-                frame += 1
     except KeyboardInterrupt:
         real_log.info("Stopping.")
     finally:
@@ -512,20 +734,24 @@ def _run_real() -> None:
             command_stream.stop()
         finally:
             try:
-                real_env.disconnect()
+                if feedback_worker is not None:
+                    feedback_worker.close()
             finally:
-                if grippers is not None:
-                    grippers.stop()
-                if gripper_pair is not None:
-                    gripper_pair.close()
-                if tracker_started:
-                    if tracking_sampler is not None:
-                        tracking_sampler.stop()
-                    tracker.stop()
-                if camera_worker is not None:
-                    camera_worker.close()
-                if camera_views is not None:
-                    camera_views.close()
+                try:
+                    real_env.disconnect()
+                finally:
+                    if grippers is not None:
+                        grippers.stop()
+                    if gripper_pair is not None:
+                        gripper_pair.close()
+                    if tracker_started:
+                        if tracking_sampler is not None:
+                            tracking_sampler.stop()
+                        tracker.stop()
+                    if camera_worker is not None:
+                        camera_worker.close()
+                    if camera_views is not None:
+                        camera_views.close()
 
 
 def main() -> None:

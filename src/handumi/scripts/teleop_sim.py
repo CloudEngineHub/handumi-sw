@@ -76,8 +76,6 @@ from handumi.teleop.common import (
     TeleopLoopTimer,
     enabled_sides as _enabled_sides,
     latest_widths,
-    sample_state as _sample_state,
-    start_sides as _start_sides,
     tracking_ready_for_sides as _tracking_ready_for_sides,
     tracking_world_map as _tracking_world_map,
 )
@@ -216,7 +214,10 @@ def _parse_sim_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--tcp-port", type=int, default=None, help=advanced("Quest TCP port."))
     p.add_argument("--sync-port", type=int, default=None, help=advanced("Quest sync port."))
     p.add_argument(
-        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos", help=advanced("PICO tracking mode.")
+        "--pico-mode",
+        choices=("mandos", "object", "whole-body"),
+        default="mandos",
+        help=advanced("PICO tracking mode.")
     )
     pico_transport = p.add_mutually_exclusive_group()
     pico_transport.add_argument("--pico-adb", action="store_true", help=advanced("Use PICO ADB."))
@@ -647,8 +648,24 @@ def _run_sim() -> None:
     frame = 0
     motion_config = TeleopMotionConfig.from_args(args)
     loop_timer = TeleopLoopTimer(motion_config.input_rate_hz)
-    motion_smoother = motion_config.make_input_smoother()
-    teleop_session = TeleopSession(controller, motion_smoother)
+    finger_indices = {
+        finger.index
+        for fingers in (runtime.finger_joints or {}).values()
+        for finger in fingers
+    }
+    motion_joint_indices = tuple(
+        dict.fromkeys(
+            index
+            for side in enabled_sides
+            for index in runtime.arm_joint_indices(side)
+            if index not in finger_indices
+        )
+    )
+    joint_filter = motion_config.make_joint_filter(
+        filtered_indices=motion_joint_indices
+    )
+    joint_filter.reset(home_q)
+    teleop_session = TeleopSession(controller, joint_filter)
     joint_names = list(runtime.robot.joints.actuated_names)
 
     def write_sim_command(
@@ -739,7 +756,7 @@ def _run_sim() -> None:
                 if controller.active:
                     command_stream.stop()
                     q = controller.reset()
-                    motion_smoother.reset(home_q)
+                    joint_filter.reset(home_q)
                     episode_start = None
                     frame = 0
                     reset_this_frame = True

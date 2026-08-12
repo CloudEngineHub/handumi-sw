@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-GRIPPER_PARK_HOLD_S = 2.0
+GRIPPER_PARK_HOLD_S = 3.0
 GRIPPER_FULLY_CLOSED = 0.05
 GRIPPER_REOPENED = 0.15
 

@@ -9,10 +9,11 @@ from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.real.registry import REAL_BACKEND_NAMES
 from handumi.teleop.common import SIDE_CHOICES
 from handumi.teleop.motion import add_teleop_motion_arguments
+from handumi.teleop.standby import GRIPPER_PARK_HOLD_S
 
 DEFAULT_TRANSLATION_SCALE = 1.7
-DEFAULT_TRANSLATION_DEADZONE_MM = 2.0
 DEFAULT_TRACKING_STALE_MS = 150.0
+DEFAULT_PARK_MAX_JOINT_SPEED_DEG_S = 10.0
 
 
 def _camera_list(value: str) -> list[str]:
@@ -42,19 +43,22 @@ def add_physical_teleop_arguments(parser: argparse.ArgumentParser) -> None:
         help="Scale HandUMI translation deltas before applying them to the robot TCP.",
     )
     parser.add_argument(
-        "--translation-deadzone-mm",
-        type=float,
-        default=DEFAULT_TRANSLATION_DEADZONE_MM,
-        help=(
-            "Ignore radial controller motion around its anchor, with a continuous "
-            "transition into the configured translation scale."
-        ),
-    )
-    parser.add_argument(
         "--tracking-stale-ms",
         type=float,
         default=DEFAULT_TRACKING_STALE_MS,
         help="Cancel and require re-anchoring if tracking stops advancing.",
+    )
+    parser.add_argument(
+        "--gripper-park-hold-s",
+        type=float,
+        default=GRIPPER_PARK_HOLD_S,
+        help="Seconds fully closed before the corresponding arm returns home.",
+    )
+    parser.add_argument(
+        "--park-max-joint-speed-deg-s",
+        type=float,
+        default=DEFAULT_PARK_MAX_JOINT_SPEED_DEG_S,
+        help="Maximum joint speed while an arm returns home for standby.",
     )
     parser.add_argument(
         "--space-start",
@@ -120,10 +124,12 @@ def validate_physical_teleop_args(args: argparse.Namespace) -> None:
     """Validate safety constraints shared by physical teleop frontends."""
     if args.translation_scale <= 0.0:
         raise SystemExit("--translation-scale must be > 0.")
-    if args.translation_deadzone_mm < 0.0:
-        raise SystemExit("--translation-deadzone-mm must be >= 0.")
     if args.tracking_stale_ms <= 0.0:
         raise SystemExit("--tracking-stale-ms must be > 0.")
+    if args.gripper_park_hold_s < 0.0:
+        raise SystemExit("--gripper-park-hold-s must be >= 0.")
+    if args.park_max_joint_speed_deg_s <= 0.0:
+        raise SystemExit("--park-max-joint-speed-deg-s must be > 0.")
     if args.skip_feetech and not args.space_start:
         raise SystemExit(
             "--skip-feetech disables clap control; add --space-start so teleop can begin."
@@ -137,9 +143,9 @@ def validate_physical_teleop_args(args: argparse.Namespace) -> None:
 
 
 __all__ = [
+    "DEFAULT_PARK_MAX_JOINT_SPEED_DEG_S",
     "DEFAULT_TRACKING_STALE_MS",
     "DEFAULT_TRANSLATION_SCALE",
-    "DEFAULT_TRANSLATION_DEADZONE_MM",
     "add_physical_teleop_arguments",
     "validate_physical_teleop_args",
 ]

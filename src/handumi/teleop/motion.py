@@ -8,7 +8,7 @@ from typing import Callable
 
 import numpy as np
 
-from handumi.teleop.common import DEFAULT_TELEOP_FPS, TeleopMotionSmoother
+from handumi.teleop.common import DEFAULT_TELEOP_FPS, AdaptiveJointFilter
 from handumi.teleop.trajectory import TeleopCommandStream
 
 DEFAULT_COMMAND_RATE_HZ = 100.0
@@ -18,10 +18,12 @@ DEFAULT_COMMAND_RATE_HZ = 100.0
 DEFAULT_TRAJECTORY_DELAY_MS = 40.0
 DEFAULT_MAX_EXTRAPOLATION_MS = 5.0
 DEFAULT_COMMAND_EMA_TIME_CONSTANT_S = 0.0
-# Translation jitter is handled relative to the controller anchor. A per-frame
-# deadband would quantize slow intentional motion into delayed jumps.
-DEFAULT_POSITION_DEADBAND_MM = 0.0
-DEFAULT_ORIENTATION_DEADBAND_DEG = 0.25
+# One Euro parameters at the 30 Hz IK cadence. The low stationary cutoff
+# rejects solver/tracker chatter; velocity adaptation restores bandwidth as
+# soon as an operator intentionally moves a joint.
+DEFAULT_JOINT_FILTER_MIN_CUTOFF_HZ = 3.0
+DEFAULT_JOINT_FILTER_VELOCITY_COEFFICIENT = 3.0
+DEFAULT_JOINT_FILTER_DERIVATIVE_CUTOFF_HZ = 5.0
 
 
 @dataclass(frozen=True)
@@ -33,8 +35,9 @@ class TeleopMotionConfig:
     trajectory_delay_s: float = DEFAULT_TRAJECTORY_DELAY_MS / 1000.0
     max_extrapolation_s: float = DEFAULT_MAX_EXTRAPOLATION_MS / 1000.0
     command_ema_time_constant_s: float = DEFAULT_COMMAND_EMA_TIME_CONSTANT_S
-    position_deadband_m: float = DEFAULT_POSITION_DEADBAND_MM / 1000.0
-    orientation_deadband_rad: float = np.deg2rad(DEFAULT_ORIENTATION_DEADBAND_DEG)
+    joint_filter_min_cutoff_hz: float = DEFAULT_JOINT_FILTER_MIN_CUTOFF_HZ
+    joint_filter_velocity_coefficient: float = DEFAULT_JOINT_FILTER_VELOCITY_COEFFICIENT
+    joint_filter_derivative_cutoff_hz: float = DEFAULT_JOINT_FILTER_DERIVATIVE_CUTOFF_HZ
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> TeleopMotionConfig:
@@ -44,25 +47,28 @@ class TeleopMotionConfig:
             command_rate_hz=float(args.command_rate_hz),
             trajectory_delay_s=float(args.trajectory_delay_ms) / 1000.0,
             max_extrapolation_s=float(args.max_extrapolation_ms) / 1000.0,
-            command_ema_time_constant_s=float(
-                args.motion_smoothing_time_constant_s
+            command_ema_time_constant_s=float(args.motion_smoothing_time_constant_s),
+            joint_filter_min_cutoff_hz=float(args.joint_filter_min_cutoff_hz),
+            joint_filter_velocity_coefficient=float(
+                args.joint_filter_velocity_coefficient
             ),
-            position_deadband_m=float(args.motion_position_deadband_mm) / 1000.0,
-            orientation_deadband_rad=float(
-                np.deg2rad(args.motion_orientation_deadband_deg)
+            joint_filter_derivative_cutoff_hz=float(
+                args.joint_filter_derivative_cutoff_hz
             ),
         )
 
-    def make_input_smoother(self) -> TeleopMotionSmoother:
-        """Create the common pre-IK jitter gate.
-
-        EMA belongs to the 100 Hz command stream so it advances between IK
-        results. The input stage therefore applies only pose deadbands.
-        """
-        return TeleopMotionSmoother(
-            0.0,
-            position_deadband_m=self.position_deadband_m,
-            orientation_deadband_rad=self.orientation_deadband_rad,
+    def make_joint_filter(
+        self,
+        *,
+        filtered_indices: tuple[int, ...] | None = None,
+    ) -> AdaptiveJointFilter:
+        """Create the responsive low-pass applied to fresh IK targets."""
+        return AdaptiveJointFilter(
+            sample_rate_hz=self.input_rate_hz,
+            min_cutoff_hz=self.joint_filter_min_cutoff_hz,
+            velocity_coefficient=self.joint_filter_velocity_coefficient,
+            derivative_cutoff_hz=self.joint_filter_derivative_cutoff_hz,
+            filtered_indices=filtered_indices,
         )
 
     def make_command_stream(
@@ -102,7 +108,9 @@ def add_teleop_motion_arguments(
         "--trajectory-delay-ms",
         type=float,
         default=DEFAULT_TRAJECTORY_DELAY_MS,
-        help=transform("Small playback window used to interpolate adjacent IK results."),
+        help=transform(
+            "Small playback window used to interpolate adjacent IK results."
+        ),
     )
     parser.add_argument(
         "--max-extrapolation-ms",
@@ -119,16 +127,24 @@ def add_teleop_motion_arguments(
         help=transform("100 Hz joint-command EMA time constant; 0 disables it."),
     )
     parser.add_argument(
-        "--motion-position-deadband-mm",
+        "--joint-filter-min-cutoff-hz",
         type=float,
-        default=DEFAULT_POSITION_DEADBAND_MM,
-        help=transform("Ignore controller translation jitter below this distance."),
+        default=DEFAULT_JOINT_FILTER_MIN_CUTOFF_HZ,
+        help=transform("Stationary IK joint filter cutoff; lower rejects more jitter."),
     )
     parser.add_argument(
-        "--motion-orientation-deadband-deg",
+        "--joint-filter-velocity-coefficient",
         type=float,
-        default=DEFAULT_ORIENTATION_DEADBAND_DEG,
-        help=transform("Ignore controller rotation jitter below this angle."),
+        default=DEFAULT_JOINT_FILTER_VELOCITY_COEFFICIENT,
+        help=transform(
+            "Increase joint-filter bandwidth in proportion to motion speed."
+        ),
+    )
+    parser.add_argument(
+        "--joint-filter-derivative-cutoff-hz",
+        type=float,
+        default=DEFAULT_JOINT_FILTER_DERIVATIVE_CUTOFF_HZ,
+        help=transform("Cutoff used to estimate intentional joint velocity."),
     )
 
 
@@ -144,18 +160,21 @@ def validate_teleop_motion_args(args: argparse.Namespace) -> None:
         raise SystemExit("--max-extrapolation-ms must be >= 0.")
     if args.motion_smoothing_time_constant_s < 0.0:
         raise SystemExit("--motion-smoothing-time-constant-s must be >= 0.")
-    if args.motion_position_deadband_mm < 0.0:
-        raise SystemExit("--motion-position-deadband-mm must be >= 0.")
-    if args.motion_orientation_deadband_deg < 0.0:
-        raise SystemExit("--motion-orientation-deadband-deg must be >= 0.")
+    if args.joint_filter_min_cutoff_hz <= 0.0:
+        raise SystemExit("--joint-filter-min-cutoff-hz must be > 0.")
+    if args.joint_filter_velocity_coefficient < 0.0:
+        raise SystemExit("--joint-filter-velocity-coefficient must be >= 0.")
+    if args.joint_filter_derivative_cutoff_hz <= 0.0:
+        raise SystemExit("--joint-filter-derivative-cutoff-hz must be > 0.")
 
 
 __all__ = [
     "DEFAULT_COMMAND_EMA_TIME_CONSTANT_S",
     "DEFAULT_COMMAND_RATE_HZ",
+    "DEFAULT_JOINT_FILTER_DERIVATIVE_CUTOFF_HZ",
+    "DEFAULT_JOINT_FILTER_MIN_CUTOFF_HZ",
+    "DEFAULT_JOINT_FILTER_VELOCITY_COEFFICIENT",
     "DEFAULT_MAX_EXTRAPOLATION_MS",
-    "DEFAULT_ORIENTATION_DEADBAND_DEG",
-    "DEFAULT_POSITION_DEADBAND_MM",
     "DEFAULT_TRAJECTORY_DELAY_MS",
     "TeleopMotionConfig",
     "add_teleop_motion_arguments",

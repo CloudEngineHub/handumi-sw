@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -41,7 +41,6 @@ class TeleopController:
         enabled_sides: tuple[str, ...],
         source_world_to_robot_world: np.ndarray,
         translation_scale: float,
-        translation_deadzone_m: float = 0.0,
         anchor_z: float | None = None,
     ) -> None:
         self.runtime = runtime
@@ -53,9 +52,6 @@ class TeleopController:
             source_world_to_robot_world, dtype=np.float32
         )
         self.translation_scale = float(translation_scale)
-        if translation_deadzone_m < 0.0:
-            raise ValueError("translation_deadzone_m must be >= 0")
-        self.translation_deadzone_m = float(translation_deadzone_m)
         self.max_reach = runtime.config.ik_weights.max_reach
         self.side_indices = {side: runtime.arm_joint_indices(side) for side in SIDES}
         left_home, right_home = self.solver.fk_pose7(self.home_q)
@@ -157,12 +153,9 @@ class TeleopController:
             anchor = self.anchors[side]
             if anchor is None or not side_tracked[side]:
                 continue
-            source_pose = self._translation_deadzone(
-                anchor["source"], source_poses[side]
-            )
             pose7 = local_relative_robot_target_pose7(
                 previous_source_pose7=anchor["source"],
-                current_source_pose7=source_pose,
+                current_source_pose7=source_poses[side],
                 base_robot_pose7=self.anchor_ref[side],
                 adapter_rot=anchor["adapter"],
                 home_robot_pose7=self.anchor_ref[side],
@@ -191,23 +184,3 @@ class TeleopController:
             ),
             target_pose7=target_pose7,
         )
-
-    def _translation_deadzone(
-        self,
-        anchor_pose: np.ndarray,
-        current_pose: np.ndarray,
-    ) -> np.ndarray:
-        """Remove anchor jitter without introducing a step at the boundary."""
-        current = np.asarray(current_pose, dtype=np.float32).copy()
-        if self.translation_deadzone_m == 0.0:
-            return current
-        anchor = np.asarray(anchor_pose, dtype=np.float32)
-        delta = current[:3] - anchor[:3]
-        distance = float(np.linalg.norm(delta))
-        if distance <= self.translation_deadzone_m:
-            current[:3] = anchor[:3]
-        else:
-            current[:3] = anchor[:3] + delta * (
-                1.0 - self.translation_deadzone_m / distance
-            )
-        return current

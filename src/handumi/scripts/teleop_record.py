@@ -18,7 +18,7 @@ available. Episode control is optimized for continuous real-robot collection:
 
 Gripper commands are streamed continuously, including while recording is
 waiting to start. Opening a HandUMI gripper activates and anchors that arm;
-holding the corresponding robot gripper fully closed for two seconds parks it
+holding the corresponding robot gripper fully closed for three seconds parks it
 at home. Episode gestures control recording only and never activate an arm.
 
 PICO tracking uses ADB.
@@ -107,10 +107,10 @@ from handumi.synchronization import (
     synchronized_gripper_frame,
 )
 from handumi.teleop.common import (
+    AdaptiveJointFilter,
     BestEffortPeriodicWorker,
     KeyboardSpaceListener,
     TeleopLoopTimer,
-    TeleopMotionSmoother,
 )
 from handumi.teleop.common import (
     enabled_sides as _enabled_sides,
@@ -158,8 +158,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 record_log = logging.getLogger("handumi.record_teleop")
-
-RECORDING_START_PARK_GRACE_S = 3.0
 
 
 class DatasetWriteError(RuntimeError):
@@ -311,6 +309,7 @@ def _log_episode_interface(
     *,
     waiting: bool,
     space_start: bool,
+    park_hold_s: float,
 ) -> None:
     state = "WAITING FOR OPEN GRIPPER" if waiting else "RECORDING"
     start = "open either enabled HandUMI gripper"
@@ -325,13 +324,14 @@ def _log_episode_interface(
         "│ Save + next: double-squeeze RIGHT\n"
         "│ Discard: double-squeeze LEFT\n"
         "│ Finish session: double-squeeze BOTH  •  Stop: Esc / Ctrl+C\n"
-        "│ Arms: open HandUMI to wake  •  robot gripper closed 2 s to park\n"
+        "│ Arms: open HandUMI to wake  •  robot gripper closed %.1f s to park\n"
         "└────────────────────────────"
         "─────────────────────────────",
         episode,
         total,
         state,
         start,
+        park_hold_s,
     )
 
 
@@ -651,7 +651,9 @@ def record_episode(
     tracking_loss_timeout_s: float,
     tracking_stale_ms: float,
     command_stream: TeleopCommandStream,
-    motion_smoother: TeleopMotionSmoother | None = None,
+    park_hold_s: float = GRIPPER_PARK_HOLD_S,
+    park_max_joint_speed_deg_s: float = 10.0,
+    joint_filter: AdaptiveJointFilter | None = None,
     home_standby: GripperHomeStandby | None = None,
     dataset_writer: AsyncLeRobotWriter | None = None,
     cameras: list[Any] | None = None,
@@ -668,16 +670,30 @@ def record_episode(
     episode_start_ns: int | None = None
     status = "recorded"
     del initial_start_sides
-    park_grace_until_s = float("-inf")
     tracking_recovery = TrackingRecoveryPolicy()
     health_gate = SustainedHealthGate(sensor_loss_timeout_s)
     max_sync_skew_ns = int(max_sync_skew_s * 1e9)
     sync_lag_ns = int(sync_lag_s * 1e9)
     q = controller.q.copy()
-    if motion_smoother is None:
-        motion_smoother = TeleopMotionSmoother()
-    motion_smoother.reset(q)
-    teleop_session = TeleopSession(controller, motion_smoother)
+    if joint_filter is None:
+        finger_indices = {
+            finger.index
+            for fingers in (runtime.finger_joints or {}).values()
+            for finger in fingers
+        }
+        indices = tuple(
+            dict.fromkeys(
+                index
+                for side in enabled_sides
+                for index in runtime.arm_joint_indices(side)
+                if index not in finger_indices
+            )
+        )
+        joint_filter = TeleopMotionConfig(input_rate_hz=float(fps)).make_joint_filter(
+            filtered_indices=indices
+        )
+    joint_filter.reset(q)
+    teleop_session = TeleopSession(controller, joint_filter)
     if home_standby is None:
         home_standby = GripperHomeStandby(initial_standby=True)
     observations: list[np.ndarray] = []
@@ -689,7 +705,6 @@ def record_episode(
     timing_ik_samples = 0
     timing_tracking_age_max_s = 0.0
     timing_discarded_ik = 0
-    pending_repark_sides: tuple[str, ...] = ()
     pending_dataset_frame: dict[str, Any] | None = None
     previous_episode_open: dict[str, bool] | None = None
     cameras = cameras or []
@@ -725,7 +740,7 @@ def record_episode(
             side_tracked, enabled_sides
         )
 
-        if start_t is None and not controller.active and not tracking_ok:
+        if not controller.active and not tracking_ok:
             tracking_recovery.reset()
             immediate_widths = _latest_widths(grippers)
             command_stream.update_openings(_gripper_openings(immediate_widths))
@@ -749,7 +764,7 @@ def record_episode(
                 held = real_env.hold(q)
                 controller.tracking_lost(held)
                 home_standby.enter_standby(enabled_sides)
-                motion_smoother.reset(held)
+                joint_filter.reset(held)
                 q = held
                 command_stream.submit(
                     held,
@@ -788,9 +803,6 @@ def record_episode(
             continue
         if tracking_recovery.lost:
             record_log.info("Tracking stream recovered; checking gripper state.")
-            # Reissue home for closed arms while open arms wake from the held
-            # position through the normal per-gripper activation path.
-            pending_repark_sides = home_standby.standby_sides(enabled_sides)
         tracking_recovery.reset()
 
         immediate_widths = _latest_widths(grippers)
@@ -804,7 +816,6 @@ def record_episode(
             if start_t is None:
                 start_t = loop_start
                 episode_start_ns = record_time_ns
-                park_grace_until_s = loop_start + RECORDING_START_PARK_GRACE_S
                 home_standby.reset_close_timers()
                 record_log.info("Recording episode started with Space.")
                 log_say("recording episode", play_sounds=play_sounds)
@@ -851,7 +862,6 @@ def record_episode(
             if opened_sides:
                 start_t = loop_start
                 episode_start_ns = record_time_ns
-                park_grace_until_s = loop_start + RECORDING_START_PARK_GRACE_S
                 home_standby.reset_close_timers()
                 record_log.info(
                     "● REC | episode %d/%s | started by opening %s gripper | "
@@ -868,43 +878,41 @@ def record_episode(
         played_command = command_stream.latest()
         if grippers is not None and played_command is not None:
             _, robot_openings = played_command
-            if loop_start < park_grace_until_s:
-                home_standby.reset_close_timers()
-                park_sides = ()
-                _, wake_sides = home_standby.update(
-                    robot_openings,
-                    loop_start,
-                    enabled_sides,
-                    wake_openings=inputs.openings,
-                )
-            else:
-                park_sides, wake_sides = home_standby.update(
-                    robot_openings,
-                    loop_start,
-                    enabled_sides,
-                    wake_openings=inputs.openings,
-                )
+            park_sides, wake_sides = home_standby.update(
+                robot_openings,
+                loop_start,
+                enabled_sides,
+                wake_openings=inputs.openings,
+            )
         else:
             park_sides, wake_sides = (), ()
-        if pending_repark_sides:
-            park_sides += tuple(
-                side
-                for side in pending_repark_sides
-                if side not in park_sides and side not in wake_sides
-            )
-            pending_repark_sides = ()
         if park_sides:
             parked = controller.park(park_sides)
             if parked:
+                park_indices = tuple(
+                    index
+                    for index in joint_filter.filtered_indices or ()
+                    if any(index in controller.side_indices[side] for side in parked)
+                )
+                command_stream.limit_joint_rates(
+                    park_indices,
+                    np.deg2rad(park_max_joint_speed_deg_s),
+                )
                 record_log.info(
                     "Robot %s gripper held closed for %.1fs; arm returning home "
                     "and entering standby while recording continues.",
                     "/".join(parked),
-                    GRIPPER_PARK_HOLD_S,
+                    park_hold_s,
                 )
                 for side in parked:
                     log_say(f"{side} arm standby", play_sounds=play_sounds)
         if wake_sides:
+            wake_indices = tuple(
+                index
+                for index in joint_filter.filtered_indices or ()
+                if any(index in controller.side_indices[side] for side in wake_sides)
+            )
+            command_stream.clear_joint_rate_limits(wake_indices)
             start_sides += tuple(
                 side for side in wake_sides if side not in start_sides
             )
@@ -924,11 +932,13 @@ def record_episode(
 
         observation_q = real_env.read(base_q=q)
         controller_q_before_ik = controller.q.copy()
+        filter_before_ik = teleop_session.snapshot_filter()
         ik_start_s = time.perf_counter()
         teleop_frame = teleop_session.advance(
             inputs,
             now_s=loop_start,
             start_sides=start_sides,
+            exact_sides=park_sides,
         )
         ik_elapsed_s = time.perf_counter() - ik_start_s
         timing_ik_total_s += ik_elapsed_s
@@ -942,7 +952,7 @@ def record_episode(
             and not park_sides
         ):
             controller.q = controller_q_before_ik
-            motion_smoother.restore_joint_command(controller_q_before_ik)
+            teleop_session.restore_filter(filter_before_ik)
             timing_discarded_ik += 1
             real_env.check_health()
             continue
@@ -1141,7 +1151,6 @@ def _run_record() -> None:
         enabled_sides=enabled_sides,
         source_world_to_robot_world=_tracking_world_map(args.device),
         translation_scale=args.translation_scale,
-        translation_deadzone_m=args.translation_deadzone_mm / 1000.0,
     )
     controller.warmup()
     _validate_feetech_ready(args)
@@ -1167,7 +1176,22 @@ def _run_record() -> None:
     dataset_writer: AsyncLeRobotWriter | None = None
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     motion_config = TeleopMotionConfig.from_args(args)
-    motion_smoother = motion_config.make_input_smoother()
+    finger_indices = {
+        finger.index
+        for fingers in (runtime.finger_joints or {}).values()
+        for finger in fingers
+    }
+    motion_joint_indices = tuple(
+        dict.fromkeys(
+            index
+            for side in enabled_sides
+            for index in runtime.arm_joint_indices(side)
+            if index not in finger_indices
+        )
+    )
+    joint_filter = motion_config.make_joint_filter(
+        filtered_indices=motion_joint_indices
+    )
     command_stream = motion_config.make_command_stream(real_env.write)
 
     def _on_signal(signum, frame):
@@ -1254,7 +1278,7 @@ def _run_record() -> None:
         real_env.connect()
         record_log.info("Selected home pose: %s", home_pose_name)
         real_env.home(home_q)
-        motion_smoother.reset(home_q)
+        joint_filter.reset(home_q)
         startup_widths = _latest_widths(grippers)
         command_stream.submit(
             home_q,
@@ -1269,11 +1293,14 @@ def _run_record() -> None:
         )
         record_log.info(
             "Joint trajectory playback: %.1f Hz, %.0f ms delay, "
-            "%.0f ms max bridge, %.0f ms EMA.",
+            "%.0f ms max bridge, %.0f ms EMA; adaptive IK filter "
+            "cutoff=%.1f Hz + %.1f*|dq/dt|.",
             args.command_rate_hz,
             args.trajectory_delay_ms,
             args.max_extrapolation_ms,
             args.motion_smoothing_time_constant_s * 1000.0,
+            args.joint_filter_min_cutoff_hz,
+            args.joint_filter_velocity_coefficient,
         )
         space_listener.start()
 
@@ -1349,7 +1376,10 @@ def _run_record() -> None:
 
         clap_detector = DoubleClapDetector()
         clap_arbiter = _BilateralClapArbiter()
-        home_standby = GripperHomeStandby(initial_standby=True)
+        home_standby = GripperHomeStandby(
+            hold_s=args.gripper_park_hold_s,
+            initial_standby=True,
+        )
         recorded = 0
         while (
             args.num_episodes <= 0 or recorded < args.num_episodes
@@ -1373,6 +1403,7 @@ def _run_record() -> None:
                 ep_total,
                 waiting=True,
                 space_start=args.space_start,
+                park_hold_s=args.gripper_park_hold_s,
             )
             if not args.space_start:
                 record_log.info(
@@ -1411,7 +1442,9 @@ def _run_record() -> None:
                 tracking_loss_timeout_s=args.tracking_loss_timeout_s,
                 tracking_stale_ms=args.tracking_stale_ms,
                 command_stream=command_stream,
-                motion_smoother=motion_smoother,
+                park_hold_s=args.gripper_park_hold_s,
+                park_max_joint_speed_deg_s=args.park_max_joint_speed_deg_s,
+                joint_filter=joint_filter,
                 home_standby=home_standby,
                 dataset_writer=dataset_writer,
                 cameras=cameras,
@@ -1482,8 +1515,16 @@ def _run_record() -> None:
                 "trajectory_ema_time_constant_s": (
                     args.motion_smoothing_time_constant_s
                 ),
+                "joint_filter_min_cutoff_hz": args.joint_filter_min_cutoff_hz,
+                "joint_filter_velocity_coefficient": (
+                    args.joint_filter_velocity_coefficient
+                ),
+                "joint_filter_derivative_cutoff_hz": (
+                    args.joint_filter_derivative_cutoff_hz
+                ),
+                "gripper_park_hold_s": args.gripper_park_hold_s,
+                "park_max_joint_speed_deg_s": args.park_max_joint_speed_deg_s,
                 "translation_scale": args.translation_scale,
-                "translation_deadzone_mm": args.translation_deadzone_mm,
                 "observation_action_alignment": (
                     "observation.state[t] is canonical backend feedback; "
                     "action[t] is the next recorded teleop command."
