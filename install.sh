@@ -32,7 +32,11 @@ done
 
 XROBO_DIR="external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"
 SIBLING_XROBO="$ROOT/../GR00T-WholeBodyControl/external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"
-XROBO_REPO="https://github.com/XR-Robotics/XRoboToolkit-PC-Service-Pybind.git"
+XROBO_REPO="https://github.com/leoperezz/XRoboToolkit-PC-Service-Pybind.git"
+XROBO_PC_SERVICE_REPO="https://github.com/leoperezz/XRoboToolkit-PC-Service"
+XRT_PC_SERVICE_SCRIPT="/opt/apps/roboticsservice/runService.sh"
+XRT_PC_SERVICE_DEB="XRoboToolkit_PC_Service_1.0.1.0_ubuntu_22.04_amd64.deb"
+XRT_PC_SERVICE_URL="${XROBO_PC_SERVICE_REPO}/raw/main/releases/download/v1.0.1.0/${XRT_PC_SERVICE_DEB}"
 ARCH="$(uname -m)"
 VENV_DIR=".venv"
 
@@ -104,7 +108,7 @@ ensure_xrobotoolkit_native_lib() {
     XRT_TMP="$XROBO_DIR/tmp"
     mkdir -p "$XRT_TMP"
     if [[ ! -d "$XRT_TMP/XRoboToolkit-PC-Service" ]]; then
-      git clone https://github.com/XR-Robotics/XRoboToolkit-PC-Service.git "$XRT_TMP/XRoboToolkit-PC-Service"
+      git clone "$XROBO_PC_SERVICE_REPO.git" "$XRT_TMP/XRoboToolkit-PC-Service"
     fi
     pushd "$XRT_TMP/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK" >/dev/null
     bash build.sh
@@ -126,7 +130,7 @@ ensure_xrobotoolkit_native_lib() {
     XRT_TMP="$XROBO_DIR/tmp"
     mkdir -p "$XRT_TMP"
     if [[ ! -d "$XRT_TMP/XRoboToolkit-PC-Service" ]]; then
-      git clone -b orin https://github.com/XR-Robotics/XRoboToolkit-PC-Service.git "$XRT_TMP/XRoboToolkit-PC-Service"
+      git clone -b orin "$XROBO_PC_SERVICE_REPO.git" "$XRT_TMP/XRoboToolkit-PC-Service"
     fi
     pushd "$XRT_TMP/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK" >/dev/null
     bash build.sh
@@ -145,6 +149,43 @@ ensure_xrobotoolkit_native_lib() {
 
   echo "error: unsupported architecture for XRoboToolkit: $ARCH" >&2
   exit 1
+}
+
+ensure_xrobotoolkit_pc_service() {
+  if [[ -f "$XRT_PC_SERVICE_SCRIPT" ]]; then
+    echo "==> XRoboToolkit PC service already installed"
+    return 0
+  fi
+
+  if [[ "$ARCH" != "x86_64" ]]; then
+    echo "==> Skipping XRoboToolkit PC service auto-install on $ARCH"
+    echo "    Build or install the package manually from $XROBO_PC_SERVICE_REPO"
+    return 0
+  fi
+
+  if ! command -v dpkg >/dev/null 2>&1; then
+    echo "warning: dpkg not found; install XRoboToolkit PC service manually" >&2
+    echo "         $XRT_PC_SERVICE_URL" >&2
+    return 0
+  fi
+
+  echo "==> Installing XRoboToolkit PC service ($XRT_PC_SERVICE_DEB)"
+  XRT_DEB_TMP="$(mktemp -d)"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$XRT_DEB_TMP/$XRT_PC_SERVICE_DEB" "$XRT_PC_SERVICE_URL"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$XRT_DEB_TMP/$XRT_PC_SERVICE_DEB" "$XRT_PC_SERVICE_URL"
+  else
+    rm -rf "$XRT_DEB_TMP"
+    echo "error: curl or wget required to download XRoboToolkit PC service" >&2
+    exit 1
+  fi
+
+  if ! sudo dpkg -i "$XRT_DEB_TMP/$XRT_PC_SERVICE_DEB"; then
+    sudo apt-get install -f -y
+    sudo dpkg -i "$XRT_DEB_TMP/$XRT_PC_SERVICE_DEB"
+  fi
+  rm -rf "$XRT_DEB_TMP"
 }
 
 # ── Venv + project deps ───────────────────────────────────────────────────────
@@ -231,6 +272,7 @@ if [[ "$SKIP_XRT" -eq 1 ]]; then
 else
   ensure_xrobotoolkit_sources
   ensure_xrobotoolkit_native_lib
+  ensure_xrobotoolkit_pc_service
 fi
 ensure_venv
 ensure_openarm_system_deps
@@ -249,15 +291,16 @@ if [[ "$SKIP_XRT" -eq 1 ]]; then
   echo "NOTE: XRoboToolkit (PICO) was skipped (--skip-xrt). Using Meta Quest"
   echo "      tracking needs no PC service — see docs/README_quest.md."
 else
-  SERVICE_SCRIPT="/opt/apps/roboticsservice/runService.sh"
-  if [[ -f "$SERVICE_SCRIPT" ]]; then
-    echo "NOTE: XRoboToolkit PC service found at $SERVICE_SCRIPT"
+  if [[ -f "$XRT_PC_SERVICE_SCRIPT" ]]; then
+    echo "NOTE: XRoboToolkit PC service found at $XRT_PC_SERVICE_SCRIPT"
     echo "      Start it before running any xrobotoolkit_sdk scripts:"
-    echo "        bash $SERVICE_SCRIPT"
+    echo "        bash $XRT_PC_SERVICE_SCRIPT"
   else
-    echo "WARNING: XRoboToolkit PC service not found at $SERVICE_SCRIPT"
+    echo "WARNING: XRoboToolkit PC service not found at $XRT_PC_SERVICE_SCRIPT"
     echo "         xrt.init() will crash (core dump) if the service is not running."
     echo "         Install the XRoboToolkit PC service from:"
-    echo "           https://github.com/XR-Robotics/XRoboToolkit-PC-Service"
+    echo "           $XROBO_PC_SERVICE_REPO"
+    echo "         or download:"
+    echo "           $XRT_PC_SERVICE_URL"
   fi
 fi
