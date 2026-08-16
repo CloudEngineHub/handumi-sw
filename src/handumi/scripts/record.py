@@ -37,6 +37,12 @@ from typing import Any, Protocol, cast
 import numpy as np
 import yaml
 
+from handumi.audio import (
+    AudioCaptureError,
+    PicoAudioRecorder,
+    audio_metadata,
+    validate_audio_files,
+)
 from handumi.calibration.control_tcp import (
     ControllerTcpCalibration,
     calibration_path_for_device,
@@ -96,12 +102,12 @@ from handumi.tracking.pico import (
 )
 from handumi.tracking.transforms import Pose
 from handumi.utils.speech import log_say
+from handumi.utils.trajectory import TrajectoryTrail
 from handumi.utils.voice import (
     VoiceCommandListener,
     VoiceUnavailableError,
     speech_duration_s,
 )
-from handumi.utils.trajectory import TrajectoryTrail
 from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
 
 logging.basicConfig(
@@ -146,6 +152,7 @@ _RECORDING_DEFAULTS: dict[str, object] = {
     "feetech_sample_hz": 100.0,
     "skip_feetech": False,
     "no_video": False,
+    "record_audio": False,
     "robot": "piper",
 }
 
@@ -1031,6 +1038,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--feetech-sample-hz", type=float, default=None, help=advanced("Feetech sampler frequency."))
     p.add_argument("--no-video", action="store_true", default=None, help=advanced("Store individual images instead of MP4."))
     p.add_argument(
+        "--record-audio",
+        action="store_true",
+        default=None,
+        help="Record the PICO app microphone stream as one WAV per episode.",
+    )
+    p.add_argument(
         "--rerun",
         action="store_true",
         help="Open a live Rerun view with recorded cameras, controller/TCP trails, and gripper widths.",
@@ -1164,6 +1177,7 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
             "fps",
             "skip_feetech",
             "no_video",
+            "record_audio",
             "robot",
             "session_calibration",
             "controller_tcp_calibration",
@@ -1270,6 +1284,9 @@ def _recording_values_from_dataset(
         feetech = sources.get("feetech")
         if isinstance(feetech, dict) and "enabled" in feetech:
             values["skip_feetech"] = not bool(feetech["enabled"])
+    audio = handumi.get("audio")
+    if isinstance(audio, dict) and "enabled" in audio:
+        values["record_audio"] = bool(audio["enabled"])
     robot = handumi.get("target_robot")
     if isinstance(robot, dict):
         values["robot"] = robot.get("name")
@@ -1288,6 +1305,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--encoder-queue-size must be greater than zero.")
     if args.manual_control and args.device != "pico":
         raise SystemExit("--manual-control currently requires --device pico.")
+    if args.record_audio and args.device != "pico":
+        raise SystemExit("--record-audio currently requires --device pico.")
     if args.manual_control and args.start_button == "enter":
         args.start_button = "A"
         log.info("--manual-control set: using PICO A as start/stop button.")
@@ -1371,6 +1390,7 @@ def _print_recording_plan(
     print(f"  Rows:     {args.fps} fps; {episodes} episode(s)")
     print(f"  Feetech:  {'disabled' if args.skip_feetech else 'enabled'}")
     print(f"  Encoder:  {encoder_label}")
+    print(f"  Audio:    {'PICO PCM WAV' if args.record_audio else 'disabled'}")
     print(f"  Workspace: {workspace}; Controller->TCP: {calibration_source}")
     if args.dry_run:
         print("  Result:   plan resolved; hardware was not opened")
@@ -1612,7 +1632,14 @@ def main() -> None:
     recorded = 0
     clap_detector = DoubleClapDetector() if args.clap_control else None
     restart_active = False
+    audio_recorder = (
+        PicoAudioRecorder(lambda: getattr(tracker, "xrt", None), Path(dataset.root))
+        if args.record_audio
+        else None
+    )
     try:
+        if audio_recorder is not None:
+            audio_recorder.start()
         while (args.num_episodes <= 0 or recorded < args.num_episodes) and not stop_event.is_set():
             ep_num = dataset.num_episodes + 1
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
@@ -1666,6 +1693,8 @@ def main() -> None:
             if not _wait_for_tracking(tracker, stop_event):
                 break
             announce(f"Recording episode {ep_num}")
+            if audio_recorder is not None:
+                audio_recorder.begin_episode()
             if rerun is not None:
                 rerun.set_status("RECORDING", f"Episode {ep_num}/{ep_total} is being recorded")
             n_frames, status = record_episode(
@@ -1696,6 +1725,8 @@ def main() -> None:
                 rerun=rerun,
             )
             if status == "repeat":
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
                 log.warning("Episode restart requested (%d frames discarded).", n_frames)
                 announce("Restart recording")
                 if rerun is not None:
@@ -1712,6 +1743,8 @@ def main() -> None:
                 "encoder_unhealthy",
                 "interrupted",
             }:
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 announce("Episode discarded")
                 if rerun is not None:
@@ -1733,7 +1766,30 @@ def main() -> None:
                     if status == "finish":
                         break
                     continue
-            dataset.save_episode()
+            if audio_recorder is not None:
+                try:
+                    audio_recorder.prepare_episode()
+                except AudioCaptureError as exc:
+                    log.error("Episode discarded before commit: %s", exc)
+                    announce("Episode discarded")
+                    dataset.clear_episode_buffer()
+                    audio_recorder.cancel_episode()
+                    if status == "finish":
+                        break
+                    continue
+            episode_index = int(dataset.num_episodes)
+            audio_path = None
+            if audio_recorder is not None:
+                audio_path = audio_recorder.commit_episode(
+                    episode_index,
+                    chunks_size=int(dataset.meta.chunks_size),
+                )
+            try:
+                dataset.save_episode()
+            except BaseException:
+                if audio_path is not None:
+                    audio_path.unlink(missing_ok=True)
+                raise
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
             announce(f"Episode {ep_num} saved, {n_frames} frames")
@@ -1763,7 +1819,10 @@ def main() -> None:
                 robot_metadata=robot_metadata,
             )
             handumi_metadata["sources"] = _capture_sources_metadata(
-                camera_specs, cameras, grippers
+                camera_specs,
+                cameras,
+                grippers,
+                audio_enabled=bool(args.record_audio),
             )
             updated_info = _update_info_json(
                 root,
@@ -1789,6 +1848,8 @@ def main() -> None:
             finalization_error = exc
             log.exception("Dataset finalization failed; do not upload this dataset.")
         finally:
+            if audio_recorder is not None:
+                audio_recorder.close()
             disconnect_cameras(cameras)
             if grippers is not None:
                 grippers.stop()
@@ -1947,11 +2008,14 @@ def _capture_sources_metadata(
     camera_specs: list[dict[str, object]],
     cameras: Sequence[object | None],
     grippers: object | None,
+    *,
+    audio_enabled: bool = False,
 ) -> dict[str, object]:
     """Store source enablement once instead of repeating it on every row."""
     return {
         "tracking": {"enabled": True},
         "feetech": {"enabled": grippers is not None},
+        "audio": {"enabled": audio_enabled},
         "cameras": {
             str(spec["name"]): {"enabled": camera is not None}
             for spec, camera in zip(camera_specs, cameras, strict=True)
@@ -2077,6 +2141,7 @@ def _resume_handumi_metadata(
         else {
             "tracking": {"enabled": True},
             "feetech": {"enabled": not args.skip_feetech},
+            "audio": {"enabled": bool(getattr(args, "record_audio", False))},
             "cameras": {
                 str(spec["name"]): {"enabled": True} for spec in camera_specs
             },
@@ -2091,6 +2156,9 @@ def _resume_handumi_metadata(
 
     return {
         "recording_device": args.device,
+        "audio": stable_value(
+            "audio", audio_metadata(bool(getattr(args, "record_audio", False)))
+        ),
         "camera_fps": stable_value("camera_fps", getattr(args, "cam_fps", None)),
         "camera_resolution": stable_value(
             "camera_resolution",
@@ -2260,6 +2328,7 @@ def _validate_resume_target(
         "feetech_sample_hz",
         "cameras",
         "sources",
+        "audio",
     )
     for key in simple_keys:
         if actual_handumi.get(key) != handumi.get(key):
@@ -2409,6 +2478,15 @@ def _validate_finalized_lerobot_dataset(root: Path) -> None:
     ]
     if missing_videos:
         raise RuntimeError(f"Dataset is missing videos for: {', '.join(missing_videos)}.")
+
+    handumi = info.get("handumi") or {}
+    audio = handumi.get("audio") if isinstance(handumi, dict) else None
+    if isinstance(audio, dict) and audio.get("enabled"):
+        validate_audio_files(
+            root,
+            total_episodes,
+            chunks_size=int(info.get("chunks_size", 1000)),
+        )
 
 
 def _normalize_camera_list(value: object) -> list[str]:

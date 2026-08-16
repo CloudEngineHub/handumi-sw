@@ -62,6 +62,7 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import numpy as np
 
+from handumi.audio import AudioCaptureError, PicoAudioRecorder, audio_metadata
 from handumi.cameras import (
     build_camera_specs,
     camera_output_size,
@@ -89,8 +90,8 @@ from handumi.feetech import FeetechGripperPair, FeetechGripperSampler, GripperWi
 from handumi.real.registry import make_real_backend
 from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.scripts.record import (
-    StreamingEncodingError,
     _SOFTWARE_VIDEO_CODEC,
+    StreamingEncodingError,
     _EscapeStopListener,
     _install_strict_streaming_encoder,
     _prepare_streaming_episode,
@@ -527,6 +528,12 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Append episodes to the finalized dataset in --output-dir.",
     )
+    p.add_argument(
+        "--record-audio",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Record the PICO app microphone stream as one WAV per episode.",
+    )
     if not show_advanced:
         normal = {
             "help",
@@ -540,6 +547,7 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
             "task",
             "output_dir",
             "resume",
+            "record_audio",
             "cameras",
             "skip_cameras",
             "no_rerun",
@@ -580,6 +588,8 @@ def _validate_record_args(args: argparse.Namespace) -> None:
     validate_physical_teleop_args(args)
     if args.num_episodes < 0:
         raise SystemExit("--num-episodes must be >= 0.")
+    if args.record_audio and args.device != "pico":
+        raise SystemExit("--record-audio currently requires --device pico.")
     for name in (
         "sync_lag_s",
         "max_sync_skew_s",
@@ -664,6 +674,7 @@ def record_episode(
     camera_stale_timeout_s: float = CAMERA_STALE_TIMEOUT_S,
     episode_number: int = 1,
     episode_total: str = "?",
+    audio_recorder: PicoAudioRecorder | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, str, np.ndarray]:
     loop_timer = TeleopLoopTimer(fps)
     n_frames = 0
@@ -817,6 +828,8 @@ def record_episode(
             if start_t is None:
                 start_t = loop_start
                 episode_start_ns = record_time_ns
+                if audio_recorder is not None:
+                    audio_recorder.begin_episode()
                 home_standby.reset_close_timers()
                 record_log.info("Recording episode started with Space.")
                 log_say("recording episode", play_sounds=play_sounds)
@@ -863,6 +876,8 @@ def record_episode(
             if opened_sides:
                 start_t = loop_start
                 episode_start_ns = record_time_ns
+                if audio_recorder is not None:
+                    audio_recorder.begin_episode()
                 home_standby.reset_close_timers()
                 record_log.info(
                     "● REC | episode %d/%s | started by opening %s gripper | "
@@ -1126,11 +1141,25 @@ def record_episode(
 
 def _run_record() -> None:
     args = _parse_record_args()
-    _validate_record_args(args)
     args.output_dir = Path(args.output_dir)
     args.repo_id = f"local/{args.output_dir.name}"
     if args.resume:
         _validate_resume_dataset(args.output_dir)
+        info = json.loads((args.output_dir / "meta" / "info.json").read_text())
+        handumi = info.get("handumi") or {}
+        audio = handumi.get("audio") if isinstance(handumi, dict) else None
+        dataset_records_audio = bool(
+            isinstance(audio, dict) and audio.get("enabled")
+        )
+        if args.record_audio is not None and bool(args.record_audio) != dataset_records_audio:
+            raise SystemExit(
+                "Cannot resume with a different audio setting; this dataset has "
+                f"audio {'enabled' if dataset_records_audio else 'disabled'}."
+            )
+        args.record_audio = dataset_records_audio
+    elif args.record_audio is None:
+        args.record_audio = False
+    _validate_record_args(args)
     play_sounds = not args.no_sounds
     stop_event = threading.Event()
 
@@ -1175,6 +1204,7 @@ def _run_record() -> None:
     camera_worker: BestEffortPeriodicWorker | None = None
     dataset = None
     dataset_writer: AsyncLeRobotWriter | None = None
+    audio_recorder: PicoAudioRecorder | None = None
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     motion_config = TeleopMotionConfig.from_args(args)
     finger_indices = {
@@ -1372,6 +1402,12 @@ def _run_record() -> None:
             max_pending_frames=max(2, args.fps * 2),
             use_videos=use_videos,
         )
+        if args.record_audio:
+            audio_recorder = PicoAudioRecorder(
+                lambda: getattr(tracker, "xrt", None),
+                Path(dataset.root),
+            )
+            audio_recorder.start()
         existing_episodes = int(dataset.num_episodes)
         record_log.info("Recording LeRobot dataset at: %s", dataset.root)
 
@@ -1455,8 +1491,11 @@ def _run_record() -> None:
                 camera_stale_timeout_s=args.camera_stale_timeout_s,
                 episode_number=ep_num,
                 episode_total=ep_total,
+                audio_recorder=audio_recorder,
             )
             if status == "session_finished":
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
                 record_log.info(
                     "Bilateral double clap detected; finishing recording session."
                 )
@@ -1464,6 +1503,8 @@ def _run_record() -> None:
                 log_say("Recording session finished", play_sounds=play_sounds)
                 break
             if status == "discarded":
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
                 record_log.warning(
                     "Episode discarded by left double clap (%d frames).", n_frames
                 )
@@ -1477,6 +1518,8 @@ def _run_record() -> None:
                 "encoder_unhealthy",
                 "interrupted",
             }:
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
                 record_log.warning(
                     "Episode discarded (%s, %d frames).", status, n_frames
                 )
@@ -1485,11 +1528,26 @@ def _run_record() -> None:
                 if status == "interrupted":
                     break
                 continue
+            audio_path: Path | None = None
             try:
+                if audio_recorder is not None:
+                    audio_recorder.prepare_episode()
+                audio_path = (
+                    audio_recorder.commit_episode(
+                        existing_episodes + recorded,
+                        chunks_size=int(dataset.meta.chunks_size),
+                    )
+                    if audio_recorder is not None
+                    else None
+                )
                 dataset_writer.save_episode(n_frames)
-            except DatasetWriteError as exc:
+            except (AudioCaptureError, DatasetWriteError) as exc:
+                if audio_path is not None:
+                    audio_path.unlink(missing_ok=True)
                 record_log.error("Episode discarded before commit: %s", exc)
                 dataset_writer.clear_episode()
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
                 log_say("Episode discarded", play_sounds=play_sounds)
                 continue
             recorded += 1
@@ -1506,6 +1564,7 @@ def _run_record() -> None:
             dataset.root,
             {
                 "recording_device": args.device,
+                "audio": audio_metadata(bool(args.record_audio)),
                 "capture_schema": HANDUMI_CAPTURE_SCHEMA,
                 "state_layout": "yaml_arm_joints_plus_logical_gripper_width_m",
                 "state_semantics": "real_robot_joint_feedback",
@@ -1571,6 +1630,8 @@ def _run_record() -> None:
             try:
                 if dataset_writer is not None:
                     dataset_writer.close()
+                if audio_recorder is not None:
+                    audio_recorder.close()
                 real_env.disconnect()
             finally:
                 if grippers is not None:
