@@ -62,8 +62,9 @@ ik_weights:
   pos: 125.0
   ori: 20.0
   rest: 20.0
-  # 4 deg per IK frame.
+  # Legacy LM/offline cap: 2 deg per IK frame at the historical 30 Hz.
   max_joint_delta: 0.03490659
+  # Cartesian radius in meters around each home TCP; unrelated to FPS.
   max_reach: 0.70
 real:
   backend: piper_can

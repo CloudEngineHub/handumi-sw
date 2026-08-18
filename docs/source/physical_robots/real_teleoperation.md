@@ -46,10 +46,23 @@ handumi setup --robot <robot_id> --device meta
 handumi teleop-real --robot <robot_id> --device meta
 ```
 
-The input/IK loop and robot command clock are independent. By default, IK
-produces timestamped targets at 30 Hz and a delayed trajectory stream sends
-interpolated commands at 100 Hz. `--trajectory-delay-ms` controls the
-smoothness/latency tradeoff; inspect the shared advanced options with
+The input/IK loop and robot command clock are independent. Real teleoperation
+uses the incremental DLS follower at 72 Hz by default and a delayed trajectory
+stream sends interpolated commands at 100 Hz. The delay automatically follows
+the requested input rate (one input frame plus a small scheduling margin), so
+the 72 Hz default uses about 20.6 ms instead of the historical 40 ms at 30 Hz.
+`--fps` controls how often HandUMI polls and processes the latest headset pose;
+it does not change the headset application's own render refresh rate. Use
+`--ik-solver lm` to compare the legacy solver, which retains a 30 Hz default,
+or override either mode explicitly with `--fps <hz>`. The DLS joint clamp is
+time-based, so changing this rate does not change maximum joint speed.
+Its per-joint speed is resolved automatically as the minimum of the joint's
+URDF velocity limit, the real backend's configured limit, and HandUMI's
+conservative 1 rad/s teleoperation ceiling; it does not require a duplicate
+`ik_weights.max_joint_speed_rad_s` robot setting.
+
+`--trajectory-delay-ms` can still override the automatic delay and controls the
+smoothness/latency tradeoff. Inspect all shared advanced options with
 `handumi teleop-real --help-advanced`.
 
 Camera previews use the `left_wrist`, `right_wrist`, and `workspace` entries

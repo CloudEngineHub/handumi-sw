@@ -46,6 +46,7 @@ from handumi.teleop.common import (
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.dls import make_real_teleop_dls_solver
 from handumi.teleop.hardware import (
     load_required_controller_tcp_calibration as _load_required_calibration,
     validate_feetech_ports_exist,
@@ -72,6 +73,9 @@ logging.basicConfig(
 )
 real_log = logging.getLogger("handumi.teleop_real")
 
+DEFAULT_DLS_TRACKING_RATE_HZ = 72
+TRAJECTORY_SCHEDULING_MARGIN_MS = 1000.0 / 150.0
+
 
 def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -92,6 +96,18 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Log per-arm IK, filtered, and streamed joint positions once per second.",
     )
+    parser.add_argument(
+        "--ik-solver",
+        choices=("dls", "lm"),
+        default="dls",
+        help=(
+            "IK follower: incremental singularity-aware DLS (default), or the "
+            "legacy global LM solver."
+        ),
+    )
+    # teleop-real can follow the headset faster with the inexpensive DLS step.
+    # ``None`` lets us retain the historical 30 Hz default for explicit LM.
+    parser.set_defaults(fps=None, trajectory_delay_ms=None)
     if not show_advanced:
         normal = {
             "help",
@@ -105,6 +121,8 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
             "skip_cameras",
             "no_rerun",
             "joint_debug",
+            "ik_solver",
+            "fps",
         }
         for action in parser._actions:
             if action.dest not in normal:
@@ -112,7 +130,16 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
     else:
         parser.print_help()
         raise SystemExit(0)
-    return parser.parse_args(raw_argv)
+    args = parser.parse_args(raw_argv)
+    if args.fps is None:
+        args.fps = DEFAULT_DLS_TRACKING_RATE_HZ if args.ik_solver == "dls" else 30
+    if args.trajectory_delay_ms is None:
+        # Hold roughly one producer frame plus a small scheduling margin, so
+        # the 100 Hz output normally interpolates between real IK endpoints.
+        args.trajectory_delay_ms = (
+            1000.0 / float(args.fps) + TRAJECTORY_SCHEDULING_MARGIN_MS
+        )
+    return args
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -269,7 +296,7 @@ def _run_real() -> None:
     _validate_real_args(args)
     from handumi.scripts.record import build_tracker, connect_feetech
 
-    real_log.info("Loading %s IK solver.", args.robot)
+    real_log.info("Loading %s kinematics.", args.robot)
     runtime = load_embodiment(args.robot)
     import jax
 
@@ -287,9 +314,26 @@ def _run_real() -> None:
         source_world_to_robot_world=_tracking_world_map(args.device),
         translation_scale=args.translation_scale,
     )
+    if args.ik_solver == "dls":
+        controller.solver = make_real_teleop_dls_solver(
+            runtime,
+            controller.solver,
+            home_q,
+            input_rate_hz=float(args.fps),
+        )
+        for side in _enabled_sides(args.side):
+            limits = controller.solver.side_joint_speed_limits_rad_s[side]
+            real_log.info(
+                "DLS %s joint-speed limits resolved automatically: %.1f..%.1f deg/s.",
+                side,
+                float(np.rad2deg(np.min(limits))),
+                float(np.rad2deg(np.max(limits))),
+            )
     q = home_q.copy()
     real_log.info("Selected home pose: %s", home_pose_name)
-    real_log.info("Warming IK solver before touching hardware.")
+    real_log.info(
+        "Warming %s IK solver before touching hardware.", args.ik_solver.upper()
+    )
     controller.warmup()
     _validate_feetech_ready(args)
 
@@ -335,6 +379,7 @@ def _run_real() -> None:
     last_processed_tracking_time_ns: int | None = None
     tracking_recovery = TrackingRecoveryPolicy()
     timing_next_log_s = time.perf_counter() + 5.0
+    timing_window_start_s = time.perf_counter()
     timing_ik_total_s = 0.0
     timing_ik_max_s = 0.0
     timing_ik_samples = 0
@@ -403,9 +448,12 @@ def _run_real() -> None:
             "until their HandUMI gripper opens."
         )
         real_log.info(
-            "Joint trajectory playback: %.1f Hz, %.0f ms delay, "
+            "Tracking/IK target rate: %.1f Hz (%s); joint trajectory playback: "
+            "%.1f Hz, %.0f ms delay, "
             "%.0f ms max bridge, %.0f ms EMA; adaptive IK filter "
             "cutoff=%.1f Hz + %.1f*|dq/dt|.",
+            args.fps,
+            args.ik_solver.upper(),
             args.command_rate_hz,
             args.trajectory_delay_ms,
             args.max_extrapolation_ms,
@@ -601,6 +649,18 @@ def _run_real() -> None:
 
             controller_q_before_ik = controller.q.copy()
             filter_before_ik = teleop_session.snapshot_filter()
+            set_solver_timestep = getattr(controller.solver, "set_timestep", None)
+            if callable(set_solver_timestep):
+                source_dt_s = (
+                    1.0 / motion_config.input_rate_hz
+                    if last_processed_tracking_time_ns is None
+                    else (
+                        tracking_snapshot.source_time_ns
+                        - last_processed_tracking_time_ns
+                    )
+                    / 1e9
+                )
+                set_solver_timestep(source_dt_s)
             ik_start_s = time.perf_counter()
             teleop_frame = teleop_session.advance(
                 inputs,
@@ -636,6 +696,7 @@ def _run_real() -> None:
             if episode_start is None and anchored_this_frame:
                 episode_start = loop_start
                 timing_next_log_s = time.perf_counter() + 5.0
+                timing_window_start_s = time.perf_counter()
                 timing_ik_total_s = 0.0
                 timing_ik_max_s = 0.0
                 timing_ik_samples = 0
@@ -696,13 +757,16 @@ def _run_real() -> None:
                 )
                 real_log.info(
                     "Control timing: output=%.1f Hz, missed=%d, "
-                    "tracking_age_max=%.0f ms, IK_avg/max=%.1f/%.1f ms, "
+                    "tracking_age_max=%.0f ms, IK_rate=%.1f Hz, "
+                    "IK_avg/max=%.1f/%.1f ms, "
                     "backend_write_max=%.1f ms, output_lateness_max=%.1f ms, "
                     "target_age=%.0f ms, playback(i/x/h)=%d/%d/%d, "
                     "stale_IK_discarded=%d; %s.",
                     output_stats.effective_rate_hz,
                     output_stats.missed_deadlines,
                     timing_tracking_age_max_s * 1000.0,
+                    timing_ik_samples
+                    / max(timing_now_s - timing_window_start_s, 1e-6),
                     (
                         timing_ik_total_s / timing_ik_samples * 1000.0
                         if timing_ik_samples
@@ -717,6 +781,7 @@ def _run_real() -> None:
                     joint_diagnostics.summary(),
                 )
                 timing_next_log_s = timing_now_s + 5.0
+                timing_window_start_s = timing_now_s
                 timing_ik_total_s = 0.0
                 timing_ik_max_s = 0.0
                 timing_ik_samples = 0
