@@ -207,6 +207,15 @@ handumi calibrate spatial --device pico --pico-mode mandos session --side left
 handumi calibrate spatial --device pico --pico-mode mandos visualize
 ```
 
+By default, `session` uses only the current capture. To retry with accumulated
+views, opt in to pools under `outputs/calibration/accumulation_N/`.
+
+:::{dropdown} Session view accumulation
+- **`--start-accumulation N`:** start or reset lot `N`.
+- **`--accumulation N`:** continue lot `N`; use this to switch between lots
+  (for example different lighting) without resetting them.
+:::
+
 Inspect all cameras and both TCP trails in Rerun. The table surface must align
 with `z=0`. If only the workspace-camera stage fails, retry it with:
 
