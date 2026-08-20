@@ -3,7 +3,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://github.com/BrikHMP18/HandUMI"><img src="https://img.shields.io/badge/Hardware-HandUMI-4c8bf5.svg" alt="HandUMI hardware"></a>
-  <a href="https://robonet-ai.github.io/handumi-sw/"><img src="https://img.shields.io/badge/Docs-GitHub_Pages-AF0000.svg" alt="HandUMI documentation on GitHub Pages"></a>
+  <a href="https://murobotics-ai.github.io/handumi-sw/"><img src="https://img.shields.io/badge/Docs-GitHub_Pages-AF0000.svg" alt="HandUMI documentation on GitHub Pages"></a>
 </p>
 
 [HandUMI](https://github.com/BrikHMP18/HandUMI) is a hand-worn interface for collecting robot-free bimanual demonstrations. This repository contains its synchronized data collection, calibration, validation, replay, teleoperation, and robot-retargeting software.
@@ -21,7 +21,7 @@
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.12 or newer.
 
 ```bash
-git clone https://github.com/robonet-ai/handumi-sw.git
+git clone https://github.com/murobotics-ai/handumi-sw.git
 cd handumi-sw
 bash install.sh
 source .venv/bin/activate
@@ -45,20 +45,20 @@ such as `hu record` use the same interface and completion.
 HandUMI can also be installed directly from this repository:
 
 ```bash
-pip install "handumi @ git+https://github.com/robonet-ai/handumi-sw.git"
+pip install "handumi @ git+https://github.com/murobotics-ai/handumi-sw.git"
 ```
 
 Optional robot and simulation backends can be selected with extras:
 
 ```bash
-pip install "handumi[sim,piper,openarm] @ git+https://github.com/robonet-ai/handumi-sw.git"
+pip install "handumi[sim,piper,openarm] @ git+https://github.com/murobotics-ai/handumi-sw.git"
 ```
 
 For reproducible environments, pin a branch, tag, or commit:
 
 ```toml
 dependencies = [
-    "handumi @ git+https://github.com/robonet-ai/handumi-sw.git@main",
+    "handumi @ git+https://github.com/murobotics-ai/handumi-sw.git@main",
 ]
 ```
 
@@ -67,20 +67,20 @@ dependencies = [
 HandUMI can also be installed directly from this repository:
 
 ```bash
-pip install "handumi @ git+https://github.com/robonet-ai/handumi-sw.git"
+pip install "handumi @ git+https://github.com/murobotics-ai/handumi-sw.git"
 ```
 
 Optional robot and simulation backends can be selected with extras:
 
 ```bash
-pip install "handumi[sim,piper,openarm] @ git+https://github.com/robonet-ai/handumi-sw.git"
+pip install "handumi[sim,piper,openarm] @ git+https://github.com/murobotics-ai/handumi-sw.git"
 ```
 
 For reproducible environments, pin a branch, tag, or commit:
 
 ```toml
 dependencies = [
-    "handumi @ git+https://github.com/robonet-ai/handumi-sw.git@main",
+    "handumi @ git+https://github.com/murobotics-ai/handumi-sw.git@main",
 ]
 ```
 
@@ -117,14 +117,14 @@ embodiments can be added without changing the capture format.
 | I2RT YAM | [Repository](https://github.com/i2rt-robotics/i2rt) | ![Bimanual I2RT YAM](docs/images/biYAM-preview.png) |
 
 **More embodiments coming soon.** See
-[Add a new robot embodiment](https://robonet-ai.github.io/handumi-sw/development/new_embodiment.html)
+[Add a new robot embodiment](https://murobotics-ai.github.io/handumi-sw/development/new_embodiment.html)
 to contribute an integration. If you want support for a specific bimanual arm,
-[open an embodiment request](https://github.com/robonet-ai/handumi-sw/issues/new).
+[open an embodiment request](https://github.com/murobotics-ai/handumi-sw/issues/new).
 
 ## Supported Scope
 
 - Tracking: PICO through XRoboToolkit and Meta Quest through
-  [HandUMI Quest App](https://github.com/robonet-ai/handumi-quest-app).
+  [HandUMI Quest App](https://github.com/murobotics-ai/handumi-quest-app).
 - Robot models and simulation: AgileX PiPER, OpenArm, TRLC-DK1, Axol, and I2RT YAM.
 - Real-robot teleoperation: AgileX PiPER and OpenArm through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
@@ -139,7 +139,7 @@ This is research software. Preview and validate trajectories before commanding p
 ## Credits
 
 HandUMI builds on UMI, HandUMI Quest App, XRoboToolkit, LeRobot, PyRoki,
-Viser, Rerun, and MuJoCo. See the [documentation](https://robonet-ai.github.io/handumi-sw/)
+Viser, Rerun, and MuJoCo. See the [documentation](https://murobotics-ai.github.io/handumi-sw/)
 and [LICENSE](LICENSE) for attribution and third-party licensing details.
 
 Project lead and original hardware design: [BrikHMP18](https://github.com/BrikHMP18). Core software contributors include [Leonardo Pérez](https://github.com/leoperezz), [Raul Bastidas](https://github.com/raulbastidas1203), [Mitshell Ramos](https://github.com/mbrq13), and [Alvaro Mendoza-Li](https://github.com/alvax64).
