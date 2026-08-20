@@ -32,7 +32,7 @@ myst_heading_anchors = 3
 
 html_theme = "sphinx_book_theme"
 html_title = "HandUMI - Software"
-html_logo = "_static/murobotics-logo.png"
+html_logo = "_static/murobotics-logo.svg"
 html_favicon = "_static/favicon.svg"
 html_static_path = ["_static"]
 html_css_files = ["css/custom.css"]
@@ -52,8 +52,8 @@ html_theme_options = {
     "use_sidenotes": True,
     "logo": {
         "text": "Mu Robotics",
-        "image_light": "_static/murobotics-logo.png",
-        "image_dark": "_static/murobotics-logo.png",
+        "image_light": "_static/murobotics-logo.svg",
+        "image_dark": "_static/murobotics-logo.svg",
     },
     "icon_links": [
         {
