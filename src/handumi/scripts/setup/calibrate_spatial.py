@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import logging
 import time
 from datetime import datetime, timezone
+from math import comb
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Iterator, Sequence
 
 import cv2
 import numpy as np
@@ -53,6 +55,9 @@ from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
 log = logging.getLogger("handumi.calibrate_spatial")
 DEFAULT_SPATIAL = Path("outputs/calibration/spatial.yaml")
 DEFAULT_SESSION = Path("outputs/calibration/session.yaml")
+ACCUMULATION_PREFIX = "accumulation_"
+DEFAULT_ACCUMULATION_ROOT = Path("outputs/calibration")
+ACCUMULATED_VIEWS_FILE = "session_views.yaml"
 MIN_CORNERS = 12
 MAX_SYNC_ERROR_MS = 20.0
 PICO_MAX_SYNC_ERROR_MS = 80.0
@@ -620,6 +625,280 @@ def _calibrate_workspace(
     return {"pose": pose7_to_dict(pose), "metrics": metrics}
 
 
+def _accumulation_indices(root: Path) -> list[int]:
+    if not root.exists():
+        return []
+    indices: list[int] = []
+    for path in root.iterdir():
+        if not path.is_dir() or not path.name.startswith(ACCUMULATION_PREFIX):
+            continue
+        suffix = path.name[len(ACCUMULATION_PREFIX) :]
+        if suffix.isdigit():
+            indices.append(int(suffix))
+    return sorted(indices)
+
+
+def _resolve_accumulation_dir(args: argparse.Namespace) -> Path | None:
+    if args.no_accumulate:
+        return None
+    if args.start_accumulation is not None:
+        return DEFAULT_ACCUMULATION_ROOT / f"{ACCUMULATION_PREFIX}{args.start_accumulation}"
+    indices = _accumulation_indices(DEFAULT_ACCUMULATION_ROOT)
+    index = indices[-1] if indices else 1
+    return DEFAULT_ACCUMULATION_ROOT / f"{ACCUMULATION_PREFIX}{index}"
+
+
+def _accumulated_views_path(accumulation_dir: Path) -> Path:
+    return accumulation_dir / ACCUMULATED_VIEWS_FILE
+
+
+def _load_accumulated_views(
+    path: Path,
+    *,
+    spatial_sha256: str,
+    side: str,
+    device: str,
+) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    data = load_yaml(path)
+    if data.get("spatial_calibration_sha256") != spatial_sha256:
+        log.warning(
+            "Accumulated views in %s reference a different spatial calibration; ignoring pool.",
+            path,
+        )
+        return []
+    if data.get("side") != side or data.get("tracking_device") != device:
+        log.warning(
+            "Accumulated views in %s are for a different side/device; ignoring pool.",
+            path,
+        )
+        return []
+    views = data.get("views")
+    return list(views) if isinstance(views, list) else []
+
+
+def _save_accumulated_views(
+    path: Path,
+    views: list[dict[str, Any]],
+    *,
+    spatial_sha256: str,
+    side: str,
+    device: str,
+    accumulation_dir: Path,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_yaml(
+        path,
+        {
+            "spatial_calibration_sha256": spatial_sha256,
+            "side": side,
+            "tracking_device": device,
+            "accumulation_dir": str(accumulation_dir),
+            "views": views,
+        },
+    )
+
+
+def _view_entry(
+    controller_pose: np.ndarray,
+    board_pose: np.ndarray,
+    *,
+    attempt: int,
+) -> dict[str, Any]:
+    return {
+        "controller_pose": pose7_to_dict(np.asarray(controller_pose, dtype=np.float64)),
+        "board_pose": pose7_to_dict(np.asarray(board_pose, dtype=np.float64)),
+        "captured_at": _now_iso(),
+        "attempt": attempt,
+    }
+
+
+def _views_to_poses(
+    views: Sequence[dict[str, Any]],
+) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    controllers = [pose7_from_dict(view["controller_pose"]) for view in views]
+    boards = [pose7_from_dict(view["board_pose"]) for view in views]
+    return controllers, boards
+
+
+def _latest_attempt_indices(views: Sequence[dict[str, Any]]) -> tuple[int, ...]:
+    latest = max(int(view.get("attempt", 0)) for view in views)
+    return tuple(
+        index
+        for index, view in enumerate(views)
+        if int(view.get("attempt", 0)) == latest
+    )
+
+
+def _incremental_combination_count(
+    pool_size: int,
+    new_count: int,
+    subset_size: int,
+) -> int:
+    """Count k-subsets that include at least one view from the latest attempt."""
+    old_count = pool_size - new_count
+    total = 0
+    for new_pick in range(1, min(subset_size, new_count) + 1):
+        old_pick = subset_size - new_pick
+        if 0 <= old_pick <= old_count:
+            total += comb(new_count, new_pick) * comb(old_count, old_pick)
+    return total
+
+
+def _iter_incremental_combinations(
+    pool_size: int,
+    new_indices: Sequence[int],
+    subset_size: int,
+) -> Iterator[tuple[int, ...]]:
+    """Yield k-subsets containing at least one index from the latest attempt."""
+    ordered_new = tuple(sorted(new_indices))
+    new_set = set(ordered_new)
+    old_indices = tuple(index for index in range(pool_size) if index not in new_set)
+    new_count = len(ordered_new)
+    old_count = len(old_indices)
+    for new_pick in range(1, min(subset_size, new_count) + 1):
+        old_pick = subset_size - new_pick
+        if old_pick < 0 or old_pick > old_count:
+            continue
+        for new_part in itertools.combinations(ordered_new, new_pick):
+            if old_pick == 0:
+                yield new_part
+                continue
+            for old_part in itertools.combinations(old_indices, old_pick):
+                yield new_part + old_part
+
+
+def _failed_attempt_combinations(
+    views: Sequence[dict[str, Any]],
+    *,
+    subset_size: int,
+) -> set[frozenset[int]]:
+    """Index sets for full capture attempts already evaluated and rejected."""
+    by_attempt: dict[int, list[int]] = {}
+    for index, view in enumerate(views):
+        attempt = int(view.get("attempt", 0))
+        by_attempt.setdefault(attempt, []).append(index)
+    return {
+        frozenset(indices)
+        for indices in by_attempt.values()
+        if len(indices) == subset_size
+    }
+
+
+def _search_best_session_subset(
+    views: Sequence[dict[str, Any]],
+    controller_camera: np.ndarray,
+    board: CharucoBoardSpec,
+    *,
+    subset_size: int,
+    max_rms_mm: float,
+) -> tuple[np.ndarray, dict[str, float], list[int]] | None:
+    if len(views) < subset_size:
+        return None
+    excluded = _failed_attempt_combinations(views, subset_size=subset_size)
+    new_indices = _latest_attempt_indices(views)
+    if not new_indices:
+        return None
+
+    pool_size = len(views)
+    incremental_total = _incremental_combination_count(
+        pool_size,
+        len(new_indices),
+        subset_size,
+    )
+    if incremental_total <= len(excluded):
+        return None
+    if incremental_total > 5000:
+        log.info(
+            "Searching up to %d incremental combinations (%d full attempts skipped) "
+            "across %d views (%d new)...",
+            incremental_total,
+            len(excluded),
+            pool_size,
+            len(new_indices),
+        )
+
+    controllers, boards = _views_to_poses(views)
+    best: tuple[float, np.ndarray, dict[str, float], list[int]] | None = None
+    evaluated = 0
+    for indices in _iter_incremental_combinations(pool_size, new_indices, subset_size):
+        if frozenset(indices) in excluded:
+            continue
+        evaluated += 1
+        subset_controllers = [controllers[index] for index in indices]
+        subset_boards = [boards[index] for index in indices]
+        try:
+            table_from_device, metrics = solve_table_device(
+                subset_controllers,
+                controller_camera,
+                subset_boards,
+                board,
+            )
+        except ValueError:
+            continue
+        rms_mm = float(metrics["translation_rms_mm"])
+        if rms_mm > max_rms_mm:
+            continue
+        if best is None or rms_mm < best[0]:
+            best = (rms_mm, table_from_device, metrics, list(indices))
+    if best is None:
+        if evaluated:
+            log.info(
+                "Evaluated %d new incremental combinations; none passed %.2f mm.",
+                evaluated,
+                max_rms_mm,
+            )
+        return None
+    _, table_from_device, metrics, indices = best
+    return table_from_device, metrics, indices
+
+
+def _resolve_session_calibration(
+    *,
+    controller_poses: list[np.ndarray],
+    board_poses: list[np.ndarray],
+    controller_camera: np.ndarray,
+    board: CharucoBoardSpec,
+    accumulated_views: list[dict[str, Any]] | None,
+    views: int,
+    max_rms_mm: float,
+) -> tuple[np.ndarray, dict[str, float], str, list[int] | None]:
+    table_from_device, metrics = solve_table_device(
+        controller_poses,
+        controller_camera,
+        board_poses,
+        board,
+    )
+    if metrics["translation_rms_mm"] <= max_rms_mm:
+        return table_from_device, metrics, "current", None
+
+    if accumulated_views and len(accumulated_views) >= views:
+        log.info(
+            "Current attempt RMS %.2f mm exceeds %.2f mm; searching %d accumulated views...",
+            metrics["translation_rms_mm"],
+            max_rms_mm,
+            len(accumulated_views),
+        )
+        accumulated = _search_best_session_subset(
+            accumulated_views,
+            controller_camera,
+            board,
+            subset_size=views,
+            max_rms_mm=max_rms_mm,
+        )
+        if accumulated is not None:
+            table_from_device, metrics, indices = accumulated
+            log.info(
+                "Accumulated subset passed (RMS %.2f mm, indices %s).",
+                metrics["translation_rms_mm"],
+                indices,
+            )
+            return table_from_device, metrics, "accumulated", indices
+
+    return table_from_device, metrics, "current", None
+
+
 def cmd_session(args: argparse.Namespace) -> None:
     spatial = _load_spatial(args.spatial)
     board = CharucoBoardSpec.from_dict(spatial.get("board"))
@@ -663,26 +942,79 @@ def cmd_session(args: argparse.Namespace) -> None:
     )
     if len(board_poses) < max(4, args.views - 1):
         raise SystemExit("Too many views failed the reprojection gate.")
-    table_from_device, metrics = solve_table_device(
-        controller_poses, controller_camera, board_poses, board
+
+    spatial_sha256 = calibration_hash(spatial)
+    accumulation_dir = _resolve_accumulation_dir(args)
+    accumulated_views: list[dict[str, Any]] | None = None
+    if accumulation_dir is not None:
+        accumulated_path = _accumulated_views_path(accumulation_dir)
+        accumulated_views = _load_accumulated_views(
+            accumulated_path,
+            spatial_sha256=spatial_sha256,
+            side=args.side,
+            device=args.device,
+        )
+        attempt_id = max((int(view.get("attempt", 0)) for view in accumulated_views), default=0) + 1
+        accumulated_views.extend(
+            _view_entry(controller, board, attempt=attempt_id)
+            for controller, board in zip(controller_poses, board_poses, strict=True)
+        )
+        _save_accumulated_views(
+            accumulated_path,
+            accumulated_views,
+            spatial_sha256=spatial_sha256,
+            side=args.side,
+            device=args.device,
+            accumulation_dir=accumulation_dir,
+        )
+        log.info(
+            "Saved %d accumulated views to %s (attempt %d).",
+            len(controller_poses),
+            accumulation_dir,
+            attempt_id,
+        )
+
+    table_from_device, metrics, source, view_indices = _resolve_session_calibration(
+        controller_poses=controller_poses,
+        board_poses=board_poses,
+        controller_camera=controller_camera,
+        board=board,
+        accumulated_views=accumulated_views,
+        views=args.views,
+        max_rms_mm=args.max_rms_mm,
     )
     if metrics["translation_rms_mm"] > args.max_rms_mm:
-        raise SystemExit(
+        message = (
             f"Session residual {metrics['translation_rms_mm']:.2f} mm exceeds "
             f"{args.max_rms_mm:.2f} mm; calibration not saved."
         )
+        if accumulation_dir is not None and accumulated_views is not None:
+            message += (
+                f" Tried {len(accumulated_views)} accumulated views in {accumulation_dir}."
+            )
+        raise SystemExit(message)
+
+    session_metrics = dict(metrics)
+    session_metrics["source"] = source
+    if accumulation_dir is not None:
+        session_metrics["accumulation_dir"] = str(accumulation_dir)
+        if view_indices is not None:
+            session_metrics["accumulated_view_indices"] = view_indices
+        if accumulated_views is not None:
+            session_metrics["accumulated_pool_size"] = len(accumulated_views)
+
     session = {
         "schema_version": 2,
         "kind": "handumi_session_calibration",
         "created_at": _now_iso(),
         "spatial_calibration_path": str(args.spatial),
-        "spatial_calibration_sha256": calibration_hash(spatial),
+        "spatial_calibration_sha256": spatial_sha256,
         "board": board.to_dict(),
         "tracking_device": args.device,
         "source_side": args.side,
         "table_from_device": pose7_to_dict(table_from_device),
         "table_from_camera": {},
-        "metrics": metrics,
+        "metrics": session_metrics,
     }
     if args.device == "meta":
         session["table_from_quest"] = pose7_to_dict(table_from_device)
@@ -1163,6 +1495,21 @@ def parse_args() -> argparse.Namespace:
     session.add_argument("--max-rms-mm", type=float, default=8.0)
     session.add_argument("--spatial", type=Path, default=DEFAULT_SPATIAL)
     session.add_argument("--output", type=Path, default=DEFAULT_SESSION)
+    session.add_argument(
+        "--start-accumulation",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Store session views in outputs/calibration/accumulation_N/. "
+            "Use a new N after each PICO reboot."
+        ),
+    )
+    session.add_argument(
+        "--no-accumulate",
+        action="store_true",
+        help="Do not save or search accumulated session views.",
+    )
     session.set_defaults(func=cmd_session)
 
     workspace = sub.add_parser(
