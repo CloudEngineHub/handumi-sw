@@ -1079,7 +1079,7 @@ def _write_converted_dataset_readme(
             f"{source_repo_id}. {representation} observation.state[t] contains "
             "the command at t and action[t] contains the command at t+1."
         ),
-        url="https://github.com/robonet-ai/handumi-sw",
+        url="https://github.com/murobotics-ai/handumi-sw",
     )
     card.save(output_root / "README.md")
 

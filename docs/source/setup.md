@@ -104,10 +104,10 @@ or saturating.
 ### Meta Quest
 
 Enable Developer Mode, connect the headset over USB, authorize `adb`, and
-install [HandUMI Quest App](https://github.com/robonet-ai/handumi-quest-app/releases):
+install [HandUMI Quest App](https://github.com/murobotics-ai/handumi-quest-app/releases):
 
 ```bash
-wget https://github.com/robonet-ai/handumi-quest-app/releases/download/v0.2.1/handumi-quest-app-v0.2.1.apk
+wget https://github.com/murobotics-ai/handumi-quest-app/releases/download/v0.2.1/handumi-quest-app-v0.2.1.apk
 adb install -r handumi-quest-app-v0.2.1.apk
 adb shell ip route  # find the address after "src"
 ```
@@ -206,6 +206,15 @@ For PICO:
 handumi calibrate spatial --device pico --pico-mode mandos session --side left
 handumi calibrate spatial --device pico --pico-mode mandos visualize
 ```
+
+By default, `session` uses only the current capture. To retry with accumulated
+views, opt in to pools under `outputs/calibration/accumulation_N/`.
+
+:::{dropdown} Session view accumulation
+- **`--start-accumulation N`:** start or reset lot `N`.
+- **`--accumulation N`:** continue lot `N`; use this to switch between lots
+  (for example different lighting) without resetting them.
+:::
 
 Inspect all cameras and both TCP trails in Rerun. The table surface must align
 with `z=0`. If only the workspace-camera stage fails, retry it with:

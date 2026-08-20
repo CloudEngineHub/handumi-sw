@@ -3,7 +3,7 @@
 Requires [uv](https://docs.astral.sh/uv/) and Python >= 3.12.
 
 ```bash
-git clone https://github.com/robonet-ai/handumi-sw.git
+git clone https://github.com/murobotics-ai/handumi-sw.git
 cd handumi-sw
 bash install.sh              # PICO support included
 # bash install.sh --skip-xrt # Meta Quest only

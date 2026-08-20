@@ -10,7 +10,7 @@ This step does NOT transform coordinates — poses are kept as raw Unity values.
 ``handumi.tracking.transforms`` (Step 2) converts them.
 
 App and protocol reference:
-  https://github.com/robonet-ai/handumi-quest-app
+  https://github.com/murobotics-ai/handumi-quest-app
 
 Wire protocol (see docs/phase-2-motion-tracking.md → TCP/JSON Payload):
   TCP : newline-delimited JSON pose samples (Quest app is the server).

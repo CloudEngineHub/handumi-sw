@@ -42,7 +42,7 @@ Generated files under `docs/build/` are intentionally not committed.
 Pushing documentation changes to `main` triggers
 `.github/workflows/docs.yml`. It builds the Sphinx site and deploys it to:
 
-<https://robonet-ai.github.io/handumi-sw/>
+<https://murobotics-ai.github.io/handumi-sw/>
 
 In the repository settings, set **Pages → Build and deployment → Source** to
 **GitHub Actions**.

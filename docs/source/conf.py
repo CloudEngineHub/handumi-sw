@@ -2,7 +2,7 @@
 
 project = "HandUMI"
 author = "HandUMI collaborators"
-copyright = "2026, Robonet"
+copyright = "2026, Mu Robotics"
 release = "0.1.0"
 version = "0.1"
 
@@ -32,7 +32,7 @@ myst_heading_anchors = 3
 
 html_theme = "sphinx_book_theme"
 html_title = "HandUMI - Software"
-html_logo = "_static/robonet-logo.svg"
+html_logo = "_static/murobotics-logo.svg"
 html_favicon = "_static/favicon.svg"
 html_static_path = ["_static"]
 html_css_files = ["css/custom.css"]
@@ -41,7 +41,7 @@ html_show_sphinx = False
 html_last_updated_fmt = "%b %d, %Y"
 
 html_theme_options = {
-    "repository_url": "https://github.com/robonet-ai/handumi-sw",
+    "repository_url": "https://github.com/murobotics-ai/handumi-sw",
     "repository_branch": "main",
     "path_to_docs": "docs/source",
     "use_repository_button": True,
@@ -51,9 +51,9 @@ html_theme_options = {
     "collapse_navigation": True,
     "use_sidenotes": True,
     "logo": {
-        "text": "RoboNet",
-        "image_light": "_static/robonet-logo.svg",
-        "image_dark": "_static/robonet-logo-white.svg",
+        "text": "Mu Robotics",
+        "image_light": "_static/murobotics-logo.svg",
+        "image_dark": "_static/murobotics-logo.svg",
     },
     "icon_links": [
         {
@@ -63,8 +63,8 @@ html_theme_options = {
             "type": "fontawesome",
         },
         {
-            "name": "RoboNet AI on GitHub",
-            "url": "https://github.com/robonet-ai",
+            "name": "Mu Robotics on GitHub",
+            "url": "https://github.com/murobotics-ai",
             "icon": "fa-brands fa-square-github",
             "type": "fontawesome",
         },

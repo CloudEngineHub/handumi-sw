@@ -625,27 +625,12 @@ def _calibrate_workspace(
     return {"pose": pose7_to_dict(pose), "metrics": metrics}
 
 
-def _accumulation_indices(root: Path) -> list[int]:
-    if not root.exists():
-        return []
-    indices: list[int] = []
-    for path in root.iterdir():
-        if not path.is_dir() or not path.name.startswith(ACCUMULATION_PREFIX):
-            continue
-        suffix = path.name[len(ACCUMULATION_PREFIX) :]
-        if suffix.isdigit():
-            indices.append(int(suffix))
-    return sorted(indices)
-
-
 def _resolve_accumulation_dir(args: argparse.Namespace) -> Path | None:
-    if args.no_accumulate:
-        return None
+    if args.accumulation is not None:
+        return DEFAULT_ACCUMULATION_ROOT / f"{ACCUMULATION_PREFIX}{args.accumulation}"
     if args.start_accumulation is not None:
         return DEFAULT_ACCUMULATION_ROOT / f"{ACCUMULATION_PREFIX}{args.start_accumulation}"
-    indices = _accumulation_indices(DEFAULT_ACCUMULATION_ROOT)
-    index = indices[-1] if indices else 1
-    return DEFAULT_ACCUMULATION_ROOT / f"{ACCUMULATION_PREFIX}{index}"
+    return None
 
 
 def _accumulated_views_path(accumulation_dir: Path) -> Path:
@@ -948,12 +933,17 @@ def cmd_session(args: argparse.Namespace) -> None:
     accumulated_views: list[dict[str, Any]] | None = None
     if accumulation_dir is not None:
         accumulated_path = _accumulated_views_path(accumulation_dir)
-        accumulated_views = _load_accumulated_views(
-            accumulated_path,
-            spatial_sha256=spatial_sha256,
-            side=args.side,
-            device=args.device,
-        )
+        if args.start_accumulation is not None:
+            if accumulated_path.exists():
+                log.info("Resetting accumulated views in %s.", accumulation_dir)
+            accumulated_views = []
+        else:
+            accumulated_views = _load_accumulated_views(
+                accumulated_path,
+                spatial_sha256=spatial_sha256,
+                side=args.side,
+                device=args.device,
+            )
         attempt_id = max((int(view.get("attempt", 0)) for view in accumulated_views), default=0) + 1
         accumulated_views.extend(
             _view_entry(controller, board, attempt=attempt_id)
@@ -1495,20 +1485,23 @@ def parse_args() -> argparse.Namespace:
     session.add_argument("--max-rms-mm", type=float, default=8.0)
     session.add_argument("--spatial", type=Path, default=DEFAULT_SPATIAL)
     session.add_argument("--output", type=Path, default=DEFAULT_SESSION)
-    session.add_argument(
+    accumulation = session.add_mutually_exclusive_group()
+    accumulation.add_argument(
         "--start-accumulation",
         type=int,
         default=None,
         metavar="N",
         help=(
-            "Store session views in outputs/calibration/accumulation_N/. "
-            "Use a new N after each PICO reboot."
+            "Start or reset session views in outputs/calibration/accumulation_N/. "
+            "Use a new N for a separate lot."
         ),
     )
-    session.add_argument(
-        "--no-accumulate",
-        action="store_true",
-        help="Do not save or search accumulated session views.",
+    accumulation.add_argument(
+        "--accumulation",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Continue accumulating in outputs/calibration/accumulation_N/.",
     )
     session.set_defaults(func=cmd_session)
 
