@@ -888,12 +888,10 @@ def record_episode(
                 )
                 log_say("recording episode", play_sounds=play_sounds)
         previous_episode_open = current_episode_open
-        # The park timer observes the command actually handed to the robot,
-        # not the raw HandUMI opening. The HandUMI opening is used only to wake
-        # an already parked arm (and independently for episode gestures).
-        played_command = command_stream.latest()
-        if grippers is not None and played_command is not None:
-            _, robot_openings = played_command
+        # Only fresh physical robot feedback can trigger park. The HandUMI
+        # opening is used to wake an already parked arm and for episode gestures.
+        robot_openings = real_env.read_gripper_openings()
+        if grippers is not None:
             park_sides, wake_sides = home_standby.update(
                 robot_openings,
                 loop_start,
@@ -915,7 +913,8 @@ def record_episode(
                     np.deg2rad(park_max_joint_speed_deg_s),
                 )
                 record_log.info(
-                    "Robot %s gripper held closed for %.1fs; arm returning home "
+                    "Robot %s gripper feedback remained fully closed for %.1fs; "
+                    "arm returning home "
                     "and entering standby while recording continues.",
                     "/".join(parked),
                     park_hold_s,

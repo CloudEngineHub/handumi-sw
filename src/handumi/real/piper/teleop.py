@@ -92,6 +92,14 @@ class PiperBackend:
             base_q=base,
         )
 
+    def read_gripper_openings(self) -> dict[str, float]:
+        return self.environment.gripper_openings(
+            fallback_max_width_mm={
+                side: self.side_max_width_mm.get(side, self.max_width_mm)
+                for side in self.active_sides
+            }
+        )
+
     def home(self, q: np.ndarray) -> None:
         self._last_q = np.asarray(q, dtype=np.float32).copy()
         self.environment.home(q_to_piper_mdeg(q, self.joint_names))

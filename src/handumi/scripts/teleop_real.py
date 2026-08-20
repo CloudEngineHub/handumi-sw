@@ -579,9 +579,8 @@ def _run_real() -> None:
             widths = _latest_widths(grippers)
             inputs = teleop_session.inputs(sample, widths)
             start_sides: tuple[str, ...] = ()
-            played_command = command_stream.latest()
-            if grippers is not None and played_command is not None:
-                _, robot_openings = played_command
+            robot_openings = real_env.read_gripper_openings()
+            if grippers is not None:
                 park_sides, wake_sides = home_standby.update(
                     robot_openings,
                     loop_start,
@@ -605,7 +604,8 @@ def _run_real() -> None:
                         np.deg2rad(args.park_max_joint_speed_deg_s),
                     )
                     real_log.info(
-                        "Robot %s gripper held closed for %.1fs; arm returning home "
+                        "Robot %s gripper feedback remained fully closed for %.1fs; "
+                        "arm returning home "
                         "and entering standby.",
                         "/".join(parked),
                         args.gripper_park_hold_s,

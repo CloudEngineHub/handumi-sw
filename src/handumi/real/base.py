@@ -33,6 +33,12 @@ class TeleopRobotBackend(Protocol):
     def read(self, base_q: np.ndarray | None = None) -> np.ndarray:
         """Return the latest measured or scheduled full robot configuration."""
 
+    def read_gripper_openings(self) -> dict[str, float]:
+        """Return fresh measured gripper openings normalized to ``[0, 1]``.
+
+        Missing sides mean that physical feedback is not currently available.
+        """
+
     def home(self, q: np.ndarray) -> None:
         """Start streaming and move slowly to a safe starting pose."""
 

@@ -81,6 +81,12 @@ class OpenArmBackend:
             list(self.joint_names),
         )
 
+    def read_gripper_openings(self) -> dict[str, float]:
+        # The current OpenArm SDK wrapper does not expose measured gripper
+        # position. An empty result disables close-to-park instead of treating
+        # a commanded opening as physical feedback.
+        return {}
+
     def home(self, q: np.ndarray) -> None:
         self._last_q = np.asarray(q, dtype=np.float32).copy()
         self.environment.home(q, list(self.joint_names))

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 GRIPPER_PARK_HOLD_S = 3.0
-GRIPPER_FULLY_CLOSED = 0.05
+GRIPPER_FULLY_CLOSED = 0.005
 GRIPPER_REOPENED = 0.15
 
 
@@ -46,24 +46,31 @@ class GripperHomeStandby:
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Return ``(park_sides, wake_sides)`` for this input sample.
 
-        ``openings`` is the robot-side opening used by the close-to-park
-        timer. ``wake_openings`` may come from the operator controller so a
-        parked arm, whose robot gripper remains closed, can be reactivated.
+        ``openings`` is measured physical robot feedback used by the
+        close-to-park timer. ``wake_openings`` may come from the operator
+        controller so a parked arm can be reactivated while its robot gripper
+        remains closed.
         """
         park: list[str] = []
         wake: list[str] = []
         for side in enabled_sides:
-            opening = float(openings[side])
             if self._standby[side]:
-                wake_opening = float(
-                    (wake_openings if wake_openings is not None else openings)[side]
+                wake_source = (
+                    wake_openings if wake_openings is not None else openings
                 )
+                if side not in wake_source:
+                    continue
+                wake_opening = float(wake_source[side])
                 if wake_opening >= self._reopened_threshold:
                     self._standby[side] = False
                     self._closed_since[side] = None
                     wake.append(side)
                 continue
 
+            if side not in openings:
+                self._closed_since[side] = None
+                continue
+            opening = float(openings[side])
             if opening > self._closed_threshold:
                 self._closed_since[side] = None
                 continue
