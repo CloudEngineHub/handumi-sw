@@ -12,7 +12,10 @@ comfortably away from the seam.
 Workflow (gripper disassembled is easiest):
   1. Move the servo shaft to roughly half of the gripper's travel.
   2. Run this script and press ENTER to capture/centre.
-  3. Reassemble and recalibrate with ``handumi calibrate grippers calibrate``.
+  3. Reassemble and recalibrate with ``handumi calibrate grippers``.
+
+The normal calibration command includes this homing step. This standalone
+command remains available when only the encoder center must be repaired.
 
 Usage
 -----
@@ -78,7 +81,7 @@ def main() -> None:
     print(
         "\nDone. Reassemble the gripper(s), then recalibrate so closed/open match "
         "the new centred range:\n"
-        "  handumi calibrate grippers calibrate"
+        "  handumi calibrate grippers"
     )
 
 

@@ -39,11 +39,11 @@ adb reverse --list
 
 ## Gripper Width Is Wrong
 
-Confirm side/port mappings, home at mid-travel, then recalibrate:
+Confirm side/port mappings, then run the unified calibration. It guides you
+through mid-travel homing, full opening, and full closure:
 
 ```bash
-handumi servo home
-handumi calibrate grippers calibrate
+handumi calibrate grippers
 ```
 
 If left/right motion is swapped, correct the mapping in `configs/rig.yaml`;

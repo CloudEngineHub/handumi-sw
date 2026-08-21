@@ -78,26 +78,20 @@ First confirm that both encoders change smoothly while opening and closing:
 handumi calibrate grippers monitor
 ```
 
-Home each servo with the gripper held at **mid-travel**. This centers the
-encoder range and avoids crossing the 0/4095 wrap point:
+Run the complete guided calibration:
 
 ```bash
-handumi servo home
-handumi servo home --side right  # one side only
+handumi calibrate grippers
+handumi calibrate grippers --side right  # one side only
 ```
 
-Then calibrate the physical opening width:
-
-```bash
-handumi calibrate grippers calibrate
-handumi calibrate grippers calibrate --side right
-```
-
-For each side, enter the maximum opening in millimeters, place the gripper fully
-open and press Enter, then fully close it and press Enter. The result is stored
-in `~/.cache/handumi/calibration.yaml`. Open and close each gripper again with
-`monitor` and confirm that width increases toward fully open without flipping
-or saturating.
+For each side, enter the maximum physical opening in millimeters. The command
+then asks you to hold the gripper at **mid-travel** and press Enter, which
+centers the encoder range to avoid the 0/4095 wrap point. Finally, place the
+gripper fully open and press Enter, then fully close it and press Enter. The
+result is stored in `~/.cache/handumi/calibration.yaml`. Open and close each
+gripper again with `monitor` and confirm that width increases toward fully open
+without flipping or saturating.
 
 ## 3. Connect Tracking
 

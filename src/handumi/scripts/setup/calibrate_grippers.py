@@ -1,17 +1,18 @@
 """Monitor and calibrate HandUMI Feetech gripper encoder widths.
 
 ``monitor`` streams live encoder ticks so you can confirm each gripper responds
-when opened/closed. ``calibrate`` records open/closed ticks and max aperture in
-mm, writing the result to the per-user cache at
+when opened/closed. The default guided flow records the physical aperture,
+homes the encoder at mid-travel, and then records open/closed ticks, writing the
+result to the per-user cache at
 ``~/.cache/handumi/calibration.yaml``.
 
 Usage
 -----
 ::
 
+    handumi calibrate grippers
+    handumi calibrate grippers --side right
     handumi calibrate grippers monitor
-    handumi calibrate grippers calibrate
-    handumi calibrate grippers calibrate --side right
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from handumi.feetech.calibration import (
     save_calibration,
     user_calibration_path,
 )
+from handumi.scripts.setup import home_servos
 
 
 @dataclass
@@ -56,8 +58,13 @@ class Monitor:
         self.peak_delta = max(self.peak_delta, abs(self.last - self.initial))
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Monitor and calibrate HandUMI Feetech gripper encoders.")
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Calibrate HandUMI Feetech grippers in one guided flow: physical "
+            "width, mid-travel homing, full opening, and full closure."
+        )
+    )
     parser.add_argument(
         "--rig-config",
         type=Path,
@@ -70,27 +77,33 @@ def main() -> None:
         default=None,
         help="Override the calibration cache path (default: per-user cache).",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("monitor",),
+        help="Use 'monitor' to watch encoder ticks instead of calibrating.",
+    )
+    parser.add_argument("--side", choices=["left", "right", "both"], default="both")
+    parser.add_argument("--max-width-mm", type=float, default=None)
+    parser.add_argument("--left-max-width-mm", type=float, default=None)
+    parser.add_argument("--right-max-width-mm", type=float, default=None)
+    parser.add_argument("--interval-s", type=float, default=None)
+    parser.add_argument("--duration-s", type=float, default=20.0)
+    parser.add_argument("--keep-torque", action="store_true")
+    return parser.parse_args(argv)
 
-    monitor = subparsers.add_parser("monitor", help="Watch encoder ticks for configured grippers.")
-    monitor.add_argument("--duration-s", type=float, default=20.0)
-    monitor.add_argument("--interval-s", type=float, default=0.2)
-    monitor.add_argument("--keep-torque", action="store_true")
-    monitor.set_defaults(func=cmd_monitor)
 
-    calibrate = subparsers.add_parser("calibrate", help="Record left/right open/closed ticks and max width.")
-    calibrate.add_argument("--side", choices=["left", "right", "both"], default="both")
-    calibrate.add_argument("--max-width-mm", type=float, default=None)
-    calibrate.add_argument("--left-max-width-mm", type=float, default=None)
-    calibrate.add_argument("--right-max-width-mm", type=float, default=None)
-    calibrate.add_argument("--interval-s", type=float, default=0.1)
-    calibrate.set_defaults(func=cmd_calibrate)
-
-    args = parser.parse_args()
+def main() -> None:
+    args = parse_args()
     args.calibration_config = args.calibration_config or user_calibration_path()
+    if args.interval_s is None:
+        args.interval_s = 0.2 if args.command == "monitor" else 0.1
     print(f"Using rig: {args.rig_config}")
     print(f"Using calibration cache: {args.calibration_config}")
-    args.func(args)
+    if args.command == "monitor":
+        cmd_monitor(args)
+    else:
+        cmd_calibrate(args)
 
 
 def cmd_monitor(args: argparse.Namespace) -> None:
@@ -142,13 +155,26 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
     for side in sides:
         calibration = getattr(current, side)
         port = _side_port(current, calibration, side)
+        width_mm = side_width[side] or args.max_width_mm
+        if width_mm is None:
+            width_mm = _prompt_positive_float(f"{side} max gripper opening in mm")
+
+        print(f"\n{side} calibration steps: mid-travel, fully open, fully closed.")
+        home_servos._home_side(
+            side=side,
+            port=port,
+            calibration=calibration,
+            baudrate=current.baudrate,
+            protocol_version=current.protocol_version,
+            interval_s=args.interval_s,
+        )
         closed, open_, width_mm = _calibrate_side(
             side=side,
             port=port,
             calibration=calibration,
             baudrate=current.baudrate,
             protocol_version=current.protocol_version,
-            max_width_mm=side_width[side] or args.max_width_mm,
+            max_width_mm=width_mm,
             interval_s=args.interval_s,
         )
         results[side] = GripperCalibration(
