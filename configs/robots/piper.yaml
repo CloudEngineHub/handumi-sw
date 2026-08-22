@@ -57,7 +57,7 @@ handumi_tool:
 # take precedence over this pairing.
 controller_tcp_calibrations:
   meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
-  pico: configs/calibration/controller_tcp/pico.yaml
+  pico: configs/calibration/controller_tcp/pico_ARX5_beta.yaml
 ik_weights:
   pos: 125.0
   ori: 20.0

@@ -1,0 +1,90 @@
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  controller_to_gripper_tcp:
+    left:
+      position:
+      - 0.11563232168555260
+      - -0.19041075557470322
+      - -0.04140419699251652
+      quaternion:
+      - 0.5149461627006531
+      - -0.039195578545331955
+      - 0.00036387675208970904
+      - -0.8563258647918701
+    right:
+      position:
+      - -0.11563232168555260
+      - -0.19041075557470322
+      - -0.04140419699251652
+      quaternion:
+      - 0.40989723801612854
+      - -0.476044625043869
+      - 0.3014245927333832
+      - -0.7172929048538208
+  metadata:
+    source: pico_calibration_tcp
+    method: right/left pivot windows (setup.md Step 1-4) for position, orientation
+      hold episodes for the quaternions. Pivot solves translation only, so the
+      quaternions were kept unchanged from the prior pico.yaml measurement of the
+      same ARX5_beta/handumi_v1 assembly and only the position was refit and
+      symmetrized.
+    handumi_tool:
+      gripper: ARX5_beta
+      controller_mount: handumi_v1
+    axis_convention_note: For the PICO device the mirrored (left/right sign-flip)
+      axis is controller-frame X, not Y as the generic setup.md formula assumes
+      (that formula was written against the Meta convention). Y and Z agree in
+      sign between sides for PICO. Symmetrization below used
+      x=(left.x-right.x)/2 (antisymmetric), y=(left.y+right.y)/2,
+      z=(left.z+right.z)/2 (both symmetric), left=[x,y,z], right=[-x,y,z]. This
+      matches the sign pattern already present in the legacy pico.yaml this file
+      replaces for the ARX5_beta assembly.
+    acceptance_status: DID NOT MEET setup.md Step 3 thresholds (RMS<0.50cm,
+      max<1.00cm) -- promoted anyway at the operator's request; recapture with a
+      firmer tip indentation if better accuracy is needed.
+    pivot_windows:
+      left:
+        dataset: outputs/tcp_pivot_left
+        samples: 746
+        rms_error_m: 0.0081
+        max_error_m: 0.0170
+        condition: 10.2
+        fixed_tcp_point_world_m:
+        - 0.13117
+        - -0.21476
+        - -0.34043
+      right:
+        dataset: outputs/tcp_pivot_right
+        samples: 746
+        rms_error_m: 0.0077
+        max_error_m: 0.0152
+        condition: 9.7
+        fixed_tcp_point_world_m:
+        - 0.33223
+        - -0.21181
+        - -0.3502
+    orientation_episodes:
+      note: Unchanged from the prior pico.yaml measurement of this same assembly;
+        pivot fitting does not solve orientation.
+      left:
+        episode: 3
+        start_frame: 0
+        end_frame_exclusive: null
+        desired_tcp_quat_world_xyzw:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 1.0
+        rms_error_deg: 0.9163809677712739
+        max_error_deg: 1.6717450265944596
+      right:
+        episode: 2
+        start_frame: 0
+        end_frame_exclusive: null
+        desired_tcp_quat_world_xyzw:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 1.0
+        rms_error_deg: 0.6910250099793301
+        max_error_deg: 1.4934163878178293

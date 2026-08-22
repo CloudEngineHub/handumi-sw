@@ -290,14 +290,23 @@ handumi calibrate tcp inspect
 
 Recapture that side until it passes. Do not promote a fit that does not.
 
-Then compare the two sides. The mounts are mirror twins, so `x` and `z` should
-agree between them and only `y` flips sign. A mismatch of several millimeters
-means one of the captures drifted, not that the tool is asymmetric.
+Then compare the two sides. The mounts are mirror twins, so two of the
+position components should agree between them and only one flips sign. A
+mismatch of several millimeters on the components that should agree means one
+of the captures drifted, not that the tool is asymmetric.
+
+Which component flips sign depends on the tracking device's own controller
+frame convention, not on the physical mount: for `meta` it is `y` (`x`/`z`
+agree); for `pico` it is `x` (`y`/`z` agree). Identify it from your own two
+captures before symmetrizing -- don't assume `y` just because the formula
+below is written that way.
 
 ### Step 4. Promote it into the project
 
 Pivot fitting solves translation only, so keep the official quaternions and
-symmetrize just the measured positions:
+symmetrize just the measured positions. Below, `y` names whichever component
+you identified as the sign-flipping one in Step 3 (`x` for `pico`, `y` for
+`meta`), and `x`/`z` name the two that agree:
 
 ```text
 x = (left.x + right.x) / 2

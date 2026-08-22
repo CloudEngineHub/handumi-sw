@@ -1,16 +1,21 @@
-# UNIDENTIFIED TOOL ASSEMBLY. Files are otherwise named
-# controller_tcp/{device}_{tool}.yaml, but this legacy measurement predates that
-# convention and is referenced by robots declaring different gripper tips, so
-# which physical tip it was measured with is unknown. Recalibrate against a
-# known assembly and rename it before trusting it.
+# SUPERSEDED for the ARX5_beta/handumi_v1 assembly by
+# controller_tcp/pico_ARX5_beta.yaml (piper points there now); this file's
+# numbers were in fact measured with that assembly (see git history), the
+# original "unidentified" label below was wrong about that.
+#
+# openarmv1.yaml still points its `pico` key at this file, which remains
+# wrong: openarmv1's tool is openarm_parallel_v1, a different tip, so it needs
+# its own controller_tcp/pico_openarm_parallel_v1.yaml pivot measurement
+# rather than reusing this ARX5_beta one. Recalibrate for that assembly and
+# repoint openarmv1.yaml before trusting numbers retargeted to openarmv1.
 calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
   controller_to_gripper_tcp:
     left:
       position:
-      - 0.11186317354440689
-      - -0.18527275323867798
-      - -0.03990974649786949
+      - 0.11120329797267914
+      - -0.18318161368370056
+      - -0.05264820158481598
       quaternion:
       - 0.5149461627006531
       - -0.039195578545331955
@@ -18,9 +23,9 @@ calibration:
       - -0.8563258647918701
     right:
       position:
-      - -0.10762741416692734
-      - -0.1843508630990982
-      - -0.035991568118333817
+      - -0.11341612040996552
+      - -0.18593284487724304
+      - -0.03647836670279503
       quaternion:
       - 0.40989723801612854
       - -0.476044625043869
