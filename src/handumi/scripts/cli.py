@@ -57,6 +57,10 @@ COMMANDS = {
     ("calibrate", "tcp"): Command(
         "handumi.scripts.setup.calibrate_tcp_offset", "Calibrate controller-to-TCP"
     ),
+    ("calibrate", "verify"): Command(
+        "handumi.scripts.setup.verify_calibrations",
+        "Verify the complete calibration chain",
+    ),
     ("servo", "home"): Command("handumi.scripts.setup.home_servos", "Home Feetech servos"),
     ("servo", "set-id"): Command(
         "handumi.scripts.setup.set_servo_id", "Assign a Feetech servo ID"

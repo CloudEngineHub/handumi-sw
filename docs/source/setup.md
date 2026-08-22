@@ -335,17 +335,40 @@ their own recorded assembly identity, so old recordings stay reproducible.
 
 ### Step 5. Verify
 
+Continue with the complete verification below. It replaces the removed
+`tests/tracking/test_transforms.py` and
+`tests/scripts/test_replay_in_sim.py` checks with a supported operator command.
+
+## 6. Verify All Calibrations
+
+Run the final preflight after gripper, spatial/session, TCP, and robot/table
+calibration. `--robot` and `--device` may be omitted when they are set under
+`recording` in `configs/rig.yaml`:
+
 ```bash
-uv run pytest -q tests/tracking/test_transforms.py \
-  tests/scripts/test_replay_in_sim.py
+handumi calibrate verify --robot piper --device pico
 ```
 
-These check the mirror invariant and that the file is selected for the robot.
-One of them also bounds the tip-to-controller distance; that bound is a
-property of the tips in use, so a genuinely new tip legitimately widens it.
+The command first checks:
 
-Then confirm it physically: touch one point with both tips and check that their
-calibrated positions coincide. After session calibration, touching the table
-should place both tips near `z=0`.
+- both cached gripper calibrations and their encoder spans;
+- all three camera intrinsics, both controller-camera mounts, and their error
+  limits;
+- session identity, spatial hash, tracking device, and table-frame residual;
+- the controller-to-TCP file actually selected for this robot/device, its
+  device-specific mirror invariant, quaternion normalization, and
+  tip-to-controller distance;
+- the robot-to-table file and whether it is marked physically verified.
+
+It then guides the physical check: touch a marked point first with the left tip
+and then with the right tip, followed by touching the table with both tips. It
+fails if the calibrated point separation exceeds 15 mm or either table contact
+is farther than 15 mm from `z=0`. Use `--static-only` to inspect files without
+connecting the tracking device.
+
+The default tip-distance ceiling is 0.35 m. That limit describes the physical
+tips currently in use, not a universal HandUMI constant. A genuinely longer
+new tip may use `--max-tip-distance-m <meters>` after its pivot fit has passed;
+do not widen the limit to hide a wrong robot/tool selection.
 
 Next: [Record Demonstrations](record.md).
