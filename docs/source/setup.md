@@ -191,6 +191,7 @@ during recording, solve the table frame for the same tracking device.
 
 ```bash
 handumi calibrate spatial --device meta session --side left
+handumi calibrate spatial --device meta verify --side left
 handumi calibrate spatial --device meta visualize
 ```
 
@@ -198,17 +199,20 @@ For PICO:
 
 ```bash
 handumi calibrate spatial --device pico --pico-mode mandos session --side left
+handumi calibrate spatial --device pico --pico-mode mandos verify --side left
 handumi calibrate spatial --device pico --pico-mode mandos visualize
 ```
 
-By default, `session` uses only the current capture. To retry with accumulated
-views, opt in to pools under `outputs/calibration/accumulation_N/`.
+`session` reads wrist-camera intrinsics and the controller-to-camera mount from
+`outputs/calibration/spatial.yaml` by default. If calibration was saved under a
+different name, select that same file explicitly for both commands, for example
+`--spatial outputs/calibration/spatial_60mm.yaml`. The command stops before
+hardware capture when the selected spatial file and `configs/rig.yaml` describe
+different ChArUco dimensions, and warns when their camera mappings differ.
 
-:::{dropdown} Session view accumulation
-- **`--start-accumulation N`:** start or reset lot `N`.
-- **`--accumulation N`:** continue lot `N`; use this to switch between lots
-  (for example different lighting) without resetting them.
-:::
+`verify` captures fresh views without changing either calibration and rejects
+a table-frame error above its acceptance limits. Run it while the board is
+still fixed; recapture the session if it fails.
 
 Inspect all cameras and both TCP trails in Rerun. The table surface must align
 with `z=0`. If only the workspace-camera stage fails, retry it with:
