@@ -24,6 +24,14 @@ COMMANDS = {
     ),
     ("record",): Command("handumi.scripts.record", "Record demonstrations"),
     ("validate",): Command("handumi.scripts.validate", "Validate recorded episodes"),
+    ("dataset", "analyze"): Command(
+        "handumi.scripts.analyze_dataset",
+        "Analyze statistics and episode outliers",
+    ),
+    ("dataset", "curate"): Command(
+        "handumi.scripts.curate_dataset",
+        "Create a validated dataset from an analysis report",
+    ),
     ("replay",): Command(
         "handumi.scripts.replay.replay_in_sim", "Replay a dataset in simulation"
     ),

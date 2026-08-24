@@ -31,6 +31,7 @@ record
 teleoperation
 workflows/replay_in_sim
 workflows/datasets
+workflows/dataset_curation
 ```
 
 ```{toctree}

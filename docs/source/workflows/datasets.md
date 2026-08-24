@@ -131,7 +131,14 @@ Replay and validate the converted motion before using it with a robot-specific
 integration. See [Add a New Robot Embodiment](../development/new_embodiment.md)
 when adding another simulation model or hardware backend.
 
-## 5. Publish Accepted Data
+## 5. Curate Rejected or Incomplete Data
+
+When a dataset contains rejected or incomplete episodes, create a separate
+curated derivative before conversion or publication. The analysis and curation
+steps are intentionally separate so statistical outliers can be reviewed before
+any data is removed. See [Analyze and Curate Datasets](dataset_curation.md).
+
+## 6. Publish Accepted Data
 
 Upload only after the replay and validation checks pass:
 
