@@ -35,9 +35,15 @@ class DoubleClapDetector:
         self._last_clap_t: dict[str, float | None] = {"left": None, "right": None}
 
     def reset(self) -> None:
-        """Forget partial gestures when an episode boundary is crossed."""
+        """Forget partial gestures and wait for both grippers to reopen.
+
+        Episode transitions commonly happen while the triggering gripper is
+        still closed.  Re-arming immediately would count that same closure as
+        the first clap of the next gesture, making one later squeeze look like
+        a double clap.
+        """
         for side in self._armed:
-            self._armed[side] = True
+            self._armed[side] = False
             self._last_clap_t[side] = None
 
     def update(self, left_mm: float, right_mm: float, now_s: float) -> bool:
@@ -72,3 +78,58 @@ class DoubleClapDetector:
                 else:
                     self._last_clap_t[side] = now_s
         return tuple(triggered)
+
+
+class BilateralClapArbiter:
+    """Resolve near-simultaneous left/right double claps into one gesture.
+
+    Two double claps on opposite sides within ``bilateral_window_s`` of each
+    other count as a single "both" gesture (for example, a session-ending
+    signal) instead of two independent single-side gestures.
+    """
+
+    def __init__(self, *, bilateral_window_s: float = 0.2) -> None:
+        self._bilateral_window_s = bilateral_window_s
+        self._pending_side: str | None = None
+        self._pending_since_s = 0.0
+
+    def reset(self) -> None:
+        """Forget a partial (single-side) gesture when a boundary is crossed."""
+        self._pending_side = None
+        self._pending_since_s = 0.0
+
+    def update(
+        self,
+        detector: "DoubleClapDetector",
+        left_mm: float,
+        right_mm: float,
+        now_s: float,
+    ) -> str | None:
+        """Return ``left``, ``right`` or ``both`` after chord arbitration."""
+        triggered = detector.update_sides(left_mm, right_mm, now_s)
+        if len(triggered) == 2:
+            self.reset()
+            return "both"
+
+        new_side = triggered[0] if triggered else None
+        if self._pending_side is not None:
+            pending_side = self._pending_side
+            deadline_s = self._pending_since_s + self._bilateral_window_s
+            if (
+                new_side is not None
+                and new_side != pending_side
+                and now_s <= deadline_s
+            ):
+                self.reset()
+                return "both"
+            if now_s >= deadline_s:
+                self.reset()
+                if new_side is not None:
+                    self._pending_side = new_side
+                    self._pending_since_s = now_s
+                return pending_side
+
+        if new_side is not None:
+            self._pending_side = new_side
+            self._pending_since_s = now_s
+        return None
