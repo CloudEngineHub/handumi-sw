@@ -2,11 +2,15 @@
 """Unified HandUMI recorder for PICO and Meta Quest tracking backends.
 
 Episode control: hands-free by voice unless disabled -- say "start recording",
-"stop recording", or "restart". Alternatives are --clap-control (double-squeeze
-the right gripper to start or stop/save, the left one to restart the attempt),
-PICO buttons with --manual-control, and plain --episode-time-s timing with
---no-voice-control. Voice and clap control can run together, so the squeeze
-still works when the room is too noisy to be heard.
+"stop recording", or "restart". Feetech double-clap control is enabled by
+default (double-squeeze the right gripper once to start the session; then right saves the
+current episode and starts the next one immediately, left discards/restarts
+the active attempt, and squeezing both grippers together discards the active
+episode and ends the session), PICO buttons with --manual-control, and optional
+--episode-time-s timing (unlimited unless set). Voice and clap control can
+run together, so the squeeze still works when the room is too noisy to be
+heard. --episodes defaults to recording until stopped; pass a positive count
+to cap the session.
 
 Spoken status announcements ("Recording episode 3", "Episode 3 saved, 812
 frames", ...) are on by default — pass --no-sounds to disable them. The
@@ -91,7 +95,7 @@ from handumi.synchronization import (
     tracking_sample_at,
 )
 from handumi.tracking.base import ControllerPairSample, TrackingProvider
-from handumi.tracking.gestures import DoubleClapDetector
+from handumi.tracking.gestures import BilateralClapArbiter, DoubleClapDetector
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
 from handumi.tracking.pico import (
     START_BUTTON_CHOICES,
@@ -116,6 +120,16 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("handumi.record")
+
+try:
+    from rich.align import Align
+    from rich.console import Console, Group
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+except ImportError:  # Keep recording usable in minimal source checkouts.
+    Console = Group = Live = Panel = Table = Text = Align = None  # type: ignore[assignment,misc]
 
 ROBOT_CONFIG_DIR = Path("configs/robots")
 _RERUN_TRAIL_SECONDS = 10.0
@@ -155,6 +169,172 @@ _RECORDING_DEFAULTS: dict[str, object] = {
     "record_audio": False,
     "robot": "piper",
 }
+
+
+def _format_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+class _RecordingDashboard:
+    """Small live terminal UI shared by raw and teleop recording."""
+
+    def __init__(
+        self,
+        *,
+        task: str,
+        dataset: str,
+        fps: int,
+        existing_episodes: int,
+        existing_frames: int,
+        controls: tuple[tuple[str, str], ...],
+    ) -> None:
+        self.task = task
+        self.dataset = dataset
+        self.fps = fps
+        self.existing_episodes = existing_episodes
+        self.existing_frames = existing_frames
+        self.controls = controls
+        self.saved_episodes = 0
+        self.saved_frames = 0
+        self.episode = existing_episodes + 1
+        self.total = "∞"
+        self.state = "STARTING"
+        self.detail = "Preparing the recording session"
+        self.current_frames = 0
+        self.left_gripper_mm: float | None = None
+        self.right_gripper_mm: float | None = None
+        self._last_render_s = 0.0
+        self._console = Console() if Console is not None else None
+        self._live = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._console is not None and self._console.is_terminal
+
+    def start(self) -> None:
+        if not self.enabled or Live is None:
+            log.info(
+                "Recording UI: task=%s dataset=%s fps=%d existing_episodes=%d",
+                self.task,
+                self.dataset,
+                self.fps,
+                self.existing_episodes,
+            )
+            return
+        self._live = Live(
+            self,
+            console=self._console,
+            refresh_per_second=4,
+            transient=False,
+            screen=True,
+        )
+        self._live.start()
+
+    def set_episode(
+        self,
+        episode: int,
+        total: str,
+        *,
+        state: str = "READY",
+        detail: str = "Waiting to start",
+    ) -> None:
+        self.episode = episode
+        self.total = "∞" if total == "inf" else total
+        self.state = state
+        self.detail = detail
+        self.current_frames = 0
+        self._refresh(force=True)
+
+    def recording(self, frames: int = 0) -> None:
+        self.state = "RECORDING"
+        self.detail = "Data capture in progress"
+        self.current_frames = frames
+        self._refresh()
+
+    def update_frames(self, frames: int) -> None:
+        self.current_frames = frames
+        self._refresh()
+
+    def update_grippers(self, left_mm: float, right_mm: float) -> None:
+        self.left_gripper_mm = left_mm
+        self.right_gripper_mm = right_mm
+        self._refresh()
+
+    def saved(self, frames: int) -> None:
+        self.saved_episodes += 1
+        self.saved_frames += frames
+        self.current_frames = 0
+        self.state = "SAVED"
+        self.detail = f"Episode {self.episode} saved ({frames} frames)"
+        self._refresh(force=True)
+
+    def discarded(self, frames: int, reason: str) -> None:
+        self.current_frames = 0
+        self.state = "DISCARDED"
+        self.detail = f"{frames} frames discarded: {reason}"
+        self._refresh(force=True)
+
+    def stop(self) -> None:
+        self.current_frames = 0
+        self.state = "COMPLETED"
+        self.detail = f"{self.saved_episodes} episode(s) saved this session"
+        self._refresh(force=True)
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+
+    def _refresh(self, *, force: bool = False) -> None:
+        if self._live is None:
+            return
+        now = time.perf_counter()
+        if not force and now - self._last_render_s < 0.25:
+            return
+        self._last_render_s = now
+        self._live.update(self, refresh=True)
+
+    def __rich__(self):
+        return self._render()
+
+    def _render(self):
+        assert Table is not None and Panel is not None and Group is not None
+        active_frames = self.current_frames if self.state == "RECORDING" else 0
+        session_frames = self.saved_frames + active_frames
+        dataset_frames = self.existing_frames + session_frames
+
+        stats = Table.grid(padding=(0, 2))
+        stats.add_column(style="bold cyan", no_wrap=True)
+        stats.add_column(style="white")
+        stats.add_row("Status", f"[bold {'red' if self.state == 'DISCARDED' else 'green'}]{self.state}[/]")
+        stats.add_row("Episode", f"[bold yellow]{self.episode} / {self.total}[/]")
+        stats.add_row("Task", self.task)
+        stats.add_row("Dataset", self.dataset)
+        stats.add_row("Effective session data", _format_duration(session_frames / self.fps))
+        stats.add_row("Current episode data", _format_duration(active_frames / self.fps))
+        stats.add_row("Total data in dataset", _format_duration(dataset_frames / self.fps))
+        stats.add_row("Frames (current / session)", f"{active_frames} / {session_frames}")
+        if self.left_gripper_mm is not None and self.right_gripper_mm is not None:
+            stats.add_row(
+                "Grippers (left / right)",
+                f"{self.left_gripper_mm:.1f} / {self.right_gripper_mm:.1f} mm "
+                "[dim](close <12, reopen >20)[/]",
+            )
+
+        guide = Table.grid(padding=(0, 2))
+        guide.add_column(style="bold magenta", no_wrap=True)
+        guide.add_column(style="white")
+        for control, action in self.controls:
+            guide.add_row(control, action)
+
+        title = Text("● HandUMI Data Recording", style="bold magenta")
+        return Group(
+            Panel(Align.center(title), border_style="magenta"),
+            Panel(stats, title="Live status", border_style="cyan"),
+            Panel(guide, title="Operator guide", border_style="green"),
+            Panel(self.detail, border_style="yellow"),
+        )
 
 
 class StreamingEncodingError(RuntimeError):
@@ -734,7 +914,7 @@ def record_episode(
     cam_names: list[str],
     tracker: TrackingProvider,
     grippers: FeetechGripperSampler | FeetechGripperPair | None,
-    episode_time_s: float,
+    episode_time_s: float | None,
     fps: int,
     task: str,
     cam_width: int,
@@ -746,6 +926,7 @@ def record_episode(
     finish_button: str,
     start_threshold: float,
     clap_detector: DoubleClapDetector | None = None,
+    clap_arbiter: BilateralClapArbiter | None = None,
     voice: VoiceCommandListener | None = None,
     tracking_loss_timeout_s: float = 1.0,
     sync_lag_s: float = 0.04,
@@ -754,11 +935,13 @@ def record_episode(
     gripper_stale_timeout_s: float = 0.10,
     sensor_loss_timeout_s: float = 1.0,
     rerun: _RecordingRerun | None = None,
-) -> tuple[int, str]:
+    dashboard: _RecordingDashboard | None = None,
+) -> tuple[int, str, bool]:
     control_interval = 1.0 / fps
     n_frames = 0
     start_t = time.perf_counter()
     status = "recorded"
+    advance_after_save = False
     clap_control = clap_detector is not None
     xrt = getattr(tracker, "xrt", None)
     prev_start = (
@@ -777,9 +960,13 @@ def record_episode(
         else False
     )
 
-    # Clap starts episodes hands-free. Once recording, another clap saves the
-    # episode; the timer remains a maximum-duration safety limit.
-    timed = not manual_control
+    # Clap/voice start episodes hands-free. Once recording, another stop
+    # command saves the episode. --episode-time-s is an optional max duration.
+    timed = (
+        not manual_control
+        and episode_time_s is not None
+        and episode_time_s > 0
+    )
     tracking_loss_timeout_ns = int(tracking_loss_timeout_s * 1e9)
     tracking_lost_since_ns: int | None = None
     episode_start_ns: int | None = None
@@ -847,6 +1034,14 @@ def record_episode(
             max_sync_skew_s=max_sync_skew_s,
         )
         widths = gripper_frame.widths
+        # Gesture control must use the freshest physical reading, just like
+        # teleop_sim.  The synchronized, deliberately delayed sample remains
+        # the correct one to write into this dataset row.
+        control_widths = _latest_gripper_widths(grippers)
+        if dashboard is not None:
+            dashboard.update_grippers(
+                control_widths.left_mm, control_widths.right_mm
+            )
         sample = tracking_sample_at(tracker, target_time_ns)
         sample_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
         tracking_sync_ok = bool(
@@ -911,13 +1106,29 @@ def record_episode(
                 dataset.clear_episode_buffer()
                 break
         if clap_control:
-            clap_side = clap_detector.update_side(
-                widths.left_mm, widths.right_mm, loop_start
+            assert clap_arbiter is not None
+            clap_gesture = clap_arbiter.update(
+                clap_detector,
+                control_widths.left_mm,
+                control_widths.right_mm,
+                loop_start,
             )
-            if clap_side == "right":
-                status = "recorded"
+            if clap_gesture is not None:
+                log.info(
+                    "Double-squeeze detected: %s (left=%.1f mm, right=%.1f mm).",
+                    clap_gesture.upper(),
+                    control_widths.left_mm,
+                    control_widths.right_mm,
+                )
+            if clap_gesture == "both":
+                status = "session_finished"
+                dataset.clear_episode_buffer()
                 break
-            if clap_side == "left":
+            if clap_gesture == "right":
+                status = "recorded"
+                advance_after_save = True
+                break
+            if clap_gesture == "left":
                 status = "repeat"
                 dataset.clear_episode_buffer()
                 break
@@ -938,6 +1149,8 @@ def record_episode(
             log.error("Streaming encoder failed; discarding episode: %s", exc)
             break
         n_frames += 1
+        if dashboard is not None:
+            dashboard.update_frames(n_frames)
 
         dt = time.perf_counter() - loop_start
         sleep = control_interval - dt
@@ -946,7 +1159,7 @@ def record_episode(
         else:
             log.warning("Loop slower than %d Hz (%.1f Hz actual).", fps, 1.0 / max(dt, 1e-6))
 
-    return n_frames, status
+    return n_frames, status, advance_after_save
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -1004,9 +1217,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--task", type=str, default="HandUMI recording")
-    p.add_argument("--episodes", dest="num_episodes", type=int, default=10)
     p.add_argument(
-        "--episode-time-s", type=float, default=60.0, help=advanced("Maximum episode duration.")
+        "--episodes",
+        dest="num_episodes",
+        type=int,
+        default=0,
+        help="Number of episodes to record; omit or pass 0 to record until stopped.",
+    )
+    p.add_argument(
+        "--episode-time-s",
+        type=float,
+        default=None,
+        help=advanced("Maximum episode duration in seconds; omit for unlimited."),
     )
     p.add_argument("--fps", type=int, default=None, help=advanced("Dataset row rate."))
     p.add_argument(
@@ -1132,17 +1354,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help='Hands-free by voice: say "start recording", "stop recording", '
-        'or "restart". On by default; --no-voice-control falls back to timed '
-        "episodes.",
+        'or "restart". On by default; --no-voice-control falls back to clap, '
+        "manual buttons, or --episode-time-s if set.",
     )
     p.add_argument("--voice-device", default=None, help=advanced("Microphone name or index (default: system default)."))
     p.add_argument("--voice-confidence", type=float, default=0.7, help=advanced("Minimum recognition confidence (0-1)."))
     p.add_argument(
         "--clap-control",
-        action="store_true",
-        help="Also allow hands-free gripper squeezes: double-squeeze right to "
-        "start or stop/save; double-squeeze left while recording to restart "
-        "the same episode. Needs real Feetech widths.",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Allow hands-free gripper squeezes (on by default with Feetech): "
+        "double-squeeze right once "
+        "to start the session, then right saves the episode and starts the "
+        "next one immediately; double-squeeze left discards/restarts the "
+        "active attempt; double-squeeze both grippers discards the active "
+        "episode and ends the session. Use --no-clap-control to disable it.",
     )
     p.add_argument(
         "--no-sounds",
@@ -1242,6 +1468,12 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
         if configured_session:
             args.session_calibration = Path(str(configured_session))
 
+    if args.clap_control is None:
+        # The shells are already connected for width capture, so hands-free
+        # episode control should work without a hidden opt-in flag. Manual
+        # controller mode remains authoritative when explicitly selected.
+        args.clap_control = not args.skip_feetech and not args.manual_control
+
     return args
 
 
@@ -1323,6 +1555,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         # collector chose the controller; yield instead of erroring.
         args.voice_control = False
         log.info("--manual-control set: voice control disabled.")
+    if args.episode_time_s is not None and args.episode_time_s <= 0:
+        raise SystemExit("--episode-time-s must be greater than zero when set.")
     if args.tracking_loss_timeout_s <= 0:
         raise SystemExit("--tracking-loss-timeout-s must be greater than zero.")
     for name in (
@@ -1625,13 +1859,56 @@ def main() -> None:
         commands, so an unmuted microphone would hear the recorder command
         itself.
         """
-        log_say(text, play_sounds=play_sounds, blocking=blocking)
         if voice is not None and play_sounds:
             voice.mute(speech_duration_s(text))
+        log_say(text, play_sounds=play_sounds, blocking=blocking)
 
     recorded = 0
+    existing_episodes = int(dataset.num_episodes)
+    existing_frames = int(getattr(dataset, "num_frames", 0))
+    controls: list[tuple[str, str]] = []
+    if voice is not None:
+        controls.extend(
+            (
+                ('Say "start recording"', "Start an episode"),
+                ('Say "stop recording"', "Save the current episode"),
+                ('Say "restart"', "Discard and re-record the episode"),
+            )
+        )
+    if args.clap_control:
+        controls.extend(
+            (
+                ("Double-squeeze RIGHT", "Save and start the next episode"),
+                ("Double-squeeze LEFT", "Discard and re-record the episode"),
+                ("Double-squeeze BOTH", "Discard current episode and finish"),
+            )
+        )
+    if args.manual_control:
+        controls.extend(
+            (
+                (args.start_button, "Save / advance"),
+                (args.repeat_button, "Discard / re-record"),
+                (args.finish_button, "Save and finish session"),
+            )
+        )
+    elif voice is None and not args.clap_control:
+        controls.append((str(args.start_button), "Start recording"))
+    controls.append(("Esc / Ctrl+C", "Discard current episode and stop"))
+    dashboard = _RecordingDashboard(
+        task=args.task,
+        dataset=str(dataset.root),
+        fps=args.fps,
+        existing_episodes=existing_episodes,
+        existing_frames=existing_frames,
+        controls=tuple(controls),
+    )
+    dashboard.start()
     clap_detector = DoubleClapDetector() if args.clap_control else None
-    restart_active = False
+    clap_arbiter = BilateralClapArbiter() if args.clap_control else None
+    # None: wait for an explicit trigger. "repeat": restart the same episode
+    # immediately. "advance": a clap-driven save already asked for the next
+    # episode to start right away, without waiting for another trigger.
+    pending_start: str | None = None
     audio_recorder = (
         PicoAudioRecorder(lambda: getattr(tracker, "xrt", None), Path(dataset.root))
         if args.record_audio
@@ -1642,31 +1919,56 @@ def main() -> None:
             audio_recorder.start()
         while (args.num_episodes <= 0 or recorded < args.num_episodes) and not stop_event.is_set():
             ep_num = dataset.num_episodes + 1
-            ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
+            ep_total = (
+                "inf"
+                if args.num_episodes <= 0
+                else str(existing_episodes + args.num_episodes)
+            )
             log.info("--- Episode %d/%s ---", ep_num, ep_total)
+            dashboard.set_episode(ep_num, ep_total)
+            transition_announcement: str | None = None
             if rerun is not None:
                 rerun.set_status("WAITING", f"Episode {ep_num}/{ep_total}: waiting to start")
             if voice is not None or clap_detector is not None:
-                if restart_active:
-                    restart_active = False
+                if pending_start == "repeat":
+                    pending_start = None
+                    transition_announcement = f"Restarting episode {ep_num}"
                     log.info("  Restarting episode %d immediately ...", ep_num)
                     if rerun is not None:
                         rerun.set_status("RESTARTED", f"Episode {ep_num}/{ep_total}: restarting now")
                 else:
-                    log.info(
-                        "  %s to start episode %d ...",
-                        _start_prompt(voice, clap_detector),
-                        ep_num,
-                    )
-                    if not _wait_for_start_trigger(
-                        grippers, clap_detector, voice, stop_event
-                    ):
-                        break
+                    if pending_start == "advance":
+                        pending_start = None
+                        transition_announcement = f"Next episode, episode {ep_num}"
+                        log.info("  Continuing directly to episode %d ...", ep_num)
+                        if rerun is not None:
+                            rerun.set_status(
+                                "RECORDING",
+                                f"Episode {ep_num}/{ep_total}: continuing directly",
+                            )
+                    else:
+                        log.info(
+                            "  %s to start episode %d ...",
+                            _start_prompt(voice, clap_detector),
+                            ep_num,
+                        )
+                        if not _wait_for_start_trigger(
+                            grippers,
+                            clap_detector,
+                            voice,
+                            stop_event,
+                            dashboard=dashboard,
+                        ):
+                            break
                     # A calibrated table workspace is locked and ignores this
                     # legacy HMD recenter; uncalibrated sessions retain it.
                     reset_workspace = getattr(tracker, "reset_workspace", None)
                     if reset_workspace is not None:
                         reset_workspace()
+                if clap_detector is not None:
+                    clap_detector.reset()
+                if clap_arbiter is not None:
+                    clap_arbiter.reset()
             elif args.manual_control:
                 action = wait_for_manual_start(
                     getattr(tracker, "xrt"),
@@ -1692,56 +1994,85 @@ def main() -> None:
 
             if not _wait_for_tracking(tracker, stop_event):
                 break
-            announce(f"Recording episode {ep_num}")
+            # Finish the cue before capture starts so fast transitions cannot
+            # overlap multiple asynchronous TTS processes.
+            announce(
+                transition_announcement or f"Recording episode {ep_num}",
+                blocking=True,
+            )
+            dashboard.recording()
             if audio_recorder is not None:
                 audio_recorder.begin_episode()
             if rerun is not None:
                 rerun.set_status("RECORDING", f"Episode {ep_num}/{ep_total} is being recorded")
-            n_frames, status = record_episode(
-                dataset=dataset,
-                cameras=cameras,
-                cam_names=cam_names,
-                tracker=tracker,
-                grippers=grippers,
-                episode_time_s=args.episode_time_s,
-                fps=args.fps,
-                task=args.task,
-                cam_width=args.cam_width,
-                cam_height=args.cam_height,
-                stop_event=stop_event,
-                manual_control=args.manual_control,
-                start_button=args.start_button,
-                repeat_button=args.repeat_button,
-                finish_button=args.finish_button,
-                start_threshold=args.start_threshold,
-                clap_detector=clap_detector,
-                voice=voice,
-                tracking_loss_timeout_s=args.tracking_loss_timeout_s,
-                sync_lag_s=args.sync_lag_s,
-                max_sync_skew_s=args.max_sync_skew_s,
-                camera_stale_timeout_s=args.camera_stale_timeout_s,
-                gripper_stale_timeout_s=args.gripper_stale_timeout_s,
-                sensor_loss_timeout_s=args.sensor_loss_timeout_s,
-                rerun=rerun,
-            )
+            try:
+                n_frames, status, advance_after_save = record_episode(
+                    dataset=dataset,
+                    cameras=cameras,
+                    cam_names=cam_names,
+                    tracker=tracker,
+                    grippers=grippers,
+                    episode_time_s=args.episode_time_s,
+                    fps=args.fps,
+                    task=args.task,
+                    cam_width=args.cam_width,
+                    cam_height=args.cam_height,
+                    stop_event=stop_event,
+                    manual_control=args.manual_control,
+                    start_button=args.start_button,
+                    repeat_button=args.repeat_button,
+                    finish_button=args.finish_button,
+                    start_threshold=args.start_threshold,
+                    clap_detector=clap_detector,
+                    clap_arbiter=clap_arbiter,
+                    voice=voice,
+                    tracking_loss_timeout_s=args.tracking_loss_timeout_s,
+                    sync_lag_s=args.sync_lag_s,
+                    max_sync_skew_s=args.max_sync_skew_s,
+                    camera_stale_timeout_s=args.camera_stale_timeout_s,
+                    gripper_stale_timeout_s=args.gripper_stale_timeout_s,
+                    sensor_loss_timeout_s=args.sensor_loss_timeout_s,
+                    rerun=rerun,
+                    dashboard=dashboard,
+                )
+            except Exception as exc:
+                # A hardware disconnect (cable pull, USB drop, ...) or any
+                # other unexpected failure must not lose already-saved
+                # episodes: discard only the one that was in flight and stop.
+                log.exception(
+                    "Unexpected failure during episode %d; discarding it and stopping.",
+                    ep_num,
+                )
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
+                dataset.clear_episode_buffer()
+                announce("Episode discarded")
+                if rerun is not None:
+                    rerun.set_status(
+                        "DISCARDED",
+                        f"Episode {ep_num}/{ep_total}: unexpected error ({exc}); stopping",
+                    )
+                stop_event.set()
+                break
             if status == "repeat":
                 if audio_recorder is not None:
                     audio_recorder.cancel_episode()
                 log.warning("Episode restart requested (%d frames discarded).", n_frames)
-                announce("Restart recording")
                 if rerun is not None:
                     rerun.set_status(
                         "RESTARTED",
                         f"Episode {ep_num}/{ep_total}: {n_frames} frames discarded; restarting",
                     )
                 dataset.clear_episode_buffer()
-                restart_active = True
+                dashboard.discarded(n_frames, "restart requested")
+                pending_start = "repeat"
                 continue
             if n_frames == 0 or status in {
                 "tracking_lost",
                 "sensor_unhealthy",
                 "encoder_unhealthy",
                 "interrupted",
+                "session_finished",
             }:
                 if audio_recorder is not None:
                     audio_recorder.cancel_episode()
@@ -1753,7 +2084,8 @@ def main() -> None:
                         f"Episode {ep_num}/{ep_total}: {status} after {n_frames} frames",
                     )
                 dataset.clear_episode_buffer()
-                if status in {"finish", "interrupted"}:
+                dashboard.discarded(n_frames, status)
+                if status in {"finish", "interrupted", "session_finished"}:
                     break
                 continue
             if use_videos:
@@ -1763,6 +2095,7 @@ def main() -> None:
                     log.error("Episode discarded before commit: %s", exc)
                     announce("Episode discarded")
                     dataset.clear_episode_buffer()
+                    dashboard.discarded(n_frames, "video encoding failed")
                     if status == "finish":
                         break
                     continue
@@ -1774,6 +2107,7 @@ def main() -> None:
                     announce("Episode discarded")
                     dataset.clear_episode_buffer()
                     audio_recorder.cancel_episode()
+                    dashboard.discarded(n_frames, "audio capture failed")
                     if status == "finish":
                         break
                     continue
@@ -1791,15 +2125,19 @@ def main() -> None:
                     audio_path.unlink(missing_ok=True)
                 raise
             recorded += 1
+            dashboard.saved(n_frames)
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
             announce(f"Episode {ep_num} saved, {n_frames} frames")
             if rerun is not None:
                 rerun.set_status(
                     "SAVED", f"Episode {ep_num}/{ep_total}: {n_frames} frames saved"
                 )
+            if advance_after_save:
+                pending_start = "advance"
             if status == "finish":
                 break
     finally:
+        dashboard.stop()
         escape_listener.stop()
         if voice is not None:
             voice.stop()
@@ -1939,6 +2277,8 @@ def _wait_for_start_trigger(
     clap_detector: DoubleClapDetector | None,
     voice: VoiceCommandListener | None,
     stop_event: threading.Event,
+    *,
+    dashboard: _RecordingDashboard | None = None,
 ) -> bool:
     """Block until voice or a right double-squeeze starts the episode.
 
@@ -1951,9 +2291,20 @@ def _wait_for_start_trigger(
             return True
         if clap_detector is not None:
             widths = _latest_gripper_widths(grippers)
-            if clap_detector.update_side(
+            if dashboard is not None:
+                dashboard.update_grippers(widths.left_mm, widths.right_mm)
+            clap_side = clap_detector.update_side(
                 widths.left_mm, widths.right_mm, time.perf_counter()
-            ) == "right":
+            )
+            if clap_side is not None:
+                log.info(
+                    "Double-squeeze detected while waiting: %s "
+                    "(left=%.1f mm, right=%.1f mm).",
+                    clap_side.upper(),
+                    widths.left_mm,
+                    widths.right_mm,
+                )
+            if clap_side == "right":
                 return True
         time.sleep(0.02)
     return False
