@@ -93,6 +93,7 @@ from handumi.scripts.record import (
     _SOFTWARE_VIDEO_CODEC,
     StreamingEncodingError,
     _EscapeStopListener,
+    _RecordingDashboard,
     _install_strict_streaming_encoder,
     _prepare_streaming_episode,
     _robot_metadata,
@@ -150,7 +151,7 @@ from handumi.teleop.standby import (
 from handumi.teleop.tracking import LatestTrackingSampler, TrackingRecoveryPolicy
 from handumi.teleop.trajectory import TeleopCommandStream
 from handumi.tracking.base import TrackingProvider
-from handumi.tracking.gestures import DoubleClapDetector
+from handumi.tracking.gestures import BilateralClapArbiter, DoubleClapDetector
 from handumi.utils.speech import log_say
 from handumi.visualize import LiveCameraViews, RerunCameraViewer
 
@@ -337,52 +338,10 @@ def _log_episode_interface(
     )
 
 
-class _BilateralClapArbiter:
-    """Resolve near-simultaneous side events into one bilateral gesture."""
-
-    def __init__(self, *, bilateral_window_s: float = 0.2) -> None:
-        self._bilateral_window_s = bilateral_window_s
-        self._pending_side: str | None = None
-        self._pending_since_s = 0.0
-
-    def reset(self) -> None:
-        self._pending_side = None
-        self._pending_since_s = 0.0
-
-    def update(
-        self,
-        detector: DoubleClapDetector,
-        widths: GripperWidths,
-        now_s: float,
-    ) -> str | None:
-        """Return ``left``, ``right`` or ``both`` after chord arbitration."""
-        triggered = detector.update_sides(widths.left_mm, widths.right_mm, now_s)
-        if len(triggered) == 2:
-            self.reset()
-            return "both"
-
-        new_side = triggered[0] if triggered else None
-        if self._pending_side is not None:
-            pending_side = self._pending_side
-            deadline_s = self._pending_since_s + self._bilateral_window_s
-            if (
-                new_side is not None
-                and new_side != pending_side
-                and now_s <= deadline_s
-            ):
-                self.reset()
-                return "both"
-            if now_s >= deadline_s:
-                self.reset()
-                if new_side is not None:
-                    self._pending_side = new_side
-                    self._pending_since_s = now_s
-                return pending_side
-
-        if new_side is not None:
-            self._pending_side = new_side
-            self._pending_since_s = now_s
-        return None
+# ``_BilateralClapArbiter`` lives in ``handumi.tracking.gestures`` as
+# ``BilateralClapArbiter`` so ``record.py`` can share it; keep this alias so
+# the rest of this module (and its tests) can refer to it unchanged.
+_BilateralClapArbiter = BilateralClapArbiter
 
 
 def _episode_gesture_action(
@@ -675,6 +634,7 @@ def record_episode(
     episode_number: int = 1,
     episode_total: str = "?",
     audio_recorder: PicoAudioRecorder | None = None,
+    dashboard: _RecordingDashboard | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, str, np.ndarray]:
     loop_timer = TeleopLoopTimer(fps)
     n_frames = 0
@@ -832,9 +792,11 @@ def record_episode(
                     audio_recorder.begin_episode()
                 home_standby.reset_close_timers()
                 record_log.info("Recording episode started with Space.")
+                if dashboard is not None:
+                    dashboard.recording()
                 log_say("recording episode", play_sounds=play_sounds)
         clap_gesture = clap_arbiter.update(
-            clap_detector, immediate_widths, loop_start
+            clap_detector, immediate_widths.left_mm, immediate_widths.right_mm, loop_start
         )
         gesture_action = _episode_gesture_action(
             clap_gesture, recording=start_t is not None
@@ -886,6 +848,8 @@ def record_episode(
                     episode_total,
                     "/".join(opened_sides),
                 )
+                if dashboard is not None:
+                    dashboard.recording()
                 log_say("recording episode", play_sounds=play_sounds)
         previous_episode_open = current_episode_open
         # Only fresh physical robot feedback can trigger park. The HandUMI
@@ -1123,6 +1087,8 @@ def record_episode(
         observations.append(canonical_observation)
         commands.append(canonical_action)
         n_frames += 1
+        if dashboard is not None:
+            dashboard.update_frames(n_frames)
         loop_timer.sleep(loop_start)
 
     if len(observations) < 2:
@@ -1204,6 +1170,7 @@ def _run_record() -> None:
     dataset = None
     dataset_writer: AsyncLeRobotWriter | None = None
     audio_recorder: PicoAudioRecorder | None = None
+    dashboard: _RecordingDashboard | None = None
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     motion_config = TeleopMotionConfig.from_args(args)
     finger_indices = {
@@ -1410,6 +1377,29 @@ def _run_record() -> None:
         existing_episodes = int(dataset.num_episodes)
         record_log.info("Recording LeRobot dataset at: %s", dataset.root)
 
+        start_control = "Open either enabled gripper"
+        if args.space_start:
+            start_control += " / SPACE"
+        dashboard = _RecordingDashboard(
+            task=args.task,
+            dataset=str(dataset.root),
+            fps=args.fps,
+            existing_episodes=existing_episodes,
+            existing_frames=int(getattr(dataset, "num_frames", 0)),
+            controls=(
+                (start_control, "Start the waiting episode"),
+                ("Double-squeeze RIGHT", "Save and start the next episode"),
+                ("Double-squeeze LEFT", "Discard and re-record the episode"),
+                ("Double-squeeze BOTH", "Discard current episode and finish"),
+                ("Esc / Ctrl+C", "Discard current episode and stop"),
+                (
+                    f"Robot gripper closed {args.gripper_park_hold_s:.1f}s",
+                    "Park that arm at home",
+                ),
+            ),
+        )
+        dashboard.start()
+
         clap_detector = DoubleClapDetector()
         clap_arbiter = _BilateralClapArbiter()
         home_standby = GripperHomeStandby(
@@ -1441,6 +1431,7 @@ def _run_record() -> None:
                 space_start=args.space_start,
                 park_hold_s=args.gripper_park_hold_s,
             )
+            dashboard.set_episode(ep_num, ep_total)
             if not args.space_start:
                 record_log.info(
                     "  Open either enabled gripper to start episode %d ...",
@@ -1491,6 +1482,7 @@ def _run_record() -> None:
                 episode_number=ep_num,
                 episode_total=ep_total,
                 audio_recorder=audio_recorder,
+                dashboard=dashboard,
             )
             if status == "session_finished":
                 if audio_recorder is not None:
@@ -1499,6 +1491,7 @@ def _run_record() -> None:
                     "Bilateral double clap detected; finishing recording session."
                 )
                 dataset_writer.clear_episode()
+                dashboard.discarded(n_frames, "session finished")
                 log_say("Recording session finished", play_sounds=play_sounds)
                 break
             if status == "discarded":
@@ -1508,6 +1501,7 @@ def _run_record() -> None:
                     "Episode discarded by left double clap (%d frames).", n_frames
                 )
                 dataset_writer.clear_episode()
+                dashboard.discarded(n_frames, "left double-squeeze")
                 log_say("Episode discarded", play_sounds=play_sounds)
                 continue
             if n_frames == 0 or status in {
@@ -1523,6 +1517,7 @@ def _run_record() -> None:
                     "Episode discarded (%s, %d frames).", status, n_frames
                 )
                 dataset_writer.clear_episode()
+                dashboard.discarded(n_frames, status)
                 log_say("Episode discarded", play_sounds=play_sounds)
                 if status == "interrupted":
                     break
@@ -1547,9 +1542,11 @@ def _run_record() -> None:
                 dataset_writer.clear_episode()
                 if audio_recorder is not None:
                     audio_recorder.cancel_episode()
+                dashboard.discarded(n_frames, "commit failed")
                 log_say("Episode discarded", play_sounds=play_sounds)
                 continue
             recorded += 1
+            dashboard.saved(n_frames)
             record_log.info("Episode %d saved (%d frames).", ep_num, n_frames)
             log_say(
                 f"Episode {ep_num} saved, {n_frames} frames",
@@ -1621,6 +1618,8 @@ def _run_record() -> None:
             "Done. Recorded %d episode(s). Dataset at: %s", recorded, args.output_dir
         )
     finally:
+        if dashboard is not None:
+            dashboard.stop()
         escape_listener.stop()
         space_listener.close()
         try:
