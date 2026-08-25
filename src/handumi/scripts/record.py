@@ -44,6 +44,7 @@ import yaml
 from handumi.audio import (
     AudioCaptureError,
     PicoAudioRecorder,
+    audio_features,
     audio_metadata,
     validate_audio_files,
 )
@@ -717,6 +718,7 @@ def build_features(
     cam_height: int,
     use_videos: bool,
     camera_specs: list[dict[str, object]] | None = None,
+    record_audio: bool = False,
 ) -> dict:
     img_dtype = "video" if use_videos else "image"
     features: dict = {}
@@ -740,6 +742,8 @@ def build_features(
     features.update(raw_tracking_features())
     features.update(capture_timing_features())
     features.update(camera_health_features(cam_names))
+    if record_audio:
+        features.update(audio_features())
     return features
 
 
@@ -954,6 +958,7 @@ def record_episode(
     sensor_loss_timeout_s: float = 1.0,
     rerun: _RecordingRerun | None = None,
     dashboard: _RecordingDashboard | None = None,
+    audio_recorder: PicoAudioRecorder | None = None,
 ) -> tuple[int, str, bool]:
     control_interval = 1.0 / fps
     n_frames = 0
@@ -1051,6 +1056,15 @@ def record_episode(
             stale_timeout_s=gripper_stale_timeout_s,
             max_sync_skew_s=max_sync_skew_s,
         )
+        audio_frame: dict[str, Any] = {}
+        audio_healthy = True
+        if audio_recorder is not None:
+            audio_frame, audio_healthy = audio_recorder.synchronized_frame(
+                target_time_ns,
+                tracking_now_ns,
+                stale_timeout_s=camera_stale_timeout_s,
+                max_sync_skew_s=max_sync_skew_s,
+            )
         widths = gripper_frame.widths
         # Gesture control must use the freshest physical reading, just like
         # teleop_sim.  The synchronized, deliberately delayed sample remains
@@ -1097,6 +1111,7 @@ def record_episode(
         sensor_health = {
             **camera_health,
             "feetech": gripper_frame.healthy_for_gate,
+            "audio": audio_healthy,
         }
         recovered, timed_out_sensors = health_gate.update(
             sensor_health, tracking_now_ns
@@ -1158,6 +1173,7 @@ def record_episode(
                     **cam_frames,
                     **build_observation(sample, widths),
                     **gripper_frame.frame,
+                    **audio_frame,
                     **capture_timing_frame(target_time_ns, tracking_now_ns),
                     "task": task,
                 }
@@ -1714,6 +1730,7 @@ def main() -> None:
         args.cam_height,
         use_videos,
         camera_specs=camera_specs,
+        record_audio=bool(args.record_audio),
     )
     encoder_selection: _VideoEncoderSelection | None = None
     dataset_vcodec = _SOFTWARE_VIDEO_CODEC
@@ -2024,7 +2041,7 @@ def main() -> None:
             )
             dashboard.recording()
             if audio_recorder is not None:
-                audio_recorder.begin_episode()
+                audio_recorder.begin_episode(time.monotonic_ns())
             if rerun is not None:
                 rerun.set_status("RECORDING", f"Episode {ep_num}/{ep_total} is being recorded")
             try:
@@ -2056,6 +2073,7 @@ def main() -> None:
                     sensor_loss_timeout_s=args.sensor_loss_timeout_s,
                     rerun=rerun,
                     dashboard=dashboard,
+                    audio_recorder=audio_recorder,
                 )
             except Exception as exc:
                 # A hardware disconnect (cable pull, USB drop, ...) or any
@@ -2123,7 +2141,7 @@ def main() -> None:
                     continue
             if audio_recorder is not None:
                 try:
-                    audio_recorder.prepare_episode()
+                    audio_recorder.prepare_episode(expected_frames=n_frames)
                 except AudioCaptureError as exc:
                     log.error("Episode discarded before commit: %s", exc)
                     announce("Episode discarded")
