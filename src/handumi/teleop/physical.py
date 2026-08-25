@@ -136,10 +136,6 @@ def validate_physical_teleop_args(args: argparse.Namespace) -> None:
         )
     if args.cam_width <= 0 or args.cam_height <= 0 or args.cam_fps <= 0:
         raise SystemExit("--cam-width, --cam-height, and --cam-fps must be > 0.")
-    if args.no_rerun and args.cameras is not None:
-        raise SystemExit(
-            "--cameras selects Rerun views; remove --no-rerun or --cameras."
-        )
 
 
 __all__ = [

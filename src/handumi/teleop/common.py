@@ -72,6 +72,66 @@ class BestEffortPeriodicWorker:
             self._stop.set()
 
 
+class JointMotionDiagnostics:
+    """Cheap rolling joint diagnostics shared by live and recorded teleop."""
+
+    def __init__(
+        self,
+        joint_names: list[str] | tuple[str, ...],
+        indices: tuple[int, ...],
+    ) -> None:
+        self.joint_names = tuple(joint_names)
+        self.indices = np.asarray(indices, dtype=np.intp)
+        self.reset()
+
+    def reset(self) -> None:
+        size = len(self.joint_names)
+        self.samples = 0
+        self.previous_raw: np.ndarray | None = None
+        self.previous_filtered: np.ndarray | None = None
+        self.previous_raw_step: np.ndarray | None = None
+        self.max_raw_step = np.zeros(size, dtype=np.float32)
+        self.max_filtered_step = np.zeros(size, dtype=np.float32)
+        self.max_filter_correction = np.zeros(size, dtype=np.float32)
+        self.roughness = np.zeros(size, dtype=np.float32)
+
+    def observe(self, raw_q: np.ndarray, filtered_q: np.ndarray) -> None:
+        raw = np.asarray(raw_q, dtype=np.float32)
+        filtered = np.asarray(filtered_q, dtype=np.float32)
+        self.max_filter_correction = np.maximum(
+            self.max_filter_correction, np.abs(raw - filtered)
+        )
+        if self.previous_raw is not None and self.previous_filtered is not None:
+            raw_step = raw - self.previous_raw
+            filtered_step = filtered - self.previous_filtered
+            self.max_raw_step = np.maximum(self.max_raw_step, np.abs(raw_step))
+            self.max_filtered_step = np.maximum(
+                self.max_filtered_step, np.abs(filtered_step)
+            )
+            if self.previous_raw_step is not None:
+                self.roughness += np.abs(raw_step - self.previous_raw_step)
+            self.previous_raw_step = raw_step
+        self.previous_raw = raw.copy()
+        self.previous_filtered = filtered.copy()
+        self.samples += 1
+
+    def summary(self) -> str:
+        if self.samples < 2 or self.indices.size == 0:
+            return "joint_motion=no fresh samples"
+        candidates = self.indices
+        roughest = int(candidates[np.argmax(self.roughness[candidates])])
+        roughness_per_step = self.roughness[roughest] / max(1, self.samples - 2)
+        return (
+            f"roughest={self.joint_names[roughest]}, "
+            f"IK_roughness={np.rad2deg(roughness_per_step):.2f} deg/step^2, "
+            f"IK_step_max={np.rad2deg(self.max_raw_step[roughest]):.2f} deg, "
+            "filtered_step_max="
+            f"{np.rad2deg(self.max_filtered_step[roughest]):.2f} deg, "
+            "filter_correction_max="
+            f"{np.rad2deg(self.max_filter_correction[roughest]):.2f} deg"
+        )
+
+
 class AdaptiveJointFilter:
     """Velocity-adaptive low-pass for IK joint targets.
 

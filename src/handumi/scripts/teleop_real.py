@@ -38,6 +38,7 @@ from handumi.real.registry import make_real_backend
 from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.teleop.common import (
     BestEffortPeriodicWorker,
+    JointMotionDiagnostics,
     KeyboardSpaceListener,
     TeleopLoopTimer,
     enabled_sides as _enabled_sides,
@@ -46,7 +47,10 @@ from handumi.teleop.common import (
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
-from handumi.teleop.dls import make_real_teleop_dls_solver
+from handumi.teleop.dls import (
+    make_real_teleop_dls_solver,
+    resolve_real_teleop_timing,
+)
 from handumi.teleop.hardware import (
     load_required_controller_tcp_calibration as _load_required_calibration,
     validate_feetech_ports_exist,
@@ -72,10 +76,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 real_log = logging.getLogger("handumi.teleop_real")
-
-DEFAULT_DLS_TRACKING_RATE_HZ = 72
-TRAJECTORY_SCHEDULING_MARGIN_MS = 1000.0 / 150.0
-
 
 def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -131,14 +131,11 @@ def _parse_real_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.print_help()
         raise SystemExit(0)
     args = parser.parse_args(raw_argv)
-    if args.fps is None:
-        args.fps = DEFAULT_DLS_TRACKING_RATE_HZ if args.ik_solver == "dls" else 30
-    if args.trajectory_delay_ms is None:
-        # Hold roughly one producer frame plus a small scheduling margin, so
-        # the 100 Hz output normally interpolates between real IK endpoints.
-        args.trajectory_delay_ms = (
-            1000.0 / float(args.fps) + TRAJECTORY_SCHEDULING_MARGIN_MS
-        )
+    args.fps, args.trajectory_delay_ms = resolve_real_teleop_timing(
+        args.ik_solver,
+        input_rate_hz=args.fps,
+        trajectory_delay_ms=args.trajectory_delay_ms,
+    )
     return args
 
 
@@ -159,61 +156,6 @@ def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> No
         robot=robot,
         list_ports=list_feetech_serial_ports,
     )
-
-
-class _JointMotionDiagnostics:
-    """Cheap rolling diagnostics for finding joint-space chatter."""
-
-    def __init__(self, joint_names: tuple[str, ...], indices: tuple[int, ...]) -> None:
-        self.joint_names = joint_names
-        self.indices = np.asarray(indices, dtype=np.intp)
-        self.reset()
-
-    def reset(self) -> None:
-        size = len(self.joint_names)
-        self.samples = 0
-        self.previous_raw: np.ndarray | None = None
-        self.previous_filtered: np.ndarray | None = None
-        self.previous_raw_step: np.ndarray | None = None
-        self.max_raw_step = np.zeros(size, dtype=np.float32)
-        self.max_filtered_step = np.zeros(size, dtype=np.float32)
-        self.max_filter_correction = np.zeros(size, dtype=np.float32)
-        self.roughness = np.zeros(size, dtype=np.float32)
-
-    def observe(self, raw_q: np.ndarray, filtered_q: np.ndarray) -> None:
-        raw = np.asarray(raw_q, dtype=np.float32)
-        filtered = np.asarray(filtered_q, dtype=np.float32)
-        self.max_filter_correction = np.maximum(
-            self.max_filter_correction, np.abs(raw - filtered)
-        )
-        if self.previous_raw is not None and self.previous_filtered is not None:
-            raw_step = raw - self.previous_raw
-            filtered_step = filtered - self.previous_filtered
-            self.max_raw_step = np.maximum(self.max_raw_step, np.abs(raw_step))
-            self.max_filtered_step = np.maximum(
-                self.max_filtered_step, np.abs(filtered_step)
-            )
-            if self.previous_raw_step is not None:
-                self.roughness += np.abs(raw_step - self.previous_raw_step)
-            self.previous_raw_step = raw_step
-        self.previous_raw = raw.copy()
-        self.previous_filtered = filtered.copy()
-        self.samples += 1
-
-    def summary(self) -> str:
-        if self.samples < 2 or self.indices.size == 0:
-            return "joint_motion=no fresh samples"
-        candidates = self.indices
-        roughest = int(candidates[np.argmax(self.roughness[candidates])])
-        roughness_per_step = self.roughness[roughest] / max(1, self.samples - 2)
-        return (
-            f"roughest={self.joint_names[roughest]}, "
-            f"IK_roughness={np.rad2deg(roughness_per_step):.2f} deg/step^2, "
-            f"IK_step_max={np.rad2deg(self.max_raw_step[roughest]):.2f} deg, "
-            f"filtered_step_max={np.rad2deg(self.max_filtered_step[roughest]):.2f} deg, "
-            "filter_correction_max="
-            f"{np.rad2deg(self.max_filter_correction[roughest]):.2f} deg"
-        )
 
 
 class _LatestJointFeedback:
@@ -371,7 +313,7 @@ def _run_real() -> None:
         filtered_indices=motion_joint_indices
     )
     teleop_session = TeleopSession(controller, joint_filter)
-    joint_diagnostics = _JointMotionDiagnostics(
+    joint_diagnostics = JointMotionDiagnostics(
         runtime.joint_names, motion_joint_indices
     )
     command_stream = motion_config.make_command_stream(real_env.write)

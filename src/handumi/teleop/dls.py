@@ -21,6 +21,33 @@ import numpy as np
 # ceiling for human teleoperation is needlessly aggressive, so DLS intersects
 # the discovered URDF/backend limits with one conservative system policy.
 DEFAULT_TELEOP_JOINT_SPEED_CAP_RAD_S = 1.0
+DEFAULT_DLS_TRACKING_RATE_HZ = 72.0
+DEFAULT_LM_TRACKING_RATE_HZ = 30.0
+TRAJECTORY_SCHEDULING_MARGIN_MS = 1000.0 / 150.0
+
+
+def resolve_real_teleop_timing(
+    ik_solver: str,
+    *,
+    input_rate_hz: float | None,
+    trajectory_delay_ms: float | None,
+) -> tuple[float, float]:
+    """Resolve the shared live-control cadence for real and recording modes."""
+    rate_hz = (
+        float(input_rate_hz)
+        if input_rate_hz is not None
+        else (
+            DEFAULT_DLS_TRACKING_RATE_HZ
+            if ik_solver == "dls"
+            else DEFAULT_LM_TRACKING_RATE_HZ
+        )
+    )
+    delay_ms = (
+        float(trajectory_delay_ms)
+        if trajectory_delay_ms is not None
+        else 1000.0 / rate_hz + TRAJECTORY_SCHEDULING_MARGIN_MS
+    )
+    return rate_hz, delay_ms
 
 
 @dataclass(frozen=True)
@@ -311,8 +338,12 @@ def _backend_joint_speed_limit_rad_s(runtime) -> float:
 
 
 __all__ = [
+    "DEFAULT_DLS_TRACKING_RATE_HZ",
+    "DEFAULT_LM_TRACKING_RATE_HZ",
     "DEFAULT_TELEOP_JOINT_SPEED_CAP_RAD_S",
     "DlsConfig",
     "IncrementalDlsSolver",
+    "TRAJECTORY_SCHEDULING_MARGIN_MS",
     "make_real_teleop_dls_solver",
+    "resolve_real_teleop_timing",
 ]

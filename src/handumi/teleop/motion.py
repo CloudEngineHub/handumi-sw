@@ -40,10 +40,17 @@ class TeleopMotionConfig:
     joint_filter_derivative_cutoff_hz: float = DEFAULT_JOINT_FILTER_DERIVATIVE_CUTOFF_HZ
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace) -> TeleopMotionConfig:
+    def from_args(
+        cls,
+        args: argparse.Namespace,
+        *,
+        input_rate_hz: float | None = None,
+    ) -> TeleopMotionConfig:
         """Build normalized SI-unit configuration from shared CLI arguments."""
         return cls(
-            input_rate_hz=float(args.fps),
+            input_rate_hz=float(
+                args.fps if input_rate_hz is None else input_rate_hz
+            ),
             command_rate_hz=float(args.command_rate_hz),
             trajectory_delay_s=float(args.trajectory_delay_ms) / 1000.0,
             max_extrapolation_s=float(args.max_extrapolation_ms) / 1000.0,
