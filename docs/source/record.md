@@ -88,9 +88,11 @@ For example, `--output-dir outputs/handumi-demo` stores the dataset in that
 directory, and `--resume` verifies and reads the same finalized dataset before
 recording additional episodes.
 
-`teleop-record` has a dedicated continuous-collection gesture protocol: double
-squeeze left to start, right to save and automatically start the next episode,
-or both to discard. See the
+`teleop-record` has a dedicated real-robot gesture protocol: double-squeeze
+right while `READY` to start from home, right again while recording to save,
+or left while recording to discard. Save and discard synchronously return the
+robot home and leave the next episode waiting, so the operator can reset the
+physical task. Double-squeeze both to discard and finish. See the
 [real-robot episode gesture guide](physical_robots/real_teleoperation.md#episode-gestures)
 for the complete behavior.
 

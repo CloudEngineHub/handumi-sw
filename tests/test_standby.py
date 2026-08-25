@@ -1,4 +1,15 @@
-from handumi.teleop.standby import GripperHomeStandby
+from handumi.teleop.standby import GRIPPER_PARK_HOLD_S, GripperHomeStandby
+
+
+def test_default_requires_two_seconds_of_continuous_physical_closure() -> None:
+    standby = GripperHomeStandby()
+
+    assert GRIPPER_PARK_HOLD_S == 2.0
+    assert standby.update({"right": 0.0}, 10.0, ("right",)) == ((), ())
+    assert standby.update({"right": 1.0}, 11.5, ("right",)) == ((), ())
+    assert standby.update({"right": 0.0}, 12.0, ("right",)) == ((), ())
+    assert standby.update({"right": 0.0}, 13.99, ("right",)) == ((), ())
+    assert standby.update({"right": 0.0}, 14.0, ("right",)) == (("right",), ())
 
 
 def test_missing_physical_feedback_cancels_close_timer() -> None:

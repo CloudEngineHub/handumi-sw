@@ -80,6 +80,22 @@ handumi teleop-record --robot <robot_id> --device meta \
   --output-dir outputs/my-dataset
 ```
 
+For an unlimited Piper/PICO collection such as Tower of Hanoi:
+
+```bash
+uv run handumi teleop-record \
+  --device pico \
+  --robot piper \
+  --side both \
+  --num-episodes 0 \
+  --task "Build the Tower of Hanoi" \
+  --output-dir outputs/hanoi
+```
+
+`--num-episodes 0` keeps the session available until the operator finishes it.
+Use a new output directory, or add `--resume` when appending to a finalized
+dataset in the same directory.
+
 This command has its own parser and operational defaults. It does not use
 `--record` on `handumi teleop`; the plain `handumi teleop` command is reserved
 for live simulation. `--resume` with the same `--output-dir` verifies and
@@ -102,35 +118,44 @@ discarded instead of increasing robot-control lag or silently dropping frames.
 
 The two grippers control continuous episode collection:
 
-1. Double-squeeze the **left gripper** to start the first episode.
-2. Double-squeeze the **right gripper** to save it. The robot returns home and
-   the next episode starts automatically.
-3. Double-squeeze **both grippers** to discard the active episode. The robot
-   returns home and waits for another left-gripper double-squeeze before
-   recording its replacement.
+1. The robot starts at home. Double-squeeze the **right HandUMI gripper** to
+   start recording. The gesture itself does not activate an arm; reopening a
+   HandUMI gripper wakes and anchors its corresponding parked arm.
+2. While recording, double-squeeze the **right gripper** again to save the
+   episode. The command waits for the real backend to finish returning the
+   enabled arms home, then enters `READY` without starting another episode.
+3. Double-squeeze the **left gripper** to discard the active episode. The robot
+   likewise returns home and waits in `READY`.
+4. Reset the physical task while the robot is at home, then double-squeeze the
+   right gripper to start again.
+5. Double-squeeze **both grippers** to discard the active episode and finish
+   the session. `Esc` and `Ctrl+C` also discard and stop.
 
 The bilateral gesture may be staggered by up to 200 ms. This prevents small
 sampling differences between grippers from turning a discard into a start or
 save. `Esc` and `Ctrl+C` discard the active episode and stop the session.
 
-With `--space-start`, Space remains an alternative way to start an episode;
-the gripper gestures above remain available.
+With `--space-start`, Space remains an alternative way to start an episode
+from home. When Feetech grippers are connected it does not activate the arms;
+opening each HandUMI gripper still does that. With `--skip-feetech`, Space is
+also the explicit arm-start fallback.
 
 ### Recording display
 
-At the start of every episode the terminal shows the episode number, current
-state, and the complete gesture guide. While recording, a `● REC` line is
-updated every five seconds with elapsed time, captured frames, writer-queue
-depth, robot output rate, missed deadlines, tracking age, IK time, and backend
-write latency. A growing writer queue indicates storage or encoding pressure;
-the robot loop remains isolated, but the episode will be discarded if the
+`teleop-record` uses the same full-screen terminal dashboard as `handumi
+record`. It shows the task, dataset, episode, wall-clock and effective data
+times, frame totals, live gripper widths, and an operator guide. Its state
+changes through `READY`, `RECORDING`, and `HOMING`; do not reset the physical
+task until it returns to `READY`. While recording, control timing and writer
+queue diagnostics are updated without blocking robot output. A growing writer
+queue indicates storage or encoding pressure; the episode is discarded if the
 bounded queue fills.
 
-Holding a **robot** gripper completely closed for two seconds parks only that
-arm at home. This timer observes the opening delivered to the robot backend,
-not the raw HandUMI measurement. Opening the corresponding HandUMI gripper
-wakes and re-anchors the parked arm. Double-squeeze episode gestures continue
-to use the HandUMI grippers.
+Holding a physical **HandUMI** gripper completely closed for the configured
+hold period (two seconds by default) parks only that arm at home. Keeping it
+open cancels the timer. Opening that same HandUMI gripper wakes and re-anchors
+the parked arm.
+Double-squeeze episode gestures continue to use the HandUMI grippers.
 
 Unlike a robot-free HandUMI capture, this dataset is bound to the robot that
 produced it. To collect demonstrations that can be retargeted to any supported

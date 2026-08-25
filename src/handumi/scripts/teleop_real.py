@@ -11,7 +11,7 @@ Safety behavior:
 * controller->TCP calibration is required;
 * the robot homes before teleop starts;
 * opening a HandUMI gripper activates and anchors that arm;
-* a robot gripper held fully closed for three seconds parks that arm at home;
+* a HandUMI gripper held fully closed for two seconds parks that arm at home;
 * reopening the corresponding HandUMI gripper re-anchors that arm for use.
 
 Examples:
@@ -579,13 +579,11 @@ def _run_real() -> None:
             widths = _latest_widths(grippers)
             inputs = teleop_session.inputs(sample, widths)
             start_sides: tuple[str, ...] = ()
-            robot_openings = real_env.read_gripper_openings()
             if grippers is not None:
                 park_sides, wake_sides = home_standby.update(
-                    robot_openings,
+                    inputs.openings,
                     loop_start,
                     enabled_sides,
-                    wake_openings=inputs.openings,
                 )
             else:
                 park_sides, wake_sides = (), ()
@@ -604,7 +602,7 @@ def _run_real() -> None:
                         np.deg2rad(args.park_max_joint_speed_deg_s),
                     )
                     real_log.info(
-                        "Robot %s gripper feedback remained fully closed for %.1fs; "
+                        "HandUMI %s gripper remained fully closed for %.1fs; "
                         "arm returning home "
                         "and entering standby.",
                         "/".join(parked),

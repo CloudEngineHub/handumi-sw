@@ -8,17 +8,17 @@ LeRobot row stores canonical robot joints directly:
 * ``action`` is the next joint command produced by the teleop controller.
 
 Before recording, controller->TCP calibration and Feetech calibration must be
-available. Episode control is optimized for continuous real-robot collection:
+available. Episode control leaves time to reset the physical task between runs:
 
-* opening either enabled gripper: start the waiting episode
-* double-squeeze right: save the current episode and start the next one
-* double-squeeze left: discard the current episode
+* double-squeeze right while waiting: start the episode from home
+* double-squeeze right while recording: save the episode and return home
+* double-squeeze left while recording: discard the episode and return home
 * double-squeeze both grippers: discard the active episode and finish the session
 * ``Esc`` / ``Ctrl+C``: discard the active episode and stop
 
 Gripper commands are streamed continuously, including while recording is
 waiting to start. Opening a HandUMI gripper activates and anchors that arm;
-holding the corresponding robot gripper fully closed for three seconds parks it
+holding the corresponding HandUMI gripper fully closed for two seconds parks it
 at home. Episode gestures control recording only and never activate an arm.
 
 PICO tracking uses ADB.
@@ -145,7 +145,6 @@ from handumi.teleop.physical import (
 from handumi.teleop.session import TeleopSession
 from handumi.teleop.standby import (
     GRIPPER_PARK_HOLD_S,
-    GRIPPER_REOPENED,
     GripperHomeStandby,
 )
 from handumi.teleop.tracking import LatestTrackingSampler, TrackingRecoveryPolicy
@@ -314,8 +313,8 @@ def _log_episode_interface(
     space_start: bool,
     park_hold_s: float,
 ) -> None:
-    state = "WAITING FOR OPEN GRIPPER" if waiting else "RECORDING"
-    start = "open either enabled HandUMI gripper"
+    state = "READY AT HOME" if waiting else "RECORDING"
+    start = "double-squeeze RIGHT"
     if space_start:
         start += " or press SPACE"
     record_log.info(
@@ -324,10 +323,11 @@ def _log_episode_interface(
         "─────────────────────────────\n"
         "│ Episode %d/%s  •  %s\n"
         "│ Start: %s\n"
-        "│ Save + next: double-squeeze RIGHT\n"
-        "│ Discard: double-squeeze LEFT\n"
+        "│ Start / save: double-squeeze RIGHT\n"
+        "│ Discard + home: double-squeeze LEFT\n"
         "│ Finish session: double-squeeze BOTH  •  Stop: Esc / Ctrl+C\n"
-        "│ Arms: open HandUMI to wake  •  robot gripper closed %.1f s to park\n"
+        "│ After save/discard: wait for HOME, reset the task, then start again\n"
+        "│ During REC: HandUMI gripper closed %.1f s parks that arm\n"
         "└────────────────────────────"
         "─────────────────────────────",
         episode,
@@ -350,24 +350,11 @@ def _episode_gesture_action(
     """Map a resolved gripper gesture to the episode state transition."""
     if gesture == "both":
         return "finish"
-    if gesture == "right" and recording:
-        return "save"
+    if gesture == "right":
+        return "save" if recording else "start"
     if gesture == "left" and recording:
         return "discard"
     return None
-
-
-def _newly_opened_sides(
-    previous: dict[str, bool] | None,
-    current: dict[str, bool],
-    enabled_sides: tuple[str, ...],
-) -> tuple[str, ...]:
-    """Return closed-to-open edges, ignoring the first observed sample."""
-    if previous is None:
-        return ()
-    return tuple(
-        side for side in enabled_sides if current[side] and not previous[side]
-    )
 
 
 def build_features(
@@ -460,6 +447,56 @@ def _gripper_openings(widths: GripperWidths) -> dict[str, float]:
         "left": float(widths.left_normalized),
         "right": float(widths.right_normalized),
     }
+
+
+def _home_between_episodes(
+    *,
+    real_env,
+    controller: TeleopController,
+    home_q: np.ndarray,
+    enabled_sides: tuple[str, ...],
+    command_stream: TeleopCommandStream,
+    joint_filter: AdaptiveJointFilter,
+    home_standby: GripperHomeStandby,
+    grippers: FeetechGripperSampler | FeetechGripperPair | None,
+    motion_joint_indices: tuple[int, ...],
+    dashboard: _RecordingDashboard | None,
+    episode: int,
+    episode_total: str,
+    play_sounds: bool,
+) -> None:
+    """Synchronously home the robot and leave every enabled arm inactive."""
+    if dashboard is not None:
+        dashboard.set_episode(
+            episode,
+            episode_total,
+            state="HOMING",
+            detail="Returning both arms home; wait before resetting the task",
+        )
+    record_log.info("Returning enabled arms home before the next episode ...")
+    log_say("returning home", play_sounds=play_sounds)
+    command_stream.stop()
+    real_env.home(home_q)
+    reset_q = controller.reset()
+    joint_filter.reset(reset_q)
+    home_standby.enter_standby(enabled_sides)
+    command_stream.clear_joint_rate_limits(motion_joint_indices)
+    widths = _latest_widths(grippers)
+    command_stream.submit(
+        reset_q,
+        _gripper_openings(widths),
+        time_s=time.perf_counter(),
+        active=True,
+        new_epoch=True,
+    )
+    record_log.info("Robot is at home; reset the task and double-squeeze RIGHT.")
+    if dashboard is not None:
+        dashboard.set_episode(
+            episode,
+            episode_total,
+            state="READY",
+            detail="Robot at home; reset the task, then double-squeeze RIGHT",
+        )
 
 
 def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -678,7 +715,6 @@ def record_episode(
     timing_tracking_age_max_s = 0.0
     timing_discarded_ik = 0
     pending_dataset_frame: dict[str, Any] | None = None
-    previous_episode_open: dict[str, bool] | None = None
     cameras = cameras or []
     camera_names = camera_names or []
 
@@ -796,18 +832,21 @@ def record_episode(
             )
         start_sides: tuple[str, ...] = ()
         if space_listener.consume_space():
-            # Space remains the arm-start fallback when Feetech input was
-            # explicitly disabled; with grippers present, it is an explicit
-            # recording-start override and does not activate either arm.
-            if grippers is None:
-                start_sides = controller.idle_sides()
             if start_t is None:
+                # With no HandUMI grippers, Space is the explicit arm-start
+                # fallback.  Otherwise it starts recording only; opening each
+                # gripper remains responsible for waking its parked arm.
+                if grippers is None:
+                    start_sides = controller.idle_sides()
                 start_t = loop_start
                 episode_start_ns = record_time_ns
                 if audio_recorder is not None:
                     audio_recorder.begin_episode()
                 home_standby.reset_close_timers()
-                record_log.info("Recording episode started with Space.")
+                command_stream.clear_joint_rate_limits(
+                    tuple(joint_filter.filtered_indices or ())
+                )
+                record_log.info("Recording episode started from home with Space.")
                 if dashboard is not None:
                     dashboard.recording()
                 log_say("recording episode", play_sounds=play_sounds)
@@ -823,7 +862,28 @@ def record_episode(
                 clap_gesture,
                 " (episode not recording)" if start_t is None else "",
             )
-        if gesture_action == "save":
+        if gesture_action == "start":
+            start_t = loop_start
+            episode_start_ns = record_time_ns
+            if audio_recorder is not None:
+                audio_recorder.begin_episode()
+            # The episode gesture must not wake an arm.  The triggering right
+            # gripper normally ends closed, so it stays at home until the
+            # operator reopens it; other open grippers wake via standby.update.
+            home_standby.reset_close_timers()
+            command_stream.clear_joint_rate_limits(
+                tuple(joint_filter.filtered_indices or ())
+            )
+            record_log.info(
+                "● REC | episode %d/%s | started from home by double-squeeze "
+                "RIGHT | 0 frames.",
+                episode_number,
+                episode_total,
+            )
+            if dashboard is not None:
+                dashboard.recording()
+            log_say("recording episode", play_sounds=play_sounds)
+        elif gesture_action == "save":
             status = "recorded"
             break
         elif gesture_action == "discard":
@@ -838,45 +898,14 @@ def record_episode(
             break
 
         inputs = teleop_session.inputs(sample, immediate_widths)
-        current_episode_open = {
-            side: bool(
-                inputs.side_tracked[side]
-                and inputs.openings[side] >= GRIPPER_REOPENED
-            )
-            for side in enabled_sides
-        }
-        if start_t is None:
-            opened_sides = _newly_opened_sides(
-                previous_episode_open,
-                current_episode_open,
-                enabled_sides,
-            )
-            if opened_sides:
-                start_t = loop_start
-                episode_start_ns = record_time_ns
-                if audio_recorder is not None:
-                    audio_recorder.begin_episode()
-                home_standby.reset_close_timers()
-                record_log.info(
-                    "● REC | episode %d/%s | started by opening %s gripper | "
-                    "0 frames.",
-                    episode_number,
-                    episode_total,
-                    "/".join(opened_sides),
-                )
-                if dashboard is not None:
-                    dashboard.recording()
-                log_say("recording episode", play_sounds=play_sounds)
-        previous_episode_open = current_episode_open
-        # Only fresh physical robot feedback can trigger park. The HandUMI
-        # opening is used to wake an already parked arm and for episode gestures.
-        robot_openings = real_env.read_gripper_openings()
-        if grippers is not None:
+        # During recording, the physical HandUMI gripper is the single source
+        # for both close-to-park and reopen-to-wake transitions.  This avoids
+        # stale robot feedback parking an arm while the operator holds it open.
+        if grippers is not None and start_t is not None:
             park_sides, wake_sides = home_standby.update(
-                robot_openings,
+                inputs.openings,
                 loop_start,
                 enabled_sides,
-                wake_openings=inputs.openings,
             )
         else:
             park_sides, wake_sides = (), ()
@@ -893,7 +922,7 @@ def record_episode(
                     np.deg2rad(park_max_joint_speed_deg_s),
                 )
                 record_log.info(
-                    "Robot %s gripper feedback remained fully closed for %.1fs; "
+                    "HandUMI %s gripper remained fully closed for %.1fs; "
                     "arm returning home "
                     "and entering standby while recording continues.",
                     "/".join(parked),
@@ -954,7 +983,7 @@ def record_episode(
         anchored = teleop_frame.anchored_sides
         if anchored:
             record_log.info(
-                "Teleop arm anchored after opening %s.", "/".join(anchored)
+                "Teleop arm anchored from home: %s.", "/".join(anchored)
             )
 
         action_q = teleop_frame.q
@@ -1403,7 +1432,7 @@ def _run_record() -> None:
         existing_episodes = int(dataset.num_episodes)
         record_log.info("Recording LeRobot dataset at: %s", dataset.root)
 
-        start_control = "Open either enabled gripper"
+        start_control = "Double-squeeze RIGHT"
         if args.space_start:
             start_control += " / SPACE"
         dashboard = _RecordingDashboard(
@@ -1414,13 +1443,13 @@ def _run_record() -> None:
             existing_frames=int(getattr(dataset, "num_frames", 0)),
             started_at_s=program_start_s,
             controls=(
-                (start_control, "Start the waiting episode"),
-                ("Double-squeeze RIGHT", "Save and start the next episode"),
-                ("Double-squeeze LEFT", "Discard and re-record the episode"),
+                (start_control, "Start from home"),
+                ("Double-squeeze RIGHT while REC", "Save and return home"),
+                ("Double-squeeze LEFT while REC", "Discard and return home"),
                 ("Double-squeeze BOTH", "Discard current episode and finish"),
                 ("Esc / Ctrl+C", "Discard current episode and stop"),
                 (
-                    f"Robot gripper closed {args.gripper_park_hold_s:.1f}s",
+                    f"HandUMI gripper closed {args.gripper_park_hold_s:.1f}s",
                     "Park that arm at home",
                 ),
             ),
@@ -1433,6 +1462,24 @@ def _run_record() -> None:
             hold_s=args.gripper_park_hold_s,
             initial_standby=True,
         )
+
+        def home_for_next_episode(episode: int, episode_total: str) -> None:
+            _home_between_episodes(
+                real_env=real_env,
+                controller=controller,
+                home_q=home_q,
+                enabled_sides=enabled_sides,
+                command_stream=command_stream,
+                joint_filter=joint_filter,
+                home_standby=home_standby,
+                grippers=grippers,
+                motion_joint_indices=motion_joint_indices,
+                dashboard=dashboard,
+                episode=episode,
+                episode_total=episode_total,
+                play_sounds=play_sounds,
+            )
+
         recorded = 0
         while (
             args.num_episodes <= 0 or recorded < args.num_episodes
@@ -1458,16 +1505,20 @@ def _run_record() -> None:
                 space_start=args.space_start,
                 park_hold_s=args.gripper_park_hold_s,
             )
-            dashboard.set_episode(ep_num, ep_total)
+            dashboard.set_episode(
+                ep_num,
+                ep_total,
+                state="READY",
+                detail="Robot at home; double-squeeze RIGHT to start",
+            )
             if not args.space_start:
                 record_log.info(
-                    "  Open either enabled gripper to start episode %d ...",
+                    "  Double-squeeze RIGHT to start episode %d from home ...",
                     ep_num,
                 )
             else:
                 record_log.info(
-                    "  Press Space%s to start episode %d ...",
-                    " or open either gripper" if not args.skip_feetech else "",
+                    "  Double-squeeze RIGHT or press Space to start episode %d ...",
                     ep_num,
                 )
             clap_arbiter.reset()
@@ -1537,6 +1588,8 @@ def _run_record() -> None:
                 dataset_writer.clear_episode()
                 dashboard.discarded(n_frames, "session finished")
                 log_say("Recording session finished", play_sounds=play_sounds)
+                if controller.active:
+                    home_for_next_episode(ep_num, ep_total)
                 break
             if status == "discarded":
                 if audio_recorder is not None:
@@ -1547,6 +1600,7 @@ def _run_record() -> None:
                 dataset_writer.clear_episode()
                 dashboard.discarded(n_frames, "left double-squeeze")
                 log_say("Episode discarded", play_sounds=play_sounds)
+                home_for_next_episode(ep_num, ep_total)
                 continue
             if n_frames == 0 or status in {
                 "tracking_lost",
@@ -1565,6 +1619,8 @@ def _run_record() -> None:
                 log_say("Episode discarded", play_sounds=play_sounds)
                 if status == "interrupted":
                     break
+                if status == "recorded":
+                    home_for_next_episode(ep_num, ep_total)
                 continue
             audio_path: Path | None = None
             try:
@@ -1588,6 +1644,7 @@ def _run_record() -> None:
                     audio_recorder.cancel_episode()
                 dashboard.discarded(n_frames, "commit failed")
                 log_say("Episode discarded", play_sounds=play_sounds)
+                home_for_next_episode(ep_num, ep_total)
                 continue
             recorded += 1
             dashboard.saved(n_frames)
@@ -1596,6 +1653,7 @@ def _run_record() -> None:
                 f"Episode {ep_num} saved, {n_frames} frames",
                 play_sounds=play_sounds,
             )
+            home_for_next_episode(ep_num, ep_total)
 
         dataset_writer.finalize()
         from handumi.dataset import update_handumi_metadata

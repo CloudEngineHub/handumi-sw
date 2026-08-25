@@ -86,8 +86,9 @@ Two optional ways to start exist for when squeezing a gripper is impractical:
   for `--auto-start-delay-s` (default 5), with no gesture at all.
 
 `handumi teleop-record` uses side-specific gestures for episode collection:
-left starts, right saves and advances to an automatically started next episode,
-and both grippers together discard. See
+right starts from home while waiting and saves while recording; left discards.
+Save and discard return the arms home and wait for the operator to reset the
+task. Both grippers together discard and finish the session. See
 [Record a Real-Robot Dataset](physical_robots/real_teleoperation.md#episode-gestures).
 The selected camera views are recorded as LeRobot MP4 features. Dataset writes
 and encoding run outside the control loop, and the terminal displays episode,
