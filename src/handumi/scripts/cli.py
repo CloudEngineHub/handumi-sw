@@ -59,6 +59,10 @@ COMMANDS = {
         "handumi.scripts.setup.calibrate_openarm_grippers",
         "Calibrate OpenArm grippers",
     ),
+    ("calibrate", "piper-grippers"): Command(
+        "handumi.real.piper.calibrate_grippers",
+        "Set the physical Piper gripper zero points",
+    ),
     ("calibrate", "spatial"): Command(
         "handumi.scripts.setup.calibrate_spatial", "Calibrate cameras and workspace"
     ),

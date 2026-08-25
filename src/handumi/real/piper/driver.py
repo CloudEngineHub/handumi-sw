@@ -13,17 +13,20 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 import numpy as np
 import yaml
 
 from handumi.config import DEFAULT_RIG_CONFIG, EXAMPLE_RIG_CONFIG
+from handumi.real.piper.calibrate_grippers import load_piper_gripper_zeros
 from handumi.real.streamer import (
     AccelerationLimitedJointTrajectory,
     next_periodic_deadline,
 )
-from handumi.robots.registry import RobotRealConfig
+
+if TYPE_CHECKING:
+    from handumi.robots.registry import RobotRealConfig
 
 log = logging.getLogger("handumi.real.piper")
 
@@ -62,6 +65,24 @@ class PiperGripperRange:
 
 
 @dataclass(frozen=True)
+class PiperGripperFeedback:
+    """One fresh physical gripper sample and its normalized interpretation."""
+
+    measured_microm: int
+    opening: float
+    gripper_range: PiperGripperRange
+
+    @property
+    def measured_mm(self) -> float:
+        return self.measured_microm / 1000.0
+
+    @property
+    def calibrated_mm(self) -> float:
+        """Physical travel relative to the measured closed position."""
+        return (self.measured_microm - self.gripper_range.min_microm) / 1000.0
+
+
+@dataclass(frozen=True)
 class PiperCanSettings:
     """Resolved Piper real-teleop settings from robot defaults + local rig."""
 
@@ -75,11 +96,14 @@ class PiperCanSettings:
     home_max_joint_speed_deg_s: float = 20.0
     home_timeout_s: float = 30.0
     home_tolerance_deg: float = 3.0
+    startup_speed_percent: int = 10
     speed_percent: int = 80
     enable_timeout_s: float = 10.0
     gripper_effort: int = 1000
     left_gripper_max_width_mm: float | None = None
     right_gripper_max_width_mm: float | None = None
+    left_gripper_closed_microm: int | None = None
+    right_gripper_closed_microm: int | None = None
 
 
 def load_piper_can_settings(
@@ -107,7 +131,11 @@ def load_piper_can_settings(
             f"Missing Piper CAN setting(s) in {rig_config}: {', '.join(missing)}."
         )
 
-    defaults = real_config or RobotRealConfig()
+    # Keep this hardware-only module importable without loading the kinematics
+    # stack (and therefore JAX). Teleop supplies RobotRealConfig explicitly;
+    # standalone Piper utilities use the identical defaults declared here.
+    defaults = real_config or PiperCanSettings(left_port="", right_port="")
+    calibrated_zeros = load_piper_gripper_zeros()
     return PiperCanSettings(
         left_port=str(can["left_port"]),
         right_port=str(can["right_port"]),
@@ -119,10 +147,13 @@ def load_piper_can_settings(
         home_max_joint_speed_deg_s=defaults.home_max_joint_speed_deg_s,
         home_timeout_s=defaults.home_timeout_s,
         home_tolerance_deg=defaults.home_tolerance_deg,
+        startup_speed_percent=defaults.startup_speed_percent,
         speed_percent=defaults.speed_percent,
         gripper_effort=defaults.gripper_effort,
         left_gripper_max_width_mm=_optional_gripper_width_mm(gripper, "left"),
         right_gripper_max_width_mm=_optional_gripper_width_mm(gripper, "right"),
+        left_gripper_closed_microm=calibrated_zeros.get("left"),
+        right_gripper_closed_microm=calibrated_zeros.get("right"),
     )
 
 
@@ -214,12 +245,14 @@ class PiperArm(Protocol):
     def read_mdeg(self) -> np.ndarray: ...
     def read_gripper_range(self, timeout_s: float = 1.0) -> PiperGripperRange: ...
     def read_gripper_microm(self) -> int | None: ...
+    def disable_gripper(self) -> None: ...
+    def disable_arm(self) -> None: ...
     def send_mdeg(self, cmd: np.ndarray) -> None: ...
     def send_gripper_microm(self, opening_microm: int, effort: int) -> None: ...
     def disconnect(self) -> None: ...
 
 
-ArmFactory = Callable[[str, int, float, int], PiperArm]
+ArmFactory = Callable[[str, int, int, float, int], PiperArm]
 
 
 class PiperSdkArm:
@@ -229,6 +262,7 @@ class PiperSdkArm:
         self,
         port: str,
         speed_percent: int,
+        startup_speed_percent: int,
         enable_timeout_s: float,
         gripper_effort: int,
     ) -> None:
@@ -241,6 +275,9 @@ class PiperSdkArm:
 
         self.port = port
         self.speed_percent = int(speed_percent)
+        self.startup_speed_percent = int(startup_speed_percent)
+        if not 1 <= self.startup_speed_percent <= 100:
+            raise ValueError("startup_speed_percent must be in [1, 100]")
         self.gripper_effort = int(gripper_effort)
         self.arm = C_PiperInterface_V2(port)
         self._last_gripper_feedback_timestamp = 0.0
@@ -248,6 +285,7 @@ class PiperSdkArm:
         self.arm.ConnectPort()
         time.sleep(0.2)
 
+        initial_mdeg = self.read_mdeg()
         status = self.arm.GetArmStatus().arm_status
         log.info(
             "[%s] Initial Piper status: ctrl_mode=%d motion_status=%d.",
@@ -256,25 +294,46 @@ class PiperSdkArm:
             status.motion_status,
         )
 
-        # Piper retains the master/slave high-follow state after the hardware
-        # button leaves slave mode. The SDK requires a reset before switching
-        # back to position/velocity control, even when status feedback already
-        # looks normal. Do this before selecting MOVE J and enabling the motors.
-        self.arm.ResetPiper()
-        time.sleep(0.1)
-        self.set_joint_mode()
+        # Reset is destructive: Piper documents that it removes motor power and
+        # lets the arm fall. It is required after teach/high-follow mode or to
+        # clear a controller fault, but must not run on every application restart.
+        # A normal second teleop run is already in CAN/MOVE-J mode.
+        if self._requires_reset(status):
+            log.warning("[%s] Resetting Piper before leaving teach/fault mode.", port)
+            self.arm.ResetPiper()
+
+        # Select a deliberately slow mode before enabling. Most importantly,
+        # seed the first JointCtrl with feedback captured before any reset so the
+        # controller cannot execute a retained go-zero/native target at startup.
+        self.set_joint_mode(speed_percent=self.startup_speed_percent)
 
         deadline = time.time() + float(enable_timeout_s)
         while not self.arm.EnablePiper():
             if time.time() > deadline:
                 raise TimeoutError(f"{self.port}: timed out enabling Piper")
             time.sleep(0.02)
-        # Reassert the requested mode after enable so the first streamed joint
-        # target cannot be interpreted using a retained high-follow mode.
-        self.set_joint_mode()
+        self.send_mdeg(initial_mdeg)
+        time.sleep(0.05)
+        self.set_joint_mode(speed_percent=self.speed_percent)
+        self.send_mdeg(initial_mdeg)
 
-    def set_joint_mode(self) -> None:
-        self.arm.MotionCtrl_2(0x01, 0x01, self.speed_percent, 0x00)
+    def _requires_reset(self, status: Any) -> bool:
+        if int(getattr(status, "ctrl_mode", 0)) == 0x02:
+            return True
+        if int(getattr(status, "arm_status", 0)) != 0:
+            return True
+        get_mode = getattr(self.arm, "GetArmModeCtrl", None)
+        if get_mode is None:
+            return False
+        mode_feedback = get_mode()
+        if float(getattr(mode_feedback, "time_stamp", 0.0)) <= 0.0:
+            return False
+        mode = getattr(mode_feedback, "ctrl_151", None)
+        return int(getattr(mode, "mit_mode", 0)) == 0xAD
+
+    def set_joint_mode(self, *, speed_percent: int | None = None) -> None:
+        speed = self.speed_percent if speed_percent is None else int(speed_percent)
+        self.arm.MotionCtrl_2(0x01, 0x01, speed, 0x00)
 
     def read_mdeg(self) -> np.ndarray:
         joint_state = self.arm.GetArmJointMsgs().joint_state
@@ -344,6 +403,14 @@ class PiperSdkArm:
         ):
             return None
         return int(feedback.gripper_state.grippers_angle)
+
+    def disable_gripper(self) -> None:
+        """Release the gripper motor so it can be positioned by hand."""
+        self.arm.GripperCtrl(0, self.gripper_effort, 0x00, 0x00)
+
+    def disable_arm(self) -> None:
+        """Release all six arm-joint motors so the arm can be moved by hand."""
+        self.arm.DisableArm(7, 0x01)
 
     def send_mdeg(self, cmd: np.ndarray) -> None:
         values = [int(v) for v in np.asarray(cmd, dtype=np.int64)[:ARM_JOINT_COUNT]]
@@ -450,7 +517,7 @@ class PiperJointStreamer:
             for side, target in targets.items():
                 if side in self._gripper_targets:
                     self._gripper_targets[side] = (
-                        None if target is None else max(0, int(target))
+                        None if target is None else int(target)
                     )
 
     def latest_commands(self) -> dict[str, np.ndarray]:
@@ -593,6 +660,7 @@ class PiperCanEnvironment:
             self.arms[side] = self.arm_factory(
                 port,
                 self.settings.speed_percent,
+                self.settings.startup_speed_percent,
                 self.settings.enable_timeout_s,
                 self.settings.gripper_effort,
             )
@@ -614,6 +682,15 @@ class PiperCanEnvironment:
                     min_microm=discovered.min_microm,
                     max_microm=int(round(configured_max_mm * 1000.0)),
                     source="rig override",
+                )
+            calibrated_closed = getattr(
+                self.settings, f"{side}_gripper_closed_microm"
+            )
+            if calibrated_closed is not None:
+                discovered = PiperGripperRange(
+                    min_microm=int(calibrated_closed),
+                    max_microm=discovered.max_microm,
+                    source=f"{discovered.source} + calibrated closed zero",
                 )
             self.gripper_ranges[side] = discovered
             log.info(
@@ -692,6 +769,30 @@ class PiperCanEnvironment:
         }
         self.streamer.set_gripper_targets_microm(targets)
 
+    def disable_gripper(self, side: str) -> None:
+        """Release one gripper without starting or changing arm joint motion."""
+        try:
+            arm = self.arms[side]
+        except KeyError as exc:
+            raise ValueError(f"Piper {side} is not connected") from exc
+        arm.disable_gripper()
+
+    def disable_arm(self, side: str) -> None:
+        """Release one arm's six joint motors so it can be moved by hand.
+
+        Stop the command streamer first if it is running: a live streamer
+        would otherwise keep re-sending the last joint target on its next
+        tick and re-engage the motors right after this call.
+        """
+        try:
+            arm = self.arms[side]
+        except KeyError as exc:
+            raise ValueError(f"Piper {side} is not connected") from exc
+        if self.streamer is not None:
+            self.streamer.stop()
+            self.streamer = None
+        arm.disable_arm()
+
     def set_gripper_openings(
         self,
         openings: dict[str, float],
@@ -747,7 +848,20 @@ class PiperCanEnvironment:
         fallback_max_width_mm: float | dict[str, float],
     ) -> dict[str, float]:
         """Return normalized physical gripper feedback for fresh CAN samples."""
-        openings: dict[str, float] = {}
+        return {
+            side: feedback.opening
+            for side, feedback in self.gripper_feedback(
+                fallback_max_width_mm=fallback_max_width_mm
+            ).items()
+        }
+
+    def gripper_feedback(
+        self,
+        *,
+        fallback_max_width_mm: float | dict[str, float],
+    ) -> dict[str, PiperGripperFeedback]:
+        """Return detailed fresh gripper feedback for runtime diagnostics."""
+        samples: dict[str, PiperGripperFeedback] = {}
         for side, arm in self.arms.items():
             measured_microm = arm.read_gripper_microm()
             if measured_microm is None:
@@ -767,14 +881,19 @@ class PiperCanEnvironment:
                     "robot config fallback",
                 )
             span = gripper_range.max_microm - gripper_range.min_microm
-            openings[side] = float(
+            opening = float(
                 np.clip(
                     (measured_microm - gripper_range.min_microm) / span,
                     0.0,
                     1.0,
                 )
             )
-        return openings
+            samples[side] = PiperGripperFeedback(
+                measured_microm=measured_microm,
+                opening=opening,
+                gripper_range=gripper_range,
+            )
+        return samples
 
     def raise_if_failed(self) -> None:
         if self.streamer is not None:
@@ -800,6 +919,7 @@ __all__ = [
     "RAD_TO_MDEG",
     "PiperCanEnvironment",
     "PiperCanSettings",
+    "PiperGripperFeedback",
     "PiperJointStreamer",
     "PiperGripperRange",
     "PiperSdkArm",

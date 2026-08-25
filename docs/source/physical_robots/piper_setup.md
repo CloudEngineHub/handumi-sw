@@ -42,6 +42,46 @@ previous section.
 Do not continue to real motion until the wizard identifies both physical sides
 and communication is stable.
 
+## Calibrate the Piper gripper closed positions
+
+Calibrate each Piper gripper before the first real teleoperation, after
+replacing a gripper, or whenever a physically closed gripper reports a
+non-zero or negative position. From the repository, run:
+
+```bash
+uv run handumi calibrate piper-grippers
+```
+
+The command connects both Piper controllers but does not send arm-joint
+targets. For each side, it disables only that gripper motor and continuously
+prints its raw feedback. Close the gripper gently and consistently against its
+physical stop, then press Enter. The value visible at that instant becomes the
+logical `opening=0.0` for that side; it is measured during the procedure and is
+not hardcoded.
+
+To calibrate only one side:
+
+```bash
+uv run handumi calibrate piper-grippers --side left
+uv run handumi calibrate piper-grippers --side right
+```
+
+The per-machine result is stored outside the repository at
+`~/.cache/handumi/piper_grippers.yaml` (or under `$XDG_CACHE_HOME` when set).
+Teleoperation uses the captured value both to normalize physical feedback and
+as the closed command target. For example, if the captured raw value is
+`-3000 um`, subsequent diagnostics report it as calibrated `0.000 mm` and a
+normalized opening of `0.000000`, while retaining `-3000 um` as the raw value.
+
+You can verify both grippers without running arm teleoperation:
+
+```bash
+uv run python tests/real/test_piper_gripper_diagnostic.py
+```
+
+With each gripper physically closed, expect `estado=CERRADO`,
+`Piper=0.000000`, and `calibrado=0.000 mm`. Press Ctrl+C to stop the monitor.
+
 ## First real teleoperation
 
 Start with simulation and the same robot profile:

@@ -32,17 +32,12 @@ arms:
     gripper_joints:
       - name: right_joint7
         open: 0.035
-# Physical Piper start pose: joint5 +25 deg per arm. Keeping simulation,
-# conversion, and real-arm startup on the same home avoids an artificial
-# offset when the controller pose is anchored.
-# joint3 at 0 sits exactly on its upper joint limit (see left_joint3 in
-# piper.urdf: limit upper="0"), which folds link5 (wrist) back onto
-# link1/link2 (upper arm) and self-collides. joint3 -10 deg backs both
-# arms off that limit and lifts the wrist ~8cm clear, without touching
-# any other joint.
+# HandUMI application home. This is intentionally separate from Piper's native
+# go-zero pose (all six arm joints at zero); teleop startup and return-home both
+# use this exact vector and never request the SDK go-zero routine.
 # home_q layout: [left_joint1..7, right_joint1..7] (left first, matching
 # `arms.left`/`arms.right` above and mjcf_joint_prefix_map izq_/der_).
-home_q: [0.0, 0.0, -0.1745329, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, -0.1745329, 0.0, 0.4363323, 0.0, 0.0]
+home_q: [0.0, 0.0, 0.0, 0.0, 0.2617994, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0]
 gripper_max_width_m: 0.066
 # Physical tool assembly installed on HandUMI while demonstrating Piper tasks:
 # the gripper tip screwed onto the shells, and the controller mount. It is a
@@ -57,7 +52,7 @@ handumi_tool:
 # take precedence over this pairing.
 controller_tcp_calibrations:
   meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
-  pico: configs/calibration/controller_tcp/pico_ARX5_beta.yaml
+  pico: configs/calibration/controller_tcp/pico.yaml
 ik_weights:
   pos: 125.0
   ori: 20.0
@@ -74,5 +69,7 @@ real:
   home_max_joint_speed_deg_s: 20
   home_timeout_s: 30
   home_tolerance_deg: 3
+  # Safe controller handoff before the first measured-position hold command.
+  startup_speed_percent: 10
   speed_percent: 80
   gripper_effort: 1000
