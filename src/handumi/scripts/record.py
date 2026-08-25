@@ -190,6 +190,7 @@ class _RecordingDashboard:
         existing_episodes: int,
         existing_frames: int,
         controls: tuple[tuple[str, str], ...],
+        started_at_s: float | None = None,
     ) -> None:
         self.task = task
         self.dataset = dataset
@@ -207,8 +208,24 @@ class _RecordingDashboard:
         self.left_gripper_mm: float | None = None
         self.right_gripper_mm: float | None = None
         self._last_render_s = 0.0
+        # ``started_at_s`` is captured as early as possible by the caller (at
+        # process start, before hardware setup) so "program runtime" reflects
+        # the whole run, not just the time spent inside the dashboard.
+        self._started_at_s = (
+            started_at_s if started_at_s is not None else time.perf_counter()
+        )
         self._console = Console() if Console is not None else None
         self._live = None
+
+    @property
+    def program_runtime_s(self) -> float:
+        """Wall-clock time elapsed since the program started running.
+
+        This is distinct from the "effective data" durations below, which
+        are derived from recorded frame counts and therefore only grow while
+        data is actually being captured.
+        """
+        return max(0.0, time.perf_counter() - self._started_at_s)
 
     @property
     def enabled(self) -> bool:
@@ -311,9 +328,10 @@ class _RecordingDashboard:
         stats.add_row("Episode", f"[bold yellow]{self.episode} / {self.total}[/]")
         stats.add_row("Task", self.task)
         stats.add_row("Dataset", self.dataset)
-        stats.add_row("Effective session data", _format_duration(session_frames / self.fps))
-        stats.add_row("Current episode data", _format_duration(active_frames / self.fps))
-        stats.add_row("Total data in dataset", _format_duration(dataset_frames / self.fps))
+        stats.add_row("Program runtime (wall clock)", _format_duration(self.program_runtime_s))
+        stats.add_row("Effective data - current episode", _format_duration(active_frames / self.fps))
+        stats.add_row("Effective data - this session", _format_duration(session_frames / self.fps))
+        stats.add_row("Effective data - total dataset", _format_duration(dataset_frames / self.fps))
         stats.add_row("Frames (current / session)", f"{active_frames} / {session_frames}")
         if self.left_gripper_mm is not None and self.right_gripper_mm is not None:
             stats.add_row(
@@ -1631,6 +1649,9 @@ def _print_recording_plan(
 
 
 def main() -> None:
+    # Captured before any hardware/dataset setup so the dashboard's "program
+    # runtime" reflects the whole run, not just the recording loop.
+    program_start_s = time.perf_counter()
     args = _resolve_recording_args(parse_args())
     _validate_args(args)
     play_sounds = not args.no_sounds
@@ -1901,6 +1922,7 @@ def main() -> None:
         existing_episodes=existing_episodes,
         existing_frames=existing_frames,
         controls=tuple(controls),
+        started_at_s=program_start_s,
     )
     dashboard.start()
     clap_detector = DoubleClapDetector() if args.clap_control else None

@@ -695,6 +695,10 @@ def record_episode(
         tracking_snapshot = tracking_sampler.latest()
         if tracking_snapshot is None:
             immediate_widths = _latest_widths(grippers)
+            if dashboard is not None:
+                dashboard.update_grippers(
+                    immediate_widths.left_mm, immediate_widths.right_mm
+                )
             command_stream.update_openings(_gripper_openings(immediate_widths))
             space_listener.consume_space()
             clap_detector.update_sides(
@@ -715,6 +719,10 @@ def record_episode(
         if not controller.active and not tracking_ok:
             tracking_recovery.reset()
             immediate_widths = _latest_widths(grippers)
+            if dashboard is not None:
+                dashboard.update_grippers(
+                    immediate_widths.left_mm, immediate_widths.right_mm
+                )
             command_stream.update_openings(_gripper_openings(immediate_widths))
             space_listener.consume_space()
             clap_detector.update_sides(
@@ -726,6 +734,10 @@ def record_episode(
 
         if not tracking_ok:
             immediate_widths = _latest_widths(grippers)
+            if dashboard is not None:
+                dashboard.update_grippers(
+                    immediate_widths.left_mm, immediate_widths.right_mm
+                )
             if tracking_recovery.note_missing(
                 loop_start,
                 observed_since=(
@@ -778,6 +790,10 @@ def record_episode(
         tracking_recovery.reset()
 
         immediate_widths = _latest_widths(grippers)
+        if dashboard is not None:
+            dashboard.update_grippers(
+                immediate_widths.left_mm, immediate_widths.right_mm
+            )
         start_sides: tuple[str, ...] = ()
         if space_listener.consume_space():
             # Space remains the arm-start fallback when Feetech input was
@@ -959,20 +975,27 @@ def record_episode(
         timing_now_s = time.perf_counter()
         if command_stream.running and timing_now_s >= timing_next_log_s:
             output_stats = command_stream.stats()
-            elapsed_s = max(0, int(timing_now_s - (start_t or timing_now_s)))
+            # Wall-clock time since the episode started (real time elapsed),
+            # as opposed to the effective data time below, which is derived
+            # from frames actually captured and can fall behind if frames are
+            # ever missed or discarded.
+            episode_elapsed_s = max(0, int(timing_now_s - (start_t or timing_now_s)))
+            episode_data_s = max(0, int(n_frames / fps))
             queued_frames = (
                 dataset_writer.pending_frames if dataset_writer is not None else 0
             )
             record_log.info(
-                "%s | episode %d/%s | %02d:%02d | %d frames | "
+                "%s | episode %d/%s | elapsed %02d:%02d | data %02d:%02d | %d frames | "
                 "writer_queue=%d | output=%.1f Hz, missed=%d, "
                 "tracking_age_max=%.0f ms, IK_avg/max=%.1f/%.1f ms, "
                 "backend_write_max=%.1f ms, stale_IK_discarded=%d.",
                 "● REC" if start_t is not None else "○ READY",
                 episode_number,
                 episode_total,
-                elapsed_s // 60,
-                elapsed_s % 60,
+                episode_elapsed_s // 60,
+                episode_elapsed_s % 60,
+                episode_data_s // 60,
+                episode_data_s % 60,
                 n_frames,
                 queued_frames,
                 output_stats.effective_rate_hz,
@@ -1105,6 +1128,9 @@ def record_episode(
 
 
 def _run_record() -> None:
+    # Captured before any hardware/dataset setup so the dashboard's "program
+    # runtime" reflects the whole run, not just the recording loop.
+    program_start_s = time.perf_counter()
     args = _parse_record_args()
     args.output_dir = Path(args.output_dir)
     args.repo_id = f"local/{args.output_dir.name}"
@@ -1386,6 +1412,7 @@ def _run_record() -> None:
             fps=args.fps,
             existing_episodes=existing_episodes,
             existing_frames=int(getattr(dataset, "num_frames", 0)),
+            started_at_s=program_start_s,
             controls=(
                 (start_control, "Start the waiting episode"),
                 ("Double-squeeze RIGHT", "Save and start the next episode"),
@@ -1445,45 +1472,62 @@ def _run_record() -> None:
                 )
             clap_arbiter.reset()
             clap_detector.reset()
-            _, _, n_frames, status, _ = record_episode(
-                tracker=tracker,
-                tracking_sampler=tracking_sampler,
-                grippers=grippers,
-                real_env=real_env,
-                controller=controller,
-                runtime=runtime,
-                home_q=home_q,
-                enabled_sides=enabled_sides,
-                space_listener=space_listener,
-                clap_detector=clap_detector,
-                clap_arbiter=clap_arbiter,
-                fps=args.fps,
-                task=args.task,
-                stop_event=stop_event,
-                play_sounds=play_sounds,
-                initial_start_sides=(),
-                sync_lag_s=args.sync_lag_s,
-                max_sync_skew_s=args.max_sync_skew_s,
-                gripper_stale_timeout_s=args.gripper_stale_timeout_s,
-                sensor_loss_timeout_s=args.sensor_loss_timeout_s,
-                tracking_loss_timeout_s=args.tracking_loss_timeout_s,
-                tracking_stale_ms=args.tracking_stale_ms,
-                command_stream=command_stream,
-                park_hold_s=args.gripper_park_hold_s,
-                park_max_joint_speed_deg_s=args.park_max_joint_speed_deg_s,
-                joint_filter=joint_filter,
-                home_standby=home_standby,
-                dataset_writer=dataset_writer,
-                cameras=cameras,
-                camera_names=camera_names,
-                camera_width=args.cam_width,
-                camera_height=args.cam_height,
-                camera_stale_timeout_s=args.camera_stale_timeout_s,
-                episode_number=ep_num,
-                episode_total=ep_total,
-                audio_recorder=audio_recorder,
-                dashboard=dashboard,
-            )
+            try:
+                _, _, n_frames, status, _ = record_episode(
+                    tracker=tracker,
+                    tracking_sampler=tracking_sampler,
+                    grippers=grippers,
+                    real_env=real_env,
+                    controller=controller,
+                    runtime=runtime,
+                    home_q=home_q,
+                    enabled_sides=enabled_sides,
+                    space_listener=space_listener,
+                    clap_detector=clap_detector,
+                    clap_arbiter=clap_arbiter,
+                    fps=args.fps,
+                    task=args.task,
+                    stop_event=stop_event,
+                    play_sounds=play_sounds,
+                    initial_start_sides=(),
+                    sync_lag_s=args.sync_lag_s,
+                    max_sync_skew_s=args.max_sync_skew_s,
+                    gripper_stale_timeout_s=args.gripper_stale_timeout_s,
+                    sensor_loss_timeout_s=args.sensor_loss_timeout_s,
+                    tracking_loss_timeout_s=args.tracking_loss_timeout_s,
+                    tracking_stale_ms=args.tracking_stale_ms,
+                    command_stream=command_stream,
+                    park_hold_s=args.gripper_park_hold_s,
+                    park_max_joint_speed_deg_s=args.park_max_joint_speed_deg_s,
+                    joint_filter=joint_filter,
+                    home_standby=home_standby,
+                    dataset_writer=dataset_writer,
+                    cameras=cameras,
+                    camera_names=camera_names,
+                    camera_width=args.cam_width,
+                    camera_height=args.cam_height,
+                    camera_stale_timeout_s=args.camera_stale_timeout_s,
+                    episode_number=ep_num,
+                    episode_total=ep_total,
+                    audio_recorder=audio_recorder,
+                    dashboard=dashboard,
+                )
+            except Exception as exc:
+                # A hardware disconnect (cable pull, USB drop, robot power
+                # loss, ...) or any other unexpected failure must not lose
+                # already-saved episodes: discard only the one in flight and
+                # stop the whole session, matching handumi.scripts.record.
+                record_log.exception(
+                    "Unexpected failure during episode %d; discarding it and stopping.",
+                    ep_num,
+                )
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
+                dataset_writer.clear_episode()
+                dashboard.discarded(0, f"unexpected error: {exc}")
+                log_say("Episode discarded", play_sounds=play_sounds)
+                stop_event.set()
+                break
             if status == "session_finished":
                 if audio_recorder is not None:
                     audio_recorder.cancel_episode()
