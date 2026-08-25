@@ -3,6 +3,7 @@ from unittest.mock import Mock
 import numpy as np
 
 from handumi.scripts.teleop_record import (
+    _parse_record_args,
     _episode_gesture_action,
     _home_between_episodes,
 )
@@ -28,23 +29,71 @@ def test_reset_requires_reopen_before_counting_a_new_clap() -> None:
     assert detector.update_side(30.0, 5.0, 0.8) == "right"
 
 
+def test_threshold_endpoints_rearm_and_count_for_each_side() -> None:
+    detector = DoubleClapDetector(close_mm=12.0, open_mm=20.0)
+
+    assert detector.update_side(20.0, 20.0, 0.0) is None
+    assert detector.update_side(12.0, 20.0, 0.1) is None
+    assert detector.last_clap_edges == ("left",)
+    assert detector.update_side(20.0, 20.0, 0.2) is None
+    assert detector.update_side(12.0, 20.0, 0.3) == "left"
+
+    detector.reset()
+    assert detector.update_side(20.0, 20.0, 0.4) is None
+    assert detector.update_side(20.0, 12.0, 0.5) is None
+    assert detector.update_side(20.0, 20.0, 0.6) is None
+    assert detector.update_side(20.0, 12.0, 0.7) == "right"
+
+
 def test_teleop_record_right_clap_starts_then_saves() -> None:
     assert _episode_gesture_action("right", recording=False) == "start"
     assert _episode_gesture_action("right", recording=True) == "save"
 
 
-def test_teleop_record_left_clap_only_discards_active_episode() -> None:
+def test_teleop_record_left_clap_only_resets_active_episode() -> None:
     assert _episode_gesture_action("left", recording=False) is None
-    assert _episode_gesture_action("left", recording=True) == "discard"
+    assert _episode_gesture_action("left", recording=True) == "reset"
     assert _episode_gesture_action("both", recording=False) == "finish"
     assert _episode_gesture_action("both", recording=True) == "finish"
+
+
+def test_teleop_record_defaults_to_an_unbounded_session(tmp_path) -> None:
+    args = _parse_record_args(
+        ["--device", "pico", "--output-dir", str(tmp_path / "dataset")]
+    )
+
+    assert args.num_episodes == 0
+    assert args.episode_time_s == 0.0
+    assert args.ik_solver == "dls"
+    assert args.control_fps == 72.0
+    assert args.fps == 30
+    assert np.isclose(args.trajectory_delay_ms, 1000.0 / 72.0 + 1000.0 / 150.0)
+
+
+def test_teleop_record_keeps_dataset_and_control_rates_independent(tmp_path) -> None:
+    args = _parse_record_args(
+        [
+            "--device",
+            "pico",
+            "--output-dir",
+            str(tmp_path / "dataset"),
+            "--fps",
+            "24",
+            "--control-fps",
+            "80",
+        ]
+    )
+
+    assert args.fps == 24
+    assert args.control_fps == 80.0
+    assert np.isclose(args.trajectory_delay_ms, 1000.0 / 80.0 + 1000.0 / 150.0)
 
 
 def test_teleop_record_homes_synchronously_before_ready() -> None:
     events: list[str] = []
     home_q = np.zeros(14, dtype=np.float32)
     real_env = Mock()
-    real_env.home.side_effect = lambda q: events.append("home")
+    real_env.move_home.side_effect = lambda q: events.append("move_home")
     controller = Mock()
     controller.reset.side_effect = lambda: (events.append("reset"), home_q)[1]
     command_stream = Mock()
@@ -78,10 +127,11 @@ def test_teleop_record_homes_synchronously_before_ready() -> None:
 
     assert events == [
         "stop",
-        "home",
+        "move_home",
         "reset",
         "reset_filter",
         "standby",
         "clear_limits",
         "submit",
     ]
+    real_env.home.assert_not_called()

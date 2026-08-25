@@ -12,12 +12,13 @@ available. Episode control leaves time to reset the physical task between runs:
 
 * double-squeeze right while waiting: start the episode from home
 * double-squeeze right while recording: save the episode and return home
-* double-squeeze left while recording: discard the episode and return home
+* double-squeeze left while recording: reset the same episode and return home
 * double-squeeze both grippers: discard the active episode and finish the session
-* ``Esc`` / ``Ctrl+C``: discard the active episode and stop
+* ``Esc`` / ``Ctrl+C``: discard the active attempt and stop
 
-Gripper commands are streamed continuously, including while recording is
-waiting to start. Opening a HandUMI gripper activates and anchors that arm;
+Gripper commands may remain synchronized while recording is waiting to start,
+but arm teleoperation and capture are disabled in READY. Once recording starts,
+opening a HandUMI gripper activates and anchors that arm;
 holding the corresponding HandUMI gripper fully closed for two seconds parks it
 at home. Episode gestures control recording only and never activate an arm.
 
@@ -38,8 +39,10 @@ Common options:
 * ``--device``        pico|meta tracking device.
 * ``--robot``         Registered real backend, for example piper or openarmv1.
 * ``--side``          left|right|both enabled arms.
-* ``--fps``           Recording/control frequency in Hz.
+* ``--fps``           Dataset/camera capture frequency in Hz.
+* ``--control-fps``   Tracking and IK frequency (DLS defaults to 72 Hz).
 * ``--num-episodes``  Number of episodes to record; 0 means until stopped.
+* ``--episode-time-s`` Auto-save duration; 0 means until a save gesture.
 * ``--task``          Task description stored in the dataset.
 * ``--output-dir``    Destination directory, for example ``outputs/piper-demo``.
 * ``--resume``        Append episodes from an existing dataset in that directory.
@@ -54,6 +57,9 @@ import signal
 import sys
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +68,12 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import numpy as np
 
-from handumi.audio import AudioCaptureError, PicoAudioRecorder, audio_metadata
+from handumi.audio import (
+    AudioCaptureError,
+    PicoAudioRecorder,
+    audio_features,
+    audio_metadata,
+)
 from handumi.cameras import (
     build_camera_specs,
     camera_output_size,
@@ -111,6 +122,7 @@ from handumi.synchronization import (
 from handumi.teleop.common import (
     AdaptiveJointFilter,
     BestEffortPeriodicWorker,
+    JointMotionDiagnostics,
     KeyboardSpaceListener,
     TeleopLoopTimer,
 )
@@ -127,6 +139,10 @@ from handumi.teleop.common import (
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
+from handumi.teleop.dls import (
+    make_real_teleop_dls_solver,
+    resolve_real_teleop_timing,
+)
 from handumi.teleop.hardware import (
     load_required_controller_tcp_calibration as _load_required_calibration,
 )
@@ -166,6 +182,38 @@ class DatasetWriteError(RuntimeError):
     """A background LeRobot write failed or could not keep up."""
 
 
+class SensorHealthError(RuntimeError):
+    """A required capture stream remained unhealthy for too long."""
+
+
+@dataclass(frozen=True)
+class _CaptureSnapshot:
+    base_q: np.ndarray
+    action_q: np.ndarray
+    openings: dict[str, float]
+    target_time_ns: int
+    record_time_ns: int
+    tracking_time_ns: int
+    submitted_s: float
+
+
+@dataclass(frozen=True)
+class CaptureTimingStats:
+    samples: int
+    queue_delay_avg_ms: float
+    queue_delay_max_ms: float
+    capture_avg_ms: float
+    capture_max_ms: float
+    robot_read_avg_ms: float
+    robot_read_max_ms: float
+    cameras_avg_ms: float
+    cameras_max_ms: float
+    gripper_avg_ms: float
+    gripper_max_ms: float
+    frame_build_avg_ms: float
+    frame_build_max_ms: float
+
+
 class _DatasetRequest:
     def __init__(self, operation: str, payload: Any = None) -> None:
         self.operation = operation
@@ -193,6 +241,12 @@ class AsyncLeRobotWriter:
         )
         self._episode_error: BaseException | None = None
         self._error_lock = threading.Lock()
+        self._timing_lock = threading.Lock()
+        self._deferred_total_s = 0.0
+        self._deferred_max_s = 0.0
+        self._dataset_total_s = 0.0
+        self._dataset_max_s = 0.0
+        self._timing_samples = 0
         self._thread = threading.Thread(
             target=self._run,
             name="handumi-lerobot-writer",
@@ -205,7 +259,35 @@ class AsyncLeRobotWriter:
     def pending_frames(self) -> int:
         return self._queue.qsize()
 
-    def add_frame(self, frame: dict[str, Any]) -> None:
+    def timing_stats(
+        self, *, reset: bool = False
+    ) -> tuple[float, float, float, float]:
+        """Return deferred-build and LeRobot add avg/max times in milliseconds."""
+        with self._timing_lock:
+            samples = self._timing_samples
+            result = (
+                self._deferred_total_s / samples * 1000.0 if samples else 0.0,
+                self._deferred_max_s * 1000.0,
+                self._dataset_total_s / samples * 1000.0 if samples else 0.0,
+                self._dataset_max_s * 1000.0,
+            )
+            if reset:
+                self._deferred_total_s = 0.0
+                self._deferred_max_s = 0.0
+                self._dataset_total_s = 0.0
+                self._dataset_max_s = 0.0
+                self._timing_samples = 0
+            return result
+
+    def add_frame(
+        self,
+        frame: dict[str, Any] | Callable[[], dict[str, Any]],
+    ) -> None:
+        """Queue a row or a deferred row builder.
+
+        Deferred builders are useful for timestamp-aligned peripheral work
+        (notably audio), which must not run in the latency-sensitive IK loop.
+        """
         self.raise_if_failed()
         try:
             self._queue.put_nowait(_DatasetRequest("frame", frame))
@@ -213,6 +295,10 @@ class AsyncLeRobotWriter:
             raise DatasetWriteError(
                 "LeRobot writer queue is full; recording cannot remain frame-aligned"
             ) from exc
+
+    def flush(self) -> None:
+        """Wait until every previously queued frame has been materialized."""
+        self._request("flush")
 
     def save_episode(self, expected_frames: int) -> None:
         self._request("save", int(expected_frames))
@@ -275,10 +361,29 @@ class AsyncLeRobotWriter:
                         episode_error = self._episode_error
                     if episode_error is None:
                         try:
-                            self.dataset.add_frame(request.payload)
+                            payload = request.payload
+                            deferred_start_s = time.perf_counter()
+                            frame = payload() if callable(payload) else payload
+                            deferred_elapsed_s = time.perf_counter() - deferred_start_s
+                            dataset_start_s = time.perf_counter()
+                            self.dataset.add_frame(frame)
+                            dataset_elapsed_s = time.perf_counter() - dataset_start_s
+                            with self._timing_lock:
+                                self._deferred_total_s += deferred_elapsed_s
+                                self._deferred_max_s = max(
+                                    self._deferred_max_s, deferred_elapsed_s
+                                )
+                                self._dataset_total_s += dataset_elapsed_s
+                                self._dataset_max_s = max(
+                                    self._dataset_max_s, dataset_elapsed_s
+                                )
+                                self._timing_samples += 1
                         except BaseException as exc:
                             with self._error_lock:
                                 self._episode_error = exc
+                    continue
+                if request.operation == "flush":
+                    self.raise_if_failed()
                     continue
                 if request.operation == "clear":
                     try:
@@ -305,6 +410,312 @@ class AsyncLeRobotWriter:
                 self._queue.task_done()
 
 
+class AsyncEpisodeCapture:
+    """Capture feedback and sensors without blocking the DLS control loop.
+
+    The command loop only publishes small immutable snapshots.  This worker
+    performs robot feedback reads, synchronized camera/gripper selection,
+    canonicalization, and dataset enqueueing in order.  A bounded queue turns
+    sustained capture overload into an explicit rejected attempt instead of
+    silently adding latency to robot control.
+    """
+
+    def __init__(
+        self,
+        *,
+        real_env,
+        runtime,
+        dataset_writer: AsyncLeRobotWriter | None,
+        cameras: list[Any],
+        camera_names: list[str],
+        camera_width: int,
+        camera_height: int,
+        camera_stale_timeout_s: float,
+        grippers: FeetechGripperSampler | FeetechGripperPair | None,
+        gripper_stale_timeout_s: float,
+        max_sync_skew_s: float,
+        sensor_loss_timeout_s: float,
+        task: str,
+        audio_recorder: PicoAudioRecorder | None,
+        max_pending_captures: int = 2,
+    ) -> None:
+        self.real_env = real_env
+        self.runtime = runtime
+        self.dataset_writer = dataset_writer
+        self.cameras = cameras
+        self.camera_names = camera_names
+        self.camera_width = int(camera_width)
+        self.camera_height = int(camera_height)
+        self.camera_stale_timeout_s = float(camera_stale_timeout_s)
+        self.grippers = grippers
+        self.gripper_stale_timeout_s = float(gripper_stale_timeout_s)
+        self.max_sync_skew_s = float(max_sync_skew_s)
+        self.max_sync_skew_ns = int(max_sync_skew_s * 1e9)
+        self.health_gate = SustainedHealthGate(sensor_loss_timeout_s)
+        self.task = task
+        self.audio_recorder = audio_recorder
+        self._queue: queue.Queue[_DatasetRequest] = queue.Queue(
+            maxsize=max_pending_captures
+        )
+        self._error: BaseException | None = None
+        self._error_lock = threading.Lock()
+        self._data_lock = threading.Lock()
+        self._observations: list[np.ndarray] = []
+        self._commands: list[np.ndarray] = []
+        self._pending_dataset_frame: tuple[dict[str, Any], int, int] | None = None
+        self._timing_lock = threading.Lock()
+        self._timing = {
+            "samples": 0,
+            "queue_total": 0.0,
+            "queue_max": 0.0,
+            "capture_total": 0.0,
+            "capture_max": 0.0,
+            "robot_total": 0.0,
+            "robot_max": 0.0,
+            "camera_total": 0.0,
+            "camera_max": 0.0,
+            "gripper_total": 0.0,
+            "gripper_max": 0.0,
+            "build_total": 0.0,
+            "build_max": 0.0,
+        }
+        self._closed = False
+        self._thread = threading.Thread(
+            target=self._run,
+            name="handumi-episode-capture",
+            daemon=True,
+        )
+        self._thread.start()
+
+    @property
+    def pending_captures(self) -> int:
+        return self._queue.qsize()
+
+    @property
+    def captured_frames(self) -> int:
+        with self._data_lock:
+            return len(self._observations)
+
+    def submit(self, snapshot: _CaptureSnapshot) -> None:
+        self.raise_if_failed()
+        try:
+            self._queue.put_nowait(_DatasetRequest("capture", snapshot))
+        except queue.Full as exc:
+            error = DatasetWriteError(
+                "capture worker queue is full; capture cannot keep up with dataset FPS"
+            )
+            with self._error_lock:
+                self._error = error
+            raise error from exc
+
+    def finish(self) -> tuple[np.ndarray, np.ndarray, int]:
+        self._request("flush")
+        with self._data_lock:
+            if len(self._observations) < 2:
+                size = canonical_joint_layout(self.runtime).size
+                return (
+                    np.empty((0, size), dtype=np.float32),
+                    np.empty((0, size), dtype=np.float32),
+                    0,
+                )
+            states = np.asarray(self._observations[:-1], dtype=np.float32)
+            actions = np.asarray(self._commands[1:], dtype=np.float32)
+        return states, actions, len(states)
+
+    def timing_stats(self, *, reset: bool = False) -> CaptureTimingStats:
+        with self._timing_lock:
+            timing = dict(self._timing)
+            samples = int(timing["samples"])
+            divisor = max(samples, 1)
+            result = CaptureTimingStats(
+                samples=samples,
+                queue_delay_avg_ms=timing["queue_total"] / divisor * 1000.0,
+                queue_delay_max_ms=timing["queue_max"] * 1000.0,
+                capture_avg_ms=timing["capture_total"] / divisor * 1000.0,
+                capture_max_ms=timing["capture_max"] * 1000.0,
+                robot_read_avg_ms=timing["robot_total"] / divisor * 1000.0,
+                robot_read_max_ms=timing["robot_max"] * 1000.0,
+                cameras_avg_ms=timing["camera_total"] / divisor * 1000.0,
+                cameras_max_ms=timing["camera_max"] * 1000.0,
+                gripper_avg_ms=timing["gripper_total"] / divisor * 1000.0,
+                gripper_max_ms=timing["gripper_max"] * 1000.0,
+                frame_build_avg_ms=timing["build_total"] / divisor * 1000.0,
+                frame_build_max_ms=timing["build_max"] * 1000.0,
+            )
+            if reset:
+                for key in self._timing:
+                    self._timing[key] = 0
+            return result
+
+    def raise_if_failed(self) -> None:
+        with self._error_lock:
+            error = self._error
+        if error is not None:
+            raise error
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        request = _DatasetRequest("stop")
+        self._queue.put(request)
+        request.done.wait()
+        self._thread.join(timeout=2.0)
+
+    def _request(self, operation: str) -> None:
+        if self._closed:
+            raise DatasetWriteError("episode capture worker is closed")
+        request = _DatasetRequest(operation)
+        self._queue.put(request)
+        request.done.wait()
+        if request.error is not None:
+            raise request.error
+
+    def _run(self) -> None:
+        while True:
+            request = self._queue.get()
+            try:
+                if request.operation == "stop":
+                    return
+                if request.operation == "capture":
+                    with self._error_lock:
+                        error = self._error
+                    if error is None:
+                        try:
+                            self._capture(request.payload)
+                        except BaseException as exc:
+                            with self._error_lock:
+                                self._error = exc
+                    continue
+                if request.operation == "flush":
+                    self.raise_if_failed()
+                    continue
+                raise RuntimeError(
+                    f"Unknown episode capture operation: {request.operation}"
+                )
+            except BaseException as exc:
+                request.error = exc
+            finally:
+                request.done.set()
+                self._queue.task_done()
+
+    def _capture(self, snapshot: _CaptureSnapshot) -> None:
+        capture_start_s = time.perf_counter()
+        queue_delay_s = max(0.0, capture_start_s - snapshot.submitted_s)
+
+        robot_start_s = time.perf_counter()
+        observation_q = self.real_env.read(base_q=snapshot.base_q)
+        robot_s = time.perf_counter() - robot_start_s
+
+        camera_start_s = time.perf_counter()
+        camera_frame, camera_health = read_camera_samples(
+            self.cameras,
+            self.camera_names,
+            target_time_ns=snapshot.target_time_ns,
+            record_time_ns=snapshot.record_time_ns,
+            width=self.camera_width,
+            height=self.camera_height,
+            stale_timeout_s=self.camera_stale_timeout_s,
+            max_sync_skew_s=self.max_sync_skew_s,
+        )
+        camera_s = time.perf_counter() - camera_start_s
+
+        gripper_start_s = time.perf_counter()
+        gripper_frame = synchronized_gripper_frame(
+            self.grippers,
+            target_time_ns=snapshot.target_time_ns,
+            record_time_ns=snapshot.record_time_ns,
+            stale_timeout_s=self.gripper_stale_timeout_s,
+            max_sync_skew_s=self.max_sync_skew_s,
+        )
+        gripper_s = time.perf_counter() - gripper_start_s
+
+        tracking_sync_ok = bool(
+            snapshot.tracking_time_ns > 0
+            and abs(snapshot.tracking_time_ns - snapshot.target_time_ns)
+            <= self.max_sync_skew_ns
+        )
+        sensor_health = {
+            **camera_health,
+            "feetech": gripper_frame.healthy_for_gate,
+            "tracking": tracking_sync_ok,
+        }
+        _, timed_out_sensors = self.health_gate.update(
+            sensor_health, snapshot.record_time_ns
+        )
+        if timed_out_sensors:
+            names = ", ".join(sorted(timed_out_sensors))
+            raise SensorHealthError(f"Sensor health timed out: {names}")
+
+        build_start_s = time.perf_counter()
+        canonical_observation = canonicalize_command(
+            observation_q,
+            runtime=self.runtime,
+            openings={
+                "left": gripper_frame.widths.left_normalized,
+                "right": gripper_frame.widths.right_normalized,
+            },
+        )
+        canonical_action = canonicalize_command(
+            snapshot.action_q,
+            runtime=self.runtime,
+            openings=snapshot.openings,
+        )
+        if self.dataset_writer is not None and self._pending_dataset_frame is not None:
+            pending_frame, pending_target_ns, pending_record_ns = (
+                self._pending_dataset_frame
+            )
+            self.dataset_writer.add_frame(
+                _deferred_audio_frame(
+                    {
+                        **pending_frame,
+                        "action": canonical_action,
+                        "task": self.task,
+                    },
+                    audio_recorder=self.audio_recorder,
+                    target_time_ns=pending_target_ns,
+                    record_time_ns=pending_record_ns,
+                    stale_timeout_s=self.camera_stale_timeout_s,
+                    max_sync_skew_s=self.max_sync_skew_s,
+                )
+            )
+        self._pending_dataset_frame = (
+            {
+                **camera_frame,
+                "observation.state": canonical_observation,
+                **_gripper_width_frame(gripper_frame.widths),
+                **gripper_frame.frame,
+                **capture_timing_frame(
+                    snapshot.target_time_ns, snapshot.record_time_ns
+                ),
+                "calibration_id": np.array([-1], dtype=np.int64),
+                "source_kind": np.array([1], dtype=np.int64),
+            },
+            snapshot.target_time_ns,
+            snapshot.record_time_ns,
+        )
+        with self._data_lock:
+            self._observations.append(canonical_observation)
+            self._commands.append(canonical_action)
+        build_s = time.perf_counter() - build_start_s
+        capture_s = time.perf_counter() - capture_start_s
+        with self._timing_lock:
+            timing = self._timing
+            timing["samples"] += 1
+            for prefix, elapsed_s in (
+                ("queue", queue_delay_s),
+                ("capture", capture_s),
+                ("robot", robot_s),
+                ("camera", camera_s),
+                ("gripper", gripper_s),
+                ("build", build_s),
+            ):
+                timing[f"{prefix}_total"] += elapsed_s
+                timing[f"{prefix}_max"] = max(
+                    timing[f"{prefix}_max"], elapsed_s
+                )
+
+
 def _log_episode_interface(
     episode: int,
     total: str,
@@ -324,9 +735,9 @@ def _log_episode_interface(
         "│ Episode %d/%s  •  %s\n"
         "│ Start: %s\n"
         "│ Start / save: double-squeeze RIGHT\n"
-        "│ Discard + home: double-squeeze LEFT\n"
+        "│ Reset same episode + home: double-squeeze LEFT\n"
         "│ Finish session: double-squeeze BOTH  •  Stop: Esc / Ctrl+C\n"
-        "│ After save/discard: wait for HOME, reset the task, then start again\n"
+        "│ After save/reset: wait for HOME, then start with RIGHT\n"
         "│ During REC: HandUMI gripper closed %.1f s parks that arm\n"
         "└────────────────────────────"
         "─────────────────────────────",
@@ -344,6 +755,13 @@ def _log_episode_interface(
 _BilateralClapArbiter = BilateralClapArbiter
 
 
+class _EpisodePhase(Enum):
+    """Operator-visible states for a single episode attempt."""
+
+    READY = "ready"
+    RECORDING = "recording"
+
+
 def _episode_gesture_action(
     gesture: str | None, *, recording: bool
 ) -> str | None:
@@ -353,8 +771,40 @@ def _episode_gesture_action(
     if gesture == "right":
         return "save" if recording else "start"
     if gesture == "left" and recording:
-        return "discard"
+        return "reset"
     return None
+
+
+def _deferred_audio_frame(
+    frame: dict[str, Any],
+    *,
+    audio_recorder: PicoAudioRecorder | None,
+    target_time_ns: int,
+    record_time_ns: int,
+    stale_timeout_s: float,
+    max_sync_skew_s: float,
+) -> Callable[[], dict[str, Any]]:
+    """Build audio alignment in the dataset thread, after packet look-ahead.
+
+    The PICO can deliver a PCM packet slightly after the video/control row it
+    covers.  Resolving it synchronously in the IK loop both adds avoidable work
+    and can falsely report a missing stream.  The writer naturally provides a
+    small look-ahead while preserving the original row timestamps.
+    """
+    frozen_frame = dict(frame)
+
+    def build() -> dict[str, Any]:
+        if audio_recorder is None:
+            return frozen_frame
+        audio_frame, _ = audio_recorder.synchronized_frame(
+            target_time_ns,
+            record_time_ns,
+            stale_timeout_s=stale_timeout_s,
+            max_sync_skew_s=max_sync_skew_s,
+        )
+        return {**frozen_frame, **audio_frame}
+
+    return build
 
 
 def build_features(
@@ -364,6 +814,7 @@ def build_features(
     use_videos: bool,
     joint_names: list[str] | tuple[str, ...],
     camera_specs: list[dict[str, object]] | None = None,
+    record_audio: bool = False,
 ) -> dict[str, Any]:
     img_dtype = "video" if use_videos else "image"
     features: dict[str, Any] = {}
@@ -385,6 +836,8 @@ def build_features(
     features.update(feetech_features())
     features.update(capture_timing_features())
     features.update(camera_health_features(cam_names))
+    if record_audio:
+        features.update(audio_features())
     features["calibration_id"] = {
         "dtype": "int64",
         "shape": (1,),
@@ -464,6 +917,7 @@ def _home_between_episodes(
     episode: int,
     episode_total: str,
     play_sounds: bool,
+    ready_after: bool = True,
 ) -> None:
     """Synchronously home the robot and leave every enabled arm inactive."""
     if dashboard is not None:
@@ -476,7 +930,12 @@ def _home_between_episodes(
     record_log.info("Returning enabled arms home before the next episode ...")
     log_say("returning home", play_sounds=play_sounds)
     command_stream.stop()
-    real_env.home(home_q)
+    # ``home()`` is the one-time hardware/streamer initialization performed
+    # during startup.  Calling it again here would create a second backend
+    # command streamer while the original one can still be publishing the
+    # previous episode, making the two streams fight over the robot.  Reuse
+    # the initialized streamer for every episode transition instead.
+    real_env.move_home(home_q)
     reset_q = controller.reset()
     joint_filter.reset(reset_q)
     home_standby.enter_standby(enabled_sides)
@@ -489,13 +948,22 @@ def _home_between_episodes(
         active=True,
         new_epoch=True,
     )
-    record_log.info("Robot is at home; reset the task and double-squeeze RIGHT.")
+    if ready_after:
+        record_log.info(
+            "Robot is at home; double-squeeze RIGHT when the task is ready."
+        )
+    else:
+        record_log.info("Robot is at home; recording session finished.")
     if dashboard is not None:
         dashboard.set_episode(
             episode,
             episode_total,
-            state="READY",
-            detail="Robot at home; reset the task, then double-squeeze RIGHT",
+            state="READY" if ready_after else "FINISHED",
+            detail=(
+                "Robot at home; double-squeeze RIGHT to start"
+                if ready_after
+                else "Robot at home; recording session finished"
+            ),
         )
 
 
@@ -511,7 +979,33 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--help-advanced", action="store_true", help="Show expert hardware options."
     )
     add_physical_teleop_arguments(p)
-    p.add_argument("--num-episodes", type=int, default=10)
+    p.add_argument(
+        "--ik-solver",
+        choices=("dls", "lm"),
+        default="dls",
+        help="IK follower; defaults to the same incremental DLS as teleop-real.",
+    )
+    p.add_argument(
+        "--control-fps",
+        type=float,
+        default=None,
+        help="Tracking/IK rate; default 72 for DLS and 30 for LM.",
+    )
+    # The dataset stays at --fps (normally 30), while the real-teleop control
+    # path gets its own cadence and interpolation delay.
+    p.set_defaults(trajectory_delay_ms=None)
+    p.add_argument(
+        "--num-episodes",
+        type=int,
+        default=0,
+        help="Episodes to save; 0 runs until double-squeeze BOTH.",
+    )
+    p.add_argument(
+        "--episode-time-s",
+        type=float,
+        default=0.0,
+        help="Auto-save active episodes after this duration; 0 waits for RIGHT.",
+    )
     p.add_argument("--task", type=str, default="HandUMI real teleop recording")
     p.add_argument(
         "--output-dir",
@@ -540,6 +1034,9 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
             "space_start",
             "no_sounds",
             "num_episodes",
+            "episode_time_s",
+            "ik_solver",
+            "control_fps",
             "task",
             "output_dir",
             "resume",
@@ -555,6 +1052,11 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.print_help()
         raise SystemExit(0)
     args = p.parse_args(raw_argv)
+    args.control_fps, args.trajectory_delay_ms = resolve_real_teleop_timing(
+        args.ik_solver,
+        input_rate_hz=args.control_fps,
+        trajectory_delay_ms=args.trajectory_delay_ms,
+    )
     _apply_recording_defaults(args)
     return args
 
@@ -570,7 +1072,7 @@ def _apply_recording_defaults(args: argparse.Namespace) -> None:
     args.sensor_loss_timeout_s = SENSOR_LOSS_TIMEOUT_S
     # Match teleop-real: keep serial reads off the control loop and sample at
     # least at 100 Hz (or at the input rate when configured above 100 Hz).
-    args.feetech_sample_hz = max(100.0, float(args.fps))
+    args.feetech_sample_hz = max(100.0, float(args.control_fps))
     args.tracking_loss_timeout_s = TRACKING_LOSS_TIMEOUT_S
     args.camera_stale_timeout_s = CAMERA_STALE_TIMEOUT_S
     # PICO defaults to the same ADB transport used by the recording workflow,
@@ -584,6 +1086,10 @@ def _validate_record_args(args: argparse.Namespace) -> None:
     validate_physical_teleop_args(args)
     if args.num_episodes < 0:
         raise SystemExit("--num-episodes must be >= 0.")
+    if args.episode_time_s < 0.0:
+        raise SystemExit("--episode-time-s must be >= 0.")
+    if args.control_fps <= 0.0:
+        raise SystemExit("--control-fps must be > 0.")
     if args.record_audio and args.device != "pico":
         raise SystemExit("--record-audio currently requires --device pico.")
     for name in (
@@ -658,6 +1164,8 @@ def record_episode(
     tracking_loss_timeout_s: float,
     tracking_stale_ms: float,
     command_stream: TeleopCommandStream,
+    control_fps: float | None = None,
+    episode_time_s: float = 0.0,
     park_hold_s: float = GRIPPER_PARK_HOLD_S,
     park_max_joint_speed_deg_s: float = DEFAULT_PARK_MAX_JOINT_SPEED_DEG_S,
     joint_filter: AdaptiveJointFilter | None = None,
@@ -673,15 +1181,17 @@ def record_episode(
     audio_recorder: PicoAudioRecorder | None = None,
     dashboard: _RecordingDashboard | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, str, np.ndarray]:
-    loop_timer = TeleopLoopTimer(fps)
+    resolved_control_fps = float(fps if control_fps is None else control_fps)
+    loop_timer = TeleopLoopTimer(resolved_control_fps)
+    capture_interval_s = 1.0 / float(fps)
+    next_capture_s: float | None = None
     n_frames = 0
-    start_t: float | None = None
+    phase = _EpisodePhase.READY
+    recording_started_s: float | None = None
     episode_start_ns: int | None = None
-    status = "recorded"
+    status = "interrupted"
     del initial_start_sides
     tracking_recovery = TrackingRecoveryPolicy()
-    health_gate = SustainedHealthGate(sensor_loss_timeout_s)
-    max_sync_skew_ns = int(max_sync_skew_s * 1e9)
     sync_lag_ns = int(sync_lag_s * 1e9)
     q = controller.q.copy()
     if joint_filter is None:
@@ -698,15 +1208,17 @@ def record_episode(
                 if index not in finger_indices
             )
         )
-        joint_filter = TeleopMotionConfig(input_rate_hz=float(fps)).make_joint_filter(
-            filtered_indices=indices
-        )
+        joint_filter = TeleopMotionConfig(
+            input_rate_hz=resolved_control_fps
+        ).make_joint_filter(filtered_indices=indices)
     joint_filter.reset(q)
     teleop_session = TeleopSession(controller, joint_filter)
     if home_standby is None:
         home_standby = GripperHomeStandby(initial_standby=True)
-    observations: list[np.ndarray] = []
-    commands: list[np.ndarray] = []
+    joint_diagnostics = JointMotionDiagnostics(
+        runtime.joint_names,
+        tuple(joint_filter.filtered_indices or ()),
+    )
     last_processed_tracking_time_ns: int | None = None
     timing_next_log_s = time.perf_counter() + 5.0
     timing_ik_total_s = 0.0
@@ -714,18 +1226,47 @@ def record_episode(
     timing_ik_samples = 0
     timing_tracking_age_max_s = 0.0
     timing_discarded_ik = 0
-    pending_dataset_frame: dict[str, Any] | None = None
+    timing_playback_counts = (0, 0, 0)
     cameras = cameras or []
     camera_names = camera_names or []
+    capture_worker = AsyncEpisodeCapture(
+        real_env=real_env,
+        runtime=runtime,
+        dataset_writer=dataset_writer,
+        cameras=cameras,
+        camera_names=camera_names,
+        camera_width=camera_width,
+        camera_height=camera_height,
+        camera_stale_timeout_s=camera_stale_timeout_s,
+        grippers=grippers,
+        gripper_stale_timeout_s=gripper_stale_timeout_s,
+        max_sync_skew_s=max_sync_skew_s,
+        sensor_loss_timeout_s=sensor_loss_timeout_s,
+        task=task,
+        audio_recorder=audio_recorder,
+    )
+    timing_window_start_s = time.perf_counter()
+    timing_control_max_s = 0.0
 
     while True:
         loop_start, _ = loop_timer.tick()
         record_time_ns = time.monotonic_ns()
 
+        try:
+            capture_worker.raise_if_failed()
+        except SensorHealthError as exc:
+            status = "sensor_unhealthy"
+            record_log.error("%s; discarding this attempt.", exc)
+            break
+        except (DatasetWriteError, StreamingEncodingError) as exc:
+            status = "dataset_unhealthy"
+            record_log.error(
+                "Asynchronous capture failed; discarding this attempt: %s", exc
+            )
+            break
+
         if stop_event.is_set():
             status = "interrupted"
-            observations.clear()
-            commands.clear()
             break
 
         tracking_snapshot = tracking_sampler.latest()
@@ -794,7 +1335,7 @@ def record_episode(
                     new_epoch=True,
                 )
                 record_log.warning(
-                    "Tracking lost%s; robot command held and episode discarded.",
+                    "Tracking lost%s; robot command held and this attempt will reset.",
                     (
                         f" (sample age {tracking_age_s * 1000.0:.0f} ms)"
                         if tracking_stale
@@ -807,8 +1348,6 @@ def record_episode(
                 and tracking_recovery.lost_for(loop_start) >= tracking_loss_timeout_s
             ):
                 status = "tracking_lost"
-                observations.clear()
-                commands.clear()
                 break
             recover = getattr(tracker, "recover", None)
             if callable(recover) and tracking_recovery.should_recover(loop_start):
@@ -832,16 +1371,22 @@ def record_episode(
             )
         start_sides: tuple[str, ...] = ()
         if space_listener.consume_space():
-            if start_t is None:
+            if phase is _EpisodePhase.READY:
                 # With no HandUMI grippers, Space is the explicit arm-start
                 # fallback.  Otherwise it starts recording only; opening each
                 # gripper remains responsible for waking its parked arm.
                 if grippers is None:
                     start_sides = controller.idle_sides()
-                start_t = loop_start
+                phase = _EpisodePhase.RECORDING
+                recording_started_s = loop_start
+                next_capture_s = loop_start
                 episode_start_ns = record_time_ns
                 if audio_recorder is not None:
-                    audio_recorder.begin_episode()
+                    audio_recorder.begin_episode(episode_start_ns)
+                # Space may follow a partial squeeze made while waiting.  Do
+                # not let it turn into an episode action after this boundary.
+                clap_detector.reset()
+                clap_arbiter.reset()
                 home_standby.reset_close_timers()
                 command_stream.clear_joint_rate_limits(
                     tuple(joint_filter.filtered_indices or ())
@@ -851,22 +1396,41 @@ def record_episode(
                     dashboard.recording()
                 log_say("recording episode", play_sounds=play_sounds)
         clap_gesture = clap_arbiter.update(
-            clap_detector, immediate_widths.left_mm, immediate_widths.right_mm, loop_start
+            clap_detector,
+            immediate_widths.left_mm,
+            immediate_widths.right_mm,
+            loop_start,
         )
+        if clap_detector.last_clap_edges:
+            record_log.info(
+                "Clap edge registered: %s (left=%.1f mm, right=%.1f mm).",
+                "/".join(clap_detector.last_clap_edges),
+                immediate_widths.left_mm,
+                immediate_widths.right_mm,
+            )
         gesture_action = _episode_gesture_action(
-            clap_gesture, recording=start_t is not None
+            clap_gesture, recording=phase is _EpisodePhase.RECORDING
         )
         if clap_gesture is not None:
             record_log.info(
-                "Resolved double clap: %s%s.",
+                "Resolved double clap: %s%s (left=%.1f mm, right=%.1f mm).",
                 clap_gesture,
-                " (episode not recording)" if start_t is None else "",
+                " (episode ready)" if phase is _EpisodePhase.READY else "",
+                immediate_widths.left_mm,
+                immediate_widths.right_mm,
             )
         if gesture_action == "start":
-            start_t = loop_start
+            phase = _EpisodePhase.RECORDING
+            recording_started_s = loop_start
+            next_capture_s = loop_start
             episode_start_ns = record_time_ns
             if audio_recorder is not None:
-                audio_recorder.begin_episode()
+                audio_recorder.begin_episode(episode_start_ns)
+            # A completed start gesture and any partial gesture on the other
+            # side belong to READY, never to the new episode.  Both hands must
+            # reopen before a save/reset gesture can begin.
+            clap_detector.reset()
+            clap_arbiter.reset()
             # The episode gesture must not wake an arm.  The triggering right
             # gripper normally ends closed, so it stays at home until the
             # operator reopens it; other open grippers wake via standby.update.
@@ -884,24 +1448,44 @@ def record_episode(
                 dashboard.recording()
             log_say("recording episode", play_sounds=play_sounds)
         elif gesture_action == "save":
-            status = "recorded"
+            status = "saved"
             break
-        elif gesture_action == "discard":
-            status = "discarded"
-            observations.clear()
-            commands.clear()
+        elif gesture_action == "reset":
+            status = "reset"
             break
         elif gesture_action == "finish":
             status = "session_finished"
-            observations.clear()
-            commands.clear()
+            break
+
+        if (
+            phase is _EpisodePhase.RECORDING
+            and episode_time_s > 0.0
+            and recording_started_s is not None
+            and loop_start - recording_started_s >= episode_time_s
+        ):
+            status = "saved"
+            record_log.info(
+                "Episode %d reached %.1f s; saving automatically.",
+                episode_number,
+                episode_time_s,
+            )
             break
 
         inputs = teleop_session.inputs(sample, immediate_widths)
+        if phase is _EpisodePhase.READY:
+            # READY is deliberately not teleoperation: before RIGHT starts the
+            # attempt there is no feedback read, IK, anchoring, or capture.
+            # The home stream may mirror gripper openings, but both arms stay
+            # fixed and inactive.
+            command_stream.update_openings(inputs.openings)
+            real_env.check_health()
+            loop_timer.sleep(loop_start)
+            continue
+
         # During recording, the physical HandUMI gripper is the single source
         # for both close-to-park and reopen-to-wake transitions.  This avoids
         # stale robot feedback parking an arm while the operator holds it open.
-        if grippers is not None and start_t is not None:
+        if grippers is not None:
             park_sides, wake_sides = home_standby.update(
                 inputs.openings,
                 loop_start,
@@ -954,9 +1538,24 @@ def record_episode(
             loop_timer.sleep(loop_start)
             continue
 
-        observation_q = real_env.read(base_q=q)
+        capture_this_step = bool(
+            next_capture_s is None or loop_start >= next_capture_s
+        )
+        capture_base_q = q.copy()
         controller_q_before_ik = controller.q.copy()
         filter_before_ik = teleop_session.snapshot_filter()
+        set_solver_timestep = getattr(controller.solver, "set_timestep", None)
+        if callable(set_solver_timestep):
+            source_dt_s = (
+                1.0 / resolved_control_fps
+                if last_processed_tracking_time_ns is None
+                else (
+                    tracking_snapshot.source_time_ns
+                    - last_processed_tracking_time_ns
+                )
+                / 1e9
+            )
+            set_solver_timestep(source_dt_s)
         ik_start_s = time.perf_counter()
         teleop_frame = teleop_session.advance(
             inputs,
@@ -987,6 +1586,7 @@ def record_episode(
             )
 
         action_q = teleop_frame.q
+        joint_diagnostics.observe(teleop_frame.step.q, action_q)
         command_stream.submit(
             action_q,
             teleop_frame.inputs.openings,
@@ -1002,23 +1602,50 @@ def record_episode(
         q = action_q
 
         timing_now_s = time.perf_counter()
+        timing_control_max_s = max(timing_control_max_s, timing_now_s - loop_start)
         if command_stream.running and timing_now_s >= timing_next_log_s:
             output_stats = command_stream.stats()
+            playback_counts = (
+                output_stats.interpolated_commands,
+                output_stats.extrapolated_commands,
+                output_stats.held_commands,
+            )
+            playback_window = tuple(
+                max(0, current - previous)
+                for current, previous in zip(
+                    playback_counts,
+                    timing_playback_counts,
+                    strict=True,
+                )
+            )
             # Wall-clock time since the episode started (real time elapsed),
             # as opposed to the effective data time below, which is derived
             # from frames actually captured and can fall behind if frames are
             # ever missed or discarded.
-            episode_elapsed_s = max(0, int(timing_now_s - (start_t or timing_now_s)))
+            episode_elapsed_s = max(
+                0,
+                int(timing_now_s - (recording_started_s or timing_now_s)),
+            )
+            n_frames = capture_worker.captured_frames
             episode_data_s = max(0, int(n_frames / fps))
             queued_frames = (
                 dataset_writer.pending_frames if dataset_writer is not None else 0
             )
+            capture_timing = capture_worker.timing_stats(reset=True)
+            writer_timing = (
+                dataset_writer.timing_stats(reset=True)
+                if dataset_writer is not None
+                else (0.0, 0.0, 0.0, 0.0)
+            )
             record_log.info(
                 "%s | episode %d/%s | elapsed %02d:%02d | data %02d:%02d | %d frames | "
                 "writer_queue=%d | output=%.1f Hz, missed=%d, "
-                "tracking_age_max=%.0f ms, IK_avg/max=%.1f/%.1f ms, "
-                "backend_write_max=%.1f ms, stale_IK_discarded=%d.",
-                "● REC" if start_t is not None else "○ READY",
+                "tracking_age_max=%.0f ms, control_max=%.1f ms, "
+                "IK_rate=%.1f Hz, IK_avg/max=%.1f/%.1f ms, "
+                "backend_write_max=%.1f ms, output_lateness_max=%.1f ms, "
+                "target_age=%.0f ms, playback(i/x/h)=%d/%d/%d, "
+                "stale_IK_discarded=%d; %s.",
+                "● REC",
                 episode_number,
                 episode_total,
                 episode_elapsed_s // 60,
@@ -1030,6 +1657,9 @@ def record_episode(
                 output_stats.effective_rate_hz,
                 output_stats.missed_deadlines,
                 timing_tracking_age_max_s * 1000.0,
+                timing_control_max_s * 1000.0,
+                timing_ik_samples
+                / max(timing_now_s - timing_window_start_s, 1e-6),
                 (
                     timing_ik_total_s / timing_ik_samples * 1000.0
                     if timing_ik_samples
@@ -1037,14 +1667,47 @@ def record_episode(
                 ),
                 timing_ik_max_s * 1000.0,
                 output_stats.max_write_ms,
+                output_stats.max_lateness_ms,
+                output_stats.latest_target_age_ms,
+                *playback_window,
                 timing_discarded_ik,
+                joint_diagnostics.summary(),
+            )
+            record_log.info(
+                "Recording worker: samples=%d queue=%d, "
+                "queue_delay_avg/max=%.1f/%.1f ms, "
+                "capture_avg/max=%.1f/%.1f ms, robot_read_avg/max=%.1f/%.1f ms, "
+                "cameras_avg/max=%.1f/%.1f ms, gripper_avg/max=%.1f/%.1f ms, "
+                "frame_build_avg/max=%.1f/%.1f ms, "
+                "audio_deferred_avg/max=%.1f/%.1f ms, "
+                "lerobot_add_avg/max=%.1f/%.1f ms, writer_queue=%d.",
+                capture_timing.samples,
+                capture_worker.pending_captures,
+                capture_timing.queue_delay_avg_ms,
+                capture_timing.queue_delay_max_ms,
+                capture_timing.capture_avg_ms,
+                capture_timing.capture_max_ms,
+                capture_timing.robot_read_avg_ms,
+                capture_timing.robot_read_max_ms,
+                capture_timing.cameras_avg_ms,
+                capture_timing.cameras_max_ms,
+                capture_timing.gripper_avg_ms,
+                capture_timing.gripper_max_ms,
+                capture_timing.frame_build_avg_ms,
+                capture_timing.frame_build_max_ms,
+                *writer_timing,
+                queued_frames,
             )
             timing_next_log_s = timing_now_s + 5.0
+            timing_window_start_s = timing_now_s
             timing_ik_total_s = 0.0
             timing_ik_max_s = 0.0
             timing_ik_samples = 0
             timing_tracking_age_max_s = 0.0
             timing_discarded_ik = 0
+            timing_playback_counts = playback_counts
+            joint_diagnostics.reset()
+            timing_control_max_s = 0.0
 
         played_command = command_stream.latest()
         if played_command is None:
@@ -1053,107 +1716,61 @@ def record_episode(
         else:
             played_action_q, played_openings = played_command
 
-        if start_t is None:
+        if not capture_this_step:
             loop_timer.sleep(loop_start)
             continue
-
         assert episode_start_ns is not None
+        if next_capture_s is None:
+            next_capture_s = loop_start
+        missed_capture_slots = max(
+            0,
+            int((loop_start - next_capture_s) // capture_interval_s),
+        )
+        next_capture_s += (missed_capture_slots + 1) * capture_interval_s
         target_time_ns = max(episode_start_ns, record_time_ns - sync_lag_ns)
-        camera_frame, camera_health = read_camera_samples(
-            cameras,
-            camera_names,
-            target_time_ns=target_time_ns,
-            record_time_ns=record_time_ns,
-            width=camera_width,
-            height=camera_height,
-            stale_timeout_s=camera_stale_timeout_s,
-            max_sync_skew_s=max_sync_skew_s,
-        )
-        gripper_frame = synchronized_gripper_frame(
-            grippers,
-            target_time_ns=target_time_ns,
-            record_time_ns=record_time_ns,
-            stale_timeout_s=gripper_stale_timeout_s,
-            max_sync_skew_s=max_sync_skew_s,
-        )
         tracking_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
-        tracking_sync_ok = bool(
-            tracking_time_ns > 0
-            and abs(tracking_time_ns - target_time_ns) <= max_sync_skew_ns
-        )
-        sensor_health = {
-            **camera_health,
-            "feetech": gripper_frame.healthy_for_gate,
-            "tracking": tracking_sync_ok,
-        }
-        _, timed_out_sensors = health_gate.update(sensor_health, record_time_ns)
-        if timed_out_sensors:
-            status = "sensor_unhealthy"
-            record_log.error(
-                "Sensor health timed out: %s.",
-                ", ".join(sorted(timed_out_sensors)),
+        try:
+            capture_worker.submit(
+                _CaptureSnapshot(
+                    base_q=capture_base_q,
+                    action_q=np.asarray(played_action_q, dtype=np.float32).copy(),
+                    openings=dict(played_openings),
+                    target_time_ns=target_time_ns,
+                    record_time_ns=record_time_ns,
+                    tracking_time_ns=tracking_time_ns,
+                    submitted_s=time.perf_counter(),
+                )
             )
-            observations.clear()
-            commands.clear()
+        except DatasetWriteError as exc:
+            status = "dataset_unhealthy"
+            record_log.error("%s; discarding this attempt.", exc)
             break
-
-        canonical_observation = canonicalize_command(
-            observation_q,
-            runtime=runtime,
-            openings={
-                "left": gripper_frame.widths.left_normalized,
-                "right": gripper_frame.widths.right_normalized,
-            },
-        )
-        canonical_action = canonicalize_command(
-            played_action_q,
-            runtime=runtime,
-            openings=played_openings,
-        )
-        if dataset_writer is not None and pending_dataset_frame is not None:
-            try:
-                dataset_writer.add_frame(
-                    {
-                        **pending_dataset_frame,
-                        "action": canonical_action,
-                        "task": task,
-                    }
-                )
-            except (DatasetWriteError, StreamingEncodingError) as exc:
-                status = "dataset_unhealthy"
-                record_log.error(
-                    "Dataset frame writer failed; discarding episode: %s", exc
-                )
-                observations.clear()
-                commands.clear()
-                break
-        pending_dataset_frame = {
-            **camera_frame,
-            "observation.state": canonical_observation,
-            **_gripper_width_frame(gripper_frame.widths),
-            **gripper_frame.frame,
-            **capture_timing_frame(target_time_ns, record_time_ns),
-            "calibration_id": np.array([-1], dtype=np.int64),
-            "source_kind": np.array([1], dtype=np.int64),
-        }
-        observations.append(canonical_observation)
-        commands.append(canonical_action)
-        n_frames += 1
+        n_frames = capture_worker.captured_frames
         if dashboard is not None:
             dashboard.update_frames(n_frames)
         loop_timer.sleep(loop_start)
 
-    if len(observations) < 2:
-        return (
-            np.empty((0, canonical_joint_layout(runtime).size), dtype=np.float32),
-            np.empty((0, canonical_joint_layout(runtime).size), dtype=np.float32),
-            n_frames,
-            status,
-            q,
-        )
-    states = np.asarray(observations[:-1], dtype=np.float32)
-    actions = np.asarray(commands[1:], dtype=np.float32)
-    return states, actions, len(states), status, q
+    try:
+        states, actions, n_frames = capture_worker.finish()
+    except SensorHealthError as exc:
+        if status == "saved":
+            status = "sensor_unhealthy"
+        record_log.error("Asynchronous capture did not finish cleanly: %s", exc)
+        size = canonical_joint_layout(runtime).size
+        states = np.empty((0, size), dtype=np.float32)
+        actions = np.empty((0, size), dtype=np.float32)
+        n_frames = capture_worker.captured_frames
+    except (DatasetWriteError, StreamingEncodingError) as exc:
+        if status == "saved":
+            status = "dataset_unhealthy"
+        record_log.error("Asynchronous capture did not finish cleanly: %s", exc)
+        size = canonical_joint_layout(runtime).size
+        states = np.empty((0, size), dtype=np.float32)
+        actions = np.empty((0, size), dtype=np.float32)
+        n_frames = capture_worker.captured_frames
+    finally:
+        capture_worker.close()
+    return states, actions, n_frames, status, q
 
 
 def _run_record() -> None:
@@ -1171,7 +1788,15 @@ def _run_record() -> None:
         dataset_records_audio = bool(
             isinstance(audio, dict) and audio.get("enabled")
         )
-        if args.record_audio is not None and bool(args.record_audio) != dataset_records_audio:
+        if dataset_records_audio and not bool(audio.get("frame_aligned")):
+            raise SystemExit(
+                "Cannot resume this legacy audio dataset: it has episode-level "
+                "WAV files but no frame-aligned audio timing features."
+            )
+        if (
+            args.record_audio is not None
+            and bool(args.record_audio) != dataset_records_audio
+        ):
             raise SystemExit(
                 "Cannot resume with a different audio setting; this dataset has "
                 f"audio {'enabled' if dataset_records_audio else 'disabled'}."
@@ -1183,7 +1808,7 @@ def _run_record() -> None:
     play_sounds = not args.no_sounds
     stop_event = threading.Event()
 
-    record_log.info("Loading %s IK solver.", args.robot)
+    record_log.info("Loading %s robot kinematics.", args.robot)
     runtime = load_embodiment(args.robot)
     import jax
 
@@ -1201,6 +1826,26 @@ def _run_record() -> None:
         enabled_sides=enabled_sides,
         source_world_to_robot_world=_tracking_world_map(args.device),
         translation_scale=args.translation_scale,
+    )
+    if args.ik_solver == "dls":
+        controller.solver = make_real_teleop_dls_solver(
+            runtime,
+            controller.solver,
+            home_q,
+            input_rate_hz=float(args.control_fps),
+        )
+        for side in enabled_sides:
+            limits = controller.solver.side_joint_speed_limits_rad_s[side]
+            record_log.info(
+                "DLS %s joint-speed limits: %.1f..%.1f deg/s.",
+                side,
+                float(np.rad2deg(np.min(limits))),
+                float(np.rad2deg(np.max(limits))),
+            )
+    record_log.info(
+        "Warming %s IK solver at %.1f Hz before touching hardware.",
+        args.ik_solver.upper(),
+        args.control_fps,
     )
     controller.warmup()
     _validate_feetech_ready(args)
@@ -1226,8 +1871,12 @@ def _run_record() -> None:
     dataset_writer: AsyncLeRobotWriter | None = None
     audio_recorder: PicoAudioRecorder | None = None
     dashboard: _RecordingDashboard | None = None
+    dataset_log_handler: logging.FileHandler | None = None
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
-    motion_config = TeleopMotionConfig.from_args(args)
+    motion_config = TeleopMotionConfig.from_args(
+        args,
+        input_rate_hz=args.control_fps,
+    )
     finger_indices = {
         finger.index
         for fingers in (runtime.finger_joints or {}).values()
@@ -1344,9 +1993,13 @@ def _run_record() -> None:
             "until their HandUMI gripper opens."
         )
         record_log.info(
-            "Joint trajectory playback: %.1f Hz, %.0f ms delay, "
+            "Control pipeline: %s at %.1f Hz; dataset capture %.1f FPS; "
+            "trajectory playback %.1f Hz, %.1f ms delay, "
             "%.0f ms max bridge, %.0f ms EMA; adaptive IK filter "
             "cutoff=%.1f Hz + %.1f*|dq/dt|.",
+            args.ik_solver.upper(),
+            args.control_fps,
+            args.fps,
             args.command_rate_hz,
             args.trajectory_delay_ms,
             args.max_extrapolation_ms,
@@ -1367,6 +2020,7 @@ def _run_record() -> None:
             use_videos,
             layout.names,
             camera_specs=camera_specs,
+            record_audio=bool(args.record_audio),
         )
         encoder_selection = None
         dataset_vcodec = _SOFTWARE_VIDEO_CODEC
@@ -1430,11 +2084,66 @@ def _run_record() -> None:
             )
             audio_recorder.start()
         existing_episodes = int(dataset.num_episodes)
+        diagnostics_dir = Path(dataset.root) / "logs"
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        diagnostics_path = diagnostics_dir / "teleop_record.log"
+        dataset_log_handler = logging.FileHandler(
+            diagnostics_path,
+            mode="a",
+            encoding="utf-8",
+        )
+        dataset_log_handler.setFormatter(
+            logging.Formatter(
+                "[%(asctime)s] %(levelname)s %(name)s - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        logging.getLogger().addHandler(dataset_log_handler)
         record_log.info("Recording LeRobot dataset at: %s", dataset.root)
+        record_log.info(
+            "Persistent diagnostics: %s | solver=%s control=%.1f Hz "
+            "capture=%.1f FPS cameras=%s audio=%s.",
+            diagnostics_path,
+            args.ik_solver,
+            args.control_fps,
+            args.fps,
+            ",".join(camera_names) or "none",
+            bool(args.record_audio),
+        )
+        record_log.info(
+            "Timing targets: control_max < %.1f ms, IK_rate near %.1f Hz, "
+            "capture queue_delay < %.1f ms, writer/capture queues normally 0, "
+            "stale_IK_discarded and missed deadlines near 0.",
+            1000.0 / args.control_fps,
+            args.control_fps,
+            1000.0 / args.fps,
+        )
 
         start_control = "Double-squeeze RIGHT"
         if args.space_start:
             start_control += " / SPACE"
+        episode_controls = [
+            (start_control, "Start from home"),
+            ("Double-squeeze RIGHT while REC", "Save and return home"),
+            ("Double-squeeze LEFT while REC", "Reset same episode and home"),
+            (
+                "Double-squeeze BOTH",
+                "Discard active attempt and end the session",
+            ),
+            ("Esc / Ctrl+C", "Discard current episode and stop"),
+            (
+                f"HandUMI gripper closed {args.gripper_park_hold_s:.1f}s",
+                "Park that arm at home",
+            ),
+        ]
+        if args.episode_time_s > 0.0:
+            episode_controls.insert(
+                2,
+                (
+                    f"{args.episode_time_s:.1f}s while REC",
+                    "Auto-save and return home",
+                ),
+            )
         dashboard = _RecordingDashboard(
             task=args.task,
             dataset=str(dataset.root),
@@ -1442,17 +2151,7 @@ def _run_record() -> None:
             existing_episodes=existing_episodes,
             existing_frames=int(getattr(dataset, "num_frames", 0)),
             started_at_s=program_start_s,
-            controls=(
-                (start_control, "Start from home"),
-                ("Double-squeeze RIGHT while REC", "Save and return home"),
-                ("Double-squeeze LEFT while REC", "Discard and return home"),
-                ("Double-squeeze BOTH", "Discard current episode and finish"),
-                ("Esc / Ctrl+C", "Discard current episode and stop"),
-                (
-                    f"HandUMI gripper closed {args.gripper_park_hold_s:.1f}s",
-                    "Park that arm at home",
-                ),
-            ),
+            controls=tuple(episode_controls),
         )
         dashboard.start()
 
@@ -1463,7 +2162,12 @@ def _run_record() -> None:
             initial_standby=True,
         )
 
-        def home_for_next_episode(episode: int, episode_total: str) -> None:
+        def home_for_next_episode(
+            episode: int,
+            episode_total: str,
+            *,
+            ready_after: bool = True,
+        ) -> None:
             _home_between_episodes(
                 real_env=real_env,
                 controller=controller,
@@ -1478,6 +2182,7 @@ def _run_record() -> None:
                 episode=episode,
                 episode_total=episode_total,
                 play_sounds=play_sounds,
+                ready_after=ready_after,
             )
 
         recorded = 0
@@ -1511,6 +2216,7 @@ def _run_record() -> None:
                 state="READY",
                 detail="Robot at home; double-squeeze RIGHT to start",
             )
+            log_say(f"Episode {ep_num} ready", play_sounds=play_sounds)
             if not args.space_start:
                 record_log.info(
                     "  Double-squeeze RIGHT to start episode %d from home ...",
@@ -1537,6 +2243,7 @@ def _run_record() -> None:
                     clap_detector=clap_detector,
                     clap_arbiter=clap_arbiter,
                     fps=args.fps,
+                    episode_time_s=args.episode_time_s,
                     task=args.task,
                     stop_event=stop_event,
                     play_sounds=play_sounds,
@@ -1548,6 +2255,7 @@ def _run_record() -> None:
                     tracking_loss_timeout_s=args.tracking_loss_timeout_s,
                     tracking_stale_ms=args.tracking_stale_ms,
                     command_stream=command_stream,
+                    control_fps=args.control_fps,
                     park_hold_s=args.gripper_park_hold_s,
                     park_max_joint_speed_deg_s=args.park_max_joint_speed_deg_s,
                     joint_filter=joint_filter,
@@ -1572,34 +2280,45 @@ def _run_record() -> None:
                     "Unexpected failure during episode %d; discarding it and stopping.",
                     ep_num,
                 )
+                dataset_writer.clear_episode()
                 if audio_recorder is not None:
                     audio_recorder.cancel_episode()
-                dataset_writer.clear_episode()
                 dashboard.discarded(0, f"unexpected error: {exc}")
                 log_say("Episode discarded", play_sounds=play_sounds)
                 stop_event.set()
                 break
             if status == "session_finished":
-                if audio_recorder is not None:
-                    audio_recorder.cancel_episode()
                 record_log.info(
                     "Bilateral double clap detected; finishing recording session."
                 )
                 dataset_writer.clear_episode()
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
                 dashboard.discarded(n_frames, "session finished")
                 log_say("Recording session finished", play_sounds=play_sounds)
                 if controller.active:
-                    home_for_next_episode(ep_num, ep_total)
+                    home_for_next_episode(
+                        ep_num,
+                        ep_total,
+                        ready_after=False,
+                    )
                 break
-            if status == "discarded":
-                if audio_recorder is not None:
-                    audio_recorder.cancel_episode()
+            if status == "reset":
                 record_log.warning(
-                    "Episode discarded by left double clap (%d frames).", n_frames
+                    "Resetting episode %d by left double clap (%d frames removed).",
+                    ep_num,
+                    n_frames,
                 )
                 dataset_writer.clear_episode()
-                dashboard.discarded(n_frames, "left double-squeeze")
-                log_say("Episode discarded", play_sounds=play_sounds)
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
+                dashboard.set_episode(
+                    ep_num,
+                    ep_total,
+                    state="RESETTING",
+                    detail="Left double-squeeze; returning both arms home",
+                )
+                log_say(f"Resetting episode {ep_num}", play_sounds=play_sounds)
                 home_for_next_episode(ep_num, ep_total)
                 continue
             if n_frames == 0 or status in {
@@ -1609,23 +2328,38 @@ def _run_record() -> None:
                 "encoder_unhealthy",
                 "interrupted",
             }:
-                if audio_recorder is not None:
-                    audio_recorder.cancel_episode()
                 record_log.warning(
-                    "Episode discarded (%s, %d frames).", status, n_frames
+                    "Episode %d attempt rejected (%s, %d frames); resetting it.",
+                    ep_num,
+                    status,
+                    n_frames,
                 )
                 dataset_writer.clear_episode()
-                dashboard.discarded(n_frames, status)
-                log_say("Episode discarded", play_sounds=play_sounds)
+                if audio_recorder is not None:
+                    audio_recorder.cancel_episode()
                 if status == "interrupted":
+                    dashboard.discarded(n_frames, status)
                     break
-                if status == "recorded":
-                    home_for_next_episode(ep_num, ep_total)
+                dashboard.set_episode(
+                    ep_num,
+                    ep_total,
+                    state="RESETTING",
+                    detail=f"Attempt rejected ({status}); returning home",
+                )
+                log_say(f"Resetting episode {ep_num}", play_sounds=play_sounds)
+                home_for_next_episode(ep_num, ep_total)
                 continue
+            if status != "saved":
+                raise RuntimeError(
+                    f"Unexpected episode terminal state before save: {status}"
+                )
             audio_path: Path | None = None
             try:
+                # Deferred audio alignment and all LeRobot frame additions must
+                # finish before the recorder snapshots its frame-target list.
+                dataset_writer.flush()
                 if audio_recorder is not None:
-                    audio_recorder.prepare_episode()
+                    audio_recorder.prepare_episode(expected_frames=n_frames)
                 audio_path = (
                     audio_recorder.commit_episode(
                         existing_episodes + recorded,
@@ -1642,8 +2376,13 @@ def _run_record() -> None:
                 dataset_writer.clear_episode()
                 if audio_recorder is not None:
                     audio_recorder.cancel_episode()
-                dashboard.discarded(n_frames, "commit failed")
-                log_say("Episode discarded", play_sounds=play_sounds)
+                dashboard.set_episode(
+                    ep_num,
+                    ep_total,
+                    state="RESETTING",
+                    detail="Save failed; returning home and retrying this episode",
+                )
+                log_say(f"Resetting episode {ep_num}", play_sounds=play_sounds)
                 home_for_next_episode(ep_num, ep_total)
                 continue
             recorded += 1
@@ -1653,7 +2392,15 @@ def _run_record() -> None:
                 f"Episode {ep_num} saved, {n_frames} frames",
                 play_sounds=play_sounds,
             )
-            home_for_next_episode(ep_num, ep_total)
+            has_next_episode = (
+                args.num_episodes <= 0 or recorded < args.num_episodes
+            )
+            next_episode = existing_episodes + recorded + 1
+            home_for_next_episode(
+                next_episode if has_next_episode else ep_num,
+                ep_total,
+                ready_after=has_next_episode,
+            )
 
         dataset_writer.finalize()
         from handumi.dataset import update_handumi_metadata
@@ -1662,7 +2409,11 @@ def _run_record() -> None:
             dataset.root,
             {
                 "recording_device": args.device,
+                "ik_solver": args.ik_solver,
+                "control_rate_hz": args.control_fps,
+                "diagnostics_log": "logs/teleop_record.log",
                 "audio": audio_metadata(bool(args.record_audio)),
+                "episode_time_s": args.episode_time_s,
                 "capture_schema": HANDUMI_CAPTURE_SCHEMA,
                 "state_layout": "yaml_arm_joints_plus_logical_gripper_width_m",
                 "state_semantics": "real_robot_joint_feedback",
@@ -1749,6 +2500,9 @@ def _run_record() -> None:
                 elif cameras:
                     disconnect_cameras(cameras)
                 log_say("Exiting", play_sounds=play_sounds, blocking=True)
+                if dataset_log_handler is not None:
+                    logging.getLogger().removeHandler(dataset_log_handler)
+                    dataset_log_handler.close()
 
 
 def _existing_episode_count(root: Path) -> int:
