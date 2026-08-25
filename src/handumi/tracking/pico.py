@@ -23,10 +23,13 @@ log = logging.getLogger("handumi.record")
 SERVICE_SCRIPT = "/opt/apps/roboticsservice/runService.sh"
 SERVICE_WAIT_S = 3.0
 
-# Port on which RoboticsServiceProcess accepts connections from the PICO app.
-# The PC service also exposes a local gRPC endpoint on 60061 for the Python SDK,
-# but 63901 is the port the PICO VR app dials into.
+# Ports on which RoboticsServiceProcess accepts connections from the PICO app.
+# Tracking/device state uses 63901, while microphone PCM uses the PC service's
+# independent audio socket on 63903. Both must be reversed for USB/ADB mode.
+# The corresponding local SDK endpoints are 60061 and 60063.
 PICO_SERVICE_PORT = 63901
+PICO_AUDIO_SERVICE_PORT = 63903
+PICO_SERVICE_PORTS = (PICO_SERVICE_PORT, PICO_AUDIO_SERVICE_PORT)
 
 MAX_MOTION_TRACKERS = 2
 
@@ -85,30 +88,46 @@ def verify_adb_connection(
 
 
 def setup_adb_reverse(*, runner=subprocess.run) -> bool:
-    """Set up ADB reverse port forwarding for PICO USB mode."""
-    log.info(f"Setting up ADB reverse tunnel for PICO port {PICO_SERVICE_PORT} ...")
-    try:
-        result = runner(
-            ["adb", "reverse", f"tcp:{PICO_SERVICE_PORT}", f"tcp:{PICO_SERVICE_PORT}"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            log.info(
-                f"ADB reverse tcp:{PICO_SERVICE_PORT} -> localhost:{PICO_SERVICE_PORT} OK. "
-                "Set PC-service IP to 127.0.0.1 in the PICO app."
+    """Set up tracking and audio ADB reverse tunnels for PICO USB mode."""
+    log.info(
+        "Setting up ADB reverse tunnels for PICO tracking (%d) and audio (%d) ...",
+        PICO_SERVICE_PORT,
+        PICO_AUDIO_SERVICE_PORT,
+    )
+    all_ok = True
+    for port in PICO_SERVICE_PORTS:
+        try:
+            result = runner(
+                ["adb", "reverse", f"tcp:{port}", f"tcp:{port}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
-            return True
+        except FileNotFoundError:
+            log.warning("'adb' not found - skipping reverse tunnel setup.")
+            return False
+        except subprocess.TimeoutExpired:
+            log.warning("ADB reverse tcp:%d timed out.", port)
+            all_ok = False
+            continue
+
+        if result.returncode == 0:
+            log.info("ADB reverse tcp:%d -> localhost:%d OK.", port, port)
         else:
             log.warning(
-                f"adb reverse returned non-zero ({result.returncode}): {result.stderr.strip()}"
+                "adb reverse tcp:%d returned non-zero (%d): %s",
+                port,
+                result.returncode,
+                result.stderr.strip(),
             )
-    except FileNotFoundError:
-        log.warning("'adb' not found - skipping reverse tunnel setup.")
-    except subprocess.TimeoutExpired:
-        log.warning("adb reverse timed out - skipping.")
-    return False
+            all_ok = False
+
+    if all_ok:
+        log.info(
+            "PICO tracking and audio tunnels ready. Set PC-service IP to "
+            "127.0.0.1 in the PICO app."
+        )
+    return all_ok
 
 
 def keep_pico_awake(*, runner=subprocess.run) -> bool:
@@ -151,7 +170,7 @@ def prepare_pico_adb_session(
     timeout_s: float = 15.0,
     runner=subprocess.run,
 ) -> bool:
-    """Validate USB ADB, configure reverse tunnel, and keep PICO awake."""
+    """Validate USB ADB, configure reverse tunnels, and keep PICO awake."""
     if not skip_adb_check:
         log.info("Checking ADB connection ...")
         if not verify_adb_connection(timeout_s=timeout_s, runner=runner):
@@ -545,12 +564,19 @@ class PicoTrackingProvider:
             lan_ip = guess_lan_ip()
             if lan_ip:
                 log.info(
-                    "PICO WiFi mode: set PC-service IP to %s and port %d.",
+                    "PICO WiFi mode: set PC-service IP to %s; tracking uses port "
+                    "%d and audio uses port %d.",
                     lan_ip,
                     PICO_SERVICE_PORT,
+                    PICO_AUDIO_SERVICE_PORT,
                 )
             else:
-                log.info("PICO WiFi mode: set PC-service IP to this computer and port %d.", PICO_SERVICE_PORT)
+                log.info(
+                    "PICO WiFi mode: set PC-service IP to this computer; tracking "
+                    "uses port %d and audio uses port %d.",
+                    PICO_SERVICE_PORT,
+                    PICO_AUDIO_SERVICE_PORT,
+                )
         else:
             log.info("ADB check skipped. Assuming XRoboToolkit can reach the PC service.")
 
@@ -565,12 +591,21 @@ class PicoTrackingProvider:
         log.warning("Trying to recover PICO tracking ...")
         self.stop()
         try:
-            if self.transport == "adb" and not self.skip_adb_check:
-                prepare_pico_adb_session(skip_adb_check=False, timeout_s=5.0)
+            if self.transport == "adb":
+                prepare_pico_adb_session(
+                    skip_adb_check=self.skip_adb_check,
+                    timeout_s=5.0,
+                )
             elif self.transport == "wifi":
                 lan_ip = guess_lan_ip()
                 if lan_ip:
-                    log.info("PICO WiFi mode: PC-service IP should be %s:%d.", lan_ip, PICO_SERVICE_PORT)
+                    log.info(
+                        "PICO WiFi mode: PC-service IP should be %s; tracking "
+                        "uses port %d and audio uses port %d.",
+                        lan_ip,
+                        PICO_SERVICE_PORT,
+                        PICO_AUDIO_SERVICE_PORT,
+                    )
             stop_xrt_service()
             launch_xrt_service()
             self.xrt = init_xrt()
