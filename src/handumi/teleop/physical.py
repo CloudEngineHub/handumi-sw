@@ -86,8 +86,8 @@ def add_physical_teleop_arguments(parser: argparse.ArgumentParser) -> None:
         type=_camera_list,
         default="left_wrist,right_wrist,workspace",
         help=(
-            "Comma-separated camera views shown in Rerun; defaults to "
-            "left_wrist,right_wrist."
+            "Comma-separated cameras to connect and capture; defaults to "
+            "left_wrist,right_wrist,workspace."
         ),
     )
     parser.add_argument("--cam-width", type=int, default=640)
@@ -97,7 +97,11 @@ def add_physical_teleop_arguments(parser: argparse.ArgumentParser) -> None:
         "--skip-cameras", action="store_true", help="Do not connect camera devices."
     )
     parser.add_argument(
-        "--no-rerun", action="store_true", help="Disable the live Rerun camera view."
+        "--no-rerun",
+        "--no-preview",
+        dest="no_rerun",
+        action="store_true",
+        help="Disable the live camera preview.",
     )
 
     parser.add_argument("--feetech-port", type=str, default=None)

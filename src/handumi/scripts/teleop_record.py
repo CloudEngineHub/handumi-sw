@@ -168,7 +168,7 @@ from handumi.teleop.trajectory import TeleopCommandStream
 from handumi.tracking.base import TrackingProvider
 from handumi.tracking.gestures import BilateralClapArbiter, DoubleClapDetector
 from handumi.utils.speech import log_say
-from handumi.visualize import LiveCameraViews, RerunCameraViewer
+from handumi.visualize import LiveCameraViews, OpenCVCameraViewer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1948,11 +1948,11 @@ def _run_record() -> None:
                 height=args.cam_height,
                 zero_non_laptop=False,
             )
-        if cameras and not args.no_rerun:
-            viewer = RerunCameraViewer(
-                camera_names,
-                application_id="handumi_teleop_record",
-            )
+        preview_camera_names = [
+            name for name in ("left_wrist", "right_wrist") if name in camera_names
+        ]
+        if cameras and preview_camera_names and not args.no_rerun:
+            viewer = OpenCVCameraViewer(preview_camera_names)
             viewer.start()
             camera_views = LiveCameraViews(
                 cameras=cameras,
@@ -1963,7 +1963,7 @@ def _run_record() -> None:
             )
             camera_worker = BestEffortPeriodicWorker(
                 camera_views.update,
-                rate_hz=args.cam_fps,
+                rate_hz=min(args.cam_fps, 15),
                 thread_name="handumi-record-camera-preview",
             )
             camera_worker.start()
