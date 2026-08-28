@@ -317,7 +317,13 @@ class _RecordingDashboard:
         return self._render()
 
     def _render(self):
-        assert Table is not None and Panel is not None and Group is not None
+        assert (
+            Table is not None
+            and Panel is not None
+            and Group is not None
+            and Text is not None
+            and Align is not None
+        )
         active_frames = self.current_frames if self.state == "RECORDING" else 0
         session_frames = self.saved_frames + active_frames
         dataset_frames = self.existing_frames + session_frames
@@ -989,10 +995,10 @@ def record_episode(
 
     # Clap/voice start episodes hands-free. Once recording, another stop
     # command saves the episode. --episode-time-s is an optional max duration.
-    timed = (
-        not manual_control
-        and episode_time_s is not None
-        and episode_time_s > 0
+    episode_deadline_s = (
+        episode_time_s
+        if not manual_control and episode_time_s is not None and episode_time_s > 0
+        else None
     )
     tracking_loss_timeout_ns = int(tracking_loss_timeout_s * 1e9)
     tracking_lost_since_ns: int | None = None
@@ -1011,7 +1017,7 @@ def record_episode(
             status = "interrupted"
             dataset.clear_episode_buffer()
             break
-        if timed and elapsed >= episode_time_s:
+        if episode_deadline_s is not None and elapsed >= episode_deadline_s:
             if (
                 tracking_lost_since_ns is not None
                 and tracking_now_ns - tracking_lost_since_ns >= tracking_loss_timeout_ns
