@@ -843,6 +843,19 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             cfg,
             max_joint_delta=runtime.config.replay_max_joint_delta,
         )
+    if runtime.config.replay_ik_weights:
+        cfg = replace(
+            cfg,
+            **{
+                f"{key}_weight": value
+                for key, value in runtime.config.replay_ik_weights.items()
+            },
+        )
+        overrides = ", ".join(
+            f"{key}={value:g}"
+            for key, value in sorted(runtime.config.replay_ik_weights.items())
+        )
+        print(f"[replay] ik_weights overridden for replay: {overrides}")
     q = runtime.config.home_q.astype(np.float32).copy()
     locked_joint_indices = _replay_locked_joint_indices(runtime, args)
     solver = runtime.solver_cls(

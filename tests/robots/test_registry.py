@@ -8,8 +8,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import yaml
 
-from handumi.robots.registry import available_robot_names, load_embodiment
+from handumi.robots.registry import (
+    CONFIG_DIR,
+    available_robot_names,
+    load_embodiment,
+)
 
 EMBODIMENTS = ("metal",)
 
@@ -137,6 +142,20 @@ def test_world_collision_cost_keeps_tcp_above_table(runtime) -> None:
     l_sol, r_sol = solver.fk_pose7(q)
     assert l_sol[2] > -0.005
     assert r_sol[2] > -0.005
+
+
+@pytest.mark.parametrize("name", ("piper", "metal"))
+def test_replay_ik_weights_never_leak_into_the_teleop_profile(name) -> None:
+    """Real backends must keep exactly the weights their own YAML declares."""
+    data = yaml.safe_load((CONFIG_DIR / f"{name}.yaml").read_text(encoding="utf-8"))
+    declared = data["ik_weights"]
+    rt = load_embodiment(name)
+    assert rt.config.ik_weights.ori_weight == pytest.approx(declared["ori"])
+    assert rt.config.ik_weights.rest_weight == pytest.approx(declared["rest"])
+    overrides = (data.get("replay") or {}).get("ik_weights") or {}
+    assert rt.config.replay_ik_weights == {
+        key: float(value) for key, value in overrides.items()
+    }
 
 
 def test_ik_converges_near_home(runtime) -> None:

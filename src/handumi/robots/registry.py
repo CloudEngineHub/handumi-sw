@@ -102,6 +102,10 @@ class RobotConfig:
     default_home_pose: str
     ik_weights: KinematicsConfig
     replay_max_joint_delta: float | None
+    # Offline replay-only IK weight overrides ("pos"/"ori"/"rest"). Teleop
+    # profiles are tuned for a human in the loop and may hold the arm near
+    # home harder than following a recorded trajectory allows.
+    replay_ik_weights: dict[str, float]
     replay_gripper_mode: str
     gripper_max_width_m: float
     controller_tcp_calibrations: dict[str, Path]
@@ -283,6 +287,17 @@ def load_robot_config(name: str) -> RobotConfig:
         raise ValueError(
             "replay.gripper_retarget must be 'normalized' or 'physical-width'."
         )
+    replay_weights_raw = replay.get("ik_weights") or {}
+    if not isinstance(replay_weights_raw, dict):
+        raise TypeError("replay.ik_weights must be a mapping.")
+    unknown = set(replay_weights_raw) - {"pos", "ori", "rest"}
+    if unknown:
+        raise ValueError(
+            f"replay.ik_weights only overrides pos/ori/rest, got {sorted(unknown)}."
+        )
+    replay_ik_weights = {
+        key: float(value) for key, value in replay_weights_raw.items()
+    }
     real = data.get("real") or {}
     urdf = _resolve_path(data["urdf"])
     pkg_root = _resolve_path(data["pkg_root"])
@@ -372,6 +387,7 @@ def load_robot_config(name: str) -> RobotConfig:
             if replay.get("max_joint_delta") is None
             else float(replay["max_joint_delta"])
         ),
+        replay_ik_weights=replay_ik_weights,
         replay_gripper_mode=replay_gripper_mode,
         real=RobotRealConfig(
             backend=(None if real.get("backend") is None else str(real["backend"])),

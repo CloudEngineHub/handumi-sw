@@ -97,6 +97,13 @@ replay:
   max_joint_delta: 0.20
   # Use physical-width when source and target grippers have different strokes.
   # gripper_retarget: physical-width
+  # Optional replay-only IK weights (pos/ori/rest). Use when the teleop
+  # profile above is tuned for a human in the loop -- a high rest weight
+  # holds the arm near home, which is good for teleoperation but cannot
+  # follow a recorded trajectory. Real backends keep ik_weights untouched.
+  # ik_weights:
+  #   ori: 4.5
+  #   rest: 4.0
 ```
 
 `closed` and `open` are the actual URDF joint values for normalized HandUMI
