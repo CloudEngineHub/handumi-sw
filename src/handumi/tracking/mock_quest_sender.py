@@ -104,7 +104,7 @@ def _udp_sync_server(host: str, sync_port: int, skew_ns: int, stop: threading.Ev
         while not stop.is_set():
             try:
                 data, addr = sock.recvfrom(32)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -180,7 +180,7 @@ def main() -> None:
         while True:
             try:
                 conn, addr = server.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             _serve_client(conn, addr, args.fps, skew_ns, stop)
     except KeyboardInterrupt:

@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from handumi.sim.scene import SCENES_DIR
+
 log = logging.getLogger(__name__)
 
 try:
@@ -33,12 +35,10 @@ except ImportError as exc:  # pragma: no cover
         "mujoco is required for --scene physics. Install with: uv sync"
     ) from exc
 
-from handumi.sim.scene import SCENES_DIR
-
 
 def _build_model(
     mjcf_path: Path, scene_name: str | None, scene_position
-) -> tuple["mujoco.MjModel", list[str]]:
+) -> tuple[mujoco.MjModel, list[str]]:
     """Compile robot MJCF (+ optional scene attached at ``scene_position``).
 
     Returns the model and the scene's own top-level body names (kept

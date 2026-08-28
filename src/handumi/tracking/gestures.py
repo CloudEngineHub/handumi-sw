@@ -114,7 +114,7 @@ class BilateralClapArbiter:
 
     def update(
         self,
-        detector: "DoubleClapDetector",
+        detector: DoubleClapDetector,
         left_mm: float,
         right_mm: float,
         now_s: float,

@@ -18,6 +18,9 @@ from pathlib import Path
 
 import numpy as np
 
+from handumi.sim.scene import SceneBody
+from handumi.utils.trajectory import TrajectoryTrail
+
 _logger = logging.getLogger(__name__)
 
 try:
@@ -28,9 +31,6 @@ except ImportError as e:
     raise ImportError(
         "viser is required for simulation. Install project dependencies with: uv sync"
     ) from e
-
-from handumi.sim.scene import SceneBody
-from handumi.utils.trajectory import TrajectoryTrail
 
 # Same palette as the Rerun controller trails in teleop.py, so
 # "which arm" reads the same color in both views.
@@ -46,7 +46,7 @@ def _rgba_to_viser_color(rgba: tuple[float, float, float, float]) -> tuple[int, 
     return (r, g, b)
 
 
-def _add_scene_geom(server: "viser.ViserServer", path: str, geom) -> None:
+def _add_scene_geom(server: viser.ViserServer, path: str, geom) -> None:
     """Render one scene geometry as a viser primitive under its parent frame."""
     color = _rgba_to_viser_color(geom.rgba)
     if geom.kind == "box":
@@ -77,7 +77,7 @@ def _add_scene_geom(server: "viser.ViserServer", path: str, geom) -> None:
         _logger.warning("Unsupported scene geom kind %r at %s; skipping render.", geom.kind, path)
 
 
-def _add_scene_body(server: "viser.ViserServer", body: SceneBody):
+def _add_scene_body(server: viser.ViserServer, body: SceneBody):
     """Render a scene body and return its frame handle."""
     frame = server.scene.add_frame(
         f"/scene/{body.name}",

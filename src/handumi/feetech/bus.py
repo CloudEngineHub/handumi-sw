@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from types import MethodType
-from typing import Any, Iterable
+from typing import Any
 
 
 class FeetechUnavailableError(RuntimeError):
@@ -65,7 +66,7 @@ class FeetechBus:
         if hasattr(port, "is_using"):
             port.is_using = False
 
-    def __enter__(self) -> "FeetechBus":
+    def __enter__(self) -> FeetechBus:
         self.open()
         return self
 

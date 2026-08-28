@@ -437,7 +437,9 @@ def se3_to_pose7(transform: jaxlie.SE3) -> np.ndarray:
     return np.concatenate([translation, quat]).astype(np.float32)
 
 
-def rotation_error_deg(target_pose7: np.ndarray, achieved_pose7: np.ndarray) -> np.ndarray:
+def rotation_error_deg(
+    target_pose7: np.ndarray, achieved_pose7: np.ndarray
+) -> np.ndarray:
     """Shortest quaternion angular distance between pose7 arrays, in degrees."""
     target_quat = np.asarray(target_pose7, dtype=np.float32)[..., 3:7]
     achieved_quat = np.asarray(achieved_pose7, dtype=np.float32)[..., 3:7]
@@ -471,8 +473,12 @@ def pose_error_arrays(
         "right_pos_error_m": np.linalg.norm(
             target_right_pose7[:, :3] - achieved_right_pose7[:, :3], axis=1
         ).astype(np.float32),
-        "left_rot_error_deg": rotation_error_deg(target_left_pose7, achieved_left_pose7),
-        "right_rot_error_deg": rotation_error_deg(target_right_pose7, achieved_right_pose7),
+        "left_rot_error_deg": rotation_error_deg(
+            target_left_pose7, achieved_left_pose7
+        ),
+        "right_rot_error_deg": rotation_error_deg(
+            target_right_pose7, achieved_right_pose7
+        ),
     }
 
 

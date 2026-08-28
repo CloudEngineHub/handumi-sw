@@ -1,5 +1,6 @@
 """Hardware and tracking device integrations for HandUMI."""
 
+from handumi.tracking import mock_quest_sender
 from handumi.tracking.base import ControllerPairSample, TrackingProvider
 from handumi.tracking.meta_quest import (
     MetaQuestConfig,
@@ -11,7 +12,6 @@ from handumi.tracking.meta_quest import (
     workspace_from_hmd,
 )
 from handumi.tracking.pico import PicoTrackingProvider
-from handumi.tracking import mock_quest_sender
 
 __all__ = [
     "ControllerPairSample",

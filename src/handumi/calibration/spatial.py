@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import cv2
 import numpy as np
@@ -17,12 +18,11 @@ from scipy.spatial.transform import Rotation
 
 from handumi.robots.utils import mat_to_pose7, pose7_to_mat
 
-
 SCHEMA_VERSION = 1
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _array(value: Any, shape: tuple[int, ...]) -> np.ndarray:
@@ -66,7 +66,7 @@ class CharucoBoardSpec:
     legacy_pattern: bool = False
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "CharucoBoardSpec":
+    def from_dict(cls, data: dict[str, Any] | None) -> CharucoBoardSpec:
         data = data or {}
         return cls(
             board_id=str(data.get("id", cls.board_id)),
@@ -135,7 +135,7 @@ class CameraIntrinsics:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CameraIntrinsics":
+    def from_dict(cls, data: dict[str, Any]) -> CameraIntrinsics:
         width, height = data["resolution"]
         return cls(
             camera=str(data["camera"]),

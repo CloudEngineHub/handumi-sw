@@ -151,8 +151,8 @@ def validate_raw_state_shape(
 
 
 def pose_to_state_vector(
-    left: "Pose",
-    right: "Pose",
+    left: Pose,
+    right: Pose,
     left_width_m: float,
     right_width_m: float,
 ) -> np.ndarray:

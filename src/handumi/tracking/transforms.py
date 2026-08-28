@@ -141,11 +141,11 @@ class Pose:
         object.__setattr__(self, "quaternion", quat)
 
     @classmethod
-    def identity(cls) -> "Pose":
+    def identity(cls) -> Pose:
         return cls(np.zeros(3), _IDENTITY_QUAT.copy())
 
     @classmethod
-    def from_matrix(cls, m: npt.ArrayLike) -> "Pose":
+    def from_matrix(cls, m: npt.ArrayLike) -> Pose:
         m = np.asarray(m, dtype=np.float64).reshape(4, 4)
         return cls(m[:3, 3], matrix_to_quat(m[:3, :3]))
 
@@ -155,18 +155,18 @@ class Pose:
         m[:3, 3] = self.position
         return m
 
-    def compose(self, other: "Pose") -> "Pose":
+    def compose(self, other: Pose) -> Pose:
         """``self @ other`` — apply ``other`` in ``self``'s local frame."""
         position = self.position + quat_rotate(self.quaternion, other.position)
         quaternion = quat_multiply(self.quaternion, other.quaternion)
         return Pose(position, quaternion)
 
-    def inverse(self) -> "Pose":
+    def inverse(self) -> Pose:
         inv_q = quat_conjugate(self.quaternion)
         inv_pos = -quat_rotate(inv_q, self.position)
         return Pose(inv_pos, inv_q)
 
-    def __matmul__(self, other: "Pose") -> "Pose":
+    def __matmul__(self, other: Pose) -> Pose:
         return self.compose(other)
 
 
@@ -212,17 +212,17 @@ class MountingOffsets:
     right: Pose
 
     @classmethod
-    def identity(cls) -> "MountingOffsets":
+    def identity(cls) -> MountingOffsets:
         return cls(Pose.identity(), Pose.identity())
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "MountingOffsets":
+    def from_dict(cls, data: dict[str, Any] | None) -> MountingOffsets:
         data = data or {}
         return cls(left=_pose_from_dict(data.get("left")),
                    right=_pose_from_dict(data.get("right")))
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "MountingOffsets":
+    def from_yaml(cls, path: str | Path) -> MountingOffsets:
         with Path(path).open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
         calib = (data.get("calibration") or {}).get("controller_to_gripper_tcp")
@@ -241,11 +241,11 @@ class WorkspaceCalibration:
     workspace_from_quest: Pose
 
     @classmethod
-    def identity(cls) -> "WorkspaceCalibration":
+    def identity(cls) -> WorkspaceCalibration:
         return cls(Pose.identity())
 
     @classmethod
-    def from_reference(cls, reference: Pose) -> "WorkspaceCalibration":
+    def from_reference(cls, reference: Pose) -> WorkspaceCalibration:
         """Re-center the workspace so ``reference`` maps to the origin."""
         return cls(reference.inverse())
 

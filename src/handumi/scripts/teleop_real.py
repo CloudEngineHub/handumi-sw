@@ -41,9 +41,17 @@ from handumi.teleop.common import (
     JointMotionDiagnostics,
     KeyboardSpaceListener,
     TeleopLoopTimer,
+)
+from handumi.teleop.common import (
     enabled_sides as _enabled_sides,
+)
+from handumi.teleop.common import (
     enabled_tracking_ok as _enabled_tracking_ok,
+)
+from handumi.teleop.common import (
     latest_widths as _latest_widths,
+)
+from handumi.teleop.common import (
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController
@@ -53,7 +61,11 @@ from handumi.teleop.dls import (
 )
 from handumi.teleop.hardware import (
     load_required_controller_tcp_calibration as _load_required_calibration,
+)
+from handumi.teleop.hardware import (
     validate_feetech_ports_exist,
+)
+from handumi.teleop.hardware import (
     validate_feetech_ready as _validate_feetech_ready,
 )
 from handumi.teleop.motion import (

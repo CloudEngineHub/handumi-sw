@@ -38,7 +38,7 @@ class OpenArmBackend:
         runtime: RobotRuntime,
         rig_config: Path,
         active_sides: tuple[str, ...] = ("left", "right"),
-    ) -> "OpenArmBackend":
+    ) -> OpenArmBackend:
         environment = OpenArmCanEnvironment(
             load_openarm_settings(
                 rig_config,

@@ -68,7 +68,7 @@ class EpisodeQualityConfig:
                 raise ValueError(f"{name} must be non-negative, got {value}.")
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "EpisodeQualityConfig":
+    def from_yaml(cls, path: str | Path) -> EpisodeQualityConfig:
         with Path(path).open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
         values = data.get("quality", data) or {}

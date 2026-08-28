@@ -5,10 +5,11 @@ from __future__ import annotations
 import importlib
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 import numpy as np
 import yaml

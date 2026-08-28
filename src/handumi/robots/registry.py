@@ -220,7 +220,7 @@ class RobotRuntime:
         joint_names: list[str] | None = None,
         default_q: np.ndarray | None = None,
         scene_bodies: list | None = None,
-    ) -> "ViserSim":
+    ) -> ViserSim:
         from handumi.sim.viser_sim import ViserSim
 
         return ViserSim(
@@ -238,7 +238,6 @@ class RobotRuntime:
 
     def make_physics(self, *, scene_config=None):
         del scene_config
-        return None
 
 
 def yourdfpy_handler(pkg_root: str | Path):

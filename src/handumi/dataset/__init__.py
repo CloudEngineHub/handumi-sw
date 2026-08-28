@@ -2,30 +2,6 @@
 
 from typing import Any
 
-from handumi.dataset.reader import (
-    DatasetDownloadResult,
-    RawEpisode,
-    download_dataset,
-    ensure_metadata,
-    handumi_metadata,
-    load_raw_episode_states,
-    load_raw_episode,
-    open_dataset,
-    recording_device,
-    validate_raw_state_metadata,
-)
-from handumi.dataset.raw import (
-    HANDUMI_RAW_IMAGE_KEYS,
-    HANDUMI_RAW_STATE_NAMES,
-    HANDUMI_RAW_STATE_SIZE,
-    LEFT_GRIPPER_INDEX,
-    LEFT_POSE_SLICE,
-    RIGHT_GRIPPER_INDEX,
-    RIGHT_POSE_SLICE,
-    raw_state_feature,
-    validate_raw_state_shape,
-)
-from handumi.dataset.reader import DatasetRef, dataset_root_from_repo_id
 from handumi.dataset.capture import (
     CAMERA_STALE_TIMEOUT_S,
     FEETECH_SAMPLE_HZ,
@@ -42,6 +18,31 @@ from handumi.dataset.quality import (
     validate_episode,
     write_quality_report,
 )
+from handumi.dataset.raw import (
+    HANDUMI_RAW_IMAGE_KEYS,
+    HANDUMI_RAW_STATE_NAMES,
+    HANDUMI_RAW_STATE_SIZE,
+    LEFT_GRIPPER_INDEX,
+    LEFT_POSE_SLICE,
+    RIGHT_GRIPPER_INDEX,
+    RIGHT_POSE_SLICE,
+    raw_state_feature,
+    validate_raw_state_shape,
+)
+from handumi.dataset.reader import (
+    DatasetDownloadResult,
+    DatasetRef,
+    RawEpisode,
+    dataset_root_from_repo_id,
+    download_dataset,
+    ensure_metadata,
+    handumi_metadata,
+    load_raw_episode,
+    load_raw_episode_states,
+    open_dataset,
+    recording_device,
+    validate_raw_state_metadata,
+)
 
 
 def __getattr__(name: str) -> Any:
@@ -56,17 +57,9 @@ def __getattr__(name: str) -> Any:
         "write_dataset",
     }
     if name in writer_symbols:
-        from handumi.dataset.writer import (
-            CHUNKS_SIZE,
-            EpisodeResult,
-            chunk_and_file,
-            info_path,
-            load_info,
-            update_handumi_metadata,
-            write_dataset,
-        )
+        from handumi.dataset import writer
 
-        return locals()[name]
+        return getattr(writer, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

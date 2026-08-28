@@ -21,12 +21,12 @@ import glob
 import grp
 import io
 import os
-import sys
-from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech.bus import FeetechBus

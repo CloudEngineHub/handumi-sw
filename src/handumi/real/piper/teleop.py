@@ -7,13 +7,13 @@ from pathlib import Path
 import numpy as np
 
 from handumi.real.base import TeleopRobotBackend
+from handumi.real.can_setup import ensure_can_interfaces_ready
 from handumi.real.piper.driver import (
     PiperCanEnvironment,
     load_piper_can_settings,
     piper_mdeg_to_q,
     q_to_piper_mdeg,
 )
-from handumi.real.can_setup import ensure_can_interfaces_ready
 from handumi.robots.registry import RobotRuntime
 
 
@@ -48,7 +48,7 @@ class PiperBackend:
         runtime: RobotRuntime,
         rig_config: Path,
         active_sides: tuple[str, ...] = ("left", "right"),
-    ) -> "PiperBackend":
+    ) -> PiperBackend:
         settings = load_piper_can_settings(rig_config, runtime.config.real)
         return cls(
             PiperCanEnvironment(settings),

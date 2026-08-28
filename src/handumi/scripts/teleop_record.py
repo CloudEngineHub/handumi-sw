@@ -104,9 +104,9 @@ from handumi.scripts.record import (
     _SOFTWARE_VIDEO_CODEC,
     StreamingEncodingError,
     _EscapeStopListener,
-    _RecordingDashboard,
     _install_strict_streaming_encoder,
     _prepare_streaming_episode,
+    _RecordingDashboard,
     _robot_metadata,
     _select_video_encoder,
     _validate_finalized_lerobot_dataset,
@@ -1785,9 +1785,9 @@ def _run_record() -> None:
         info = json.loads((args.output_dir / "meta" / "info.json").read_text())
         handumi = info.get("handumi") or {}
         audio = handumi.get("audio") if isinstance(handumi, dict) else None
-        dataset_records_audio = bool(
-            isinstance(audio, dict) and audio.get("enabled")
-        )
+        if not isinstance(audio, dict):
+            audio = {}
+        dataset_records_audio = bool(audio.get("enabled"))
         if dataset_records_audio and not bool(audio.get("frame_aligned")):
             raise SystemExit(
                 "Cannot resume this legacy audio dataset: it has episode-level "

@@ -16,7 +16,6 @@ import jax.numpy as jnp
 import jaxlie
 import numpy as np
 
-
 # Real hardware may advertise several rad/s. Directly using that mechanical
 # ceiling for human teleoperation is needlessly aggressive, so DLS intersects
 # the discovered URDF/backend limits with one conservative system policy.

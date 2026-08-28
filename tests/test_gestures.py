@@ -3,9 +3,9 @@ from unittest.mock import Mock
 import numpy as np
 
 from handumi.scripts.teleop_record import (
-    _parse_record_args,
     _episode_gesture_action,
     _home_between_episodes,
+    _parse_record_args,
 )
 from handumi.tracking.gestures import DoubleClapDetector
 

@@ -13,7 +13,6 @@ from handumi.config import DEFAULT_RIG_CONFIG, load_optional_rig_section
 from handumi.robots.registry import RESOURCE_ROOT
 from handumi.robots.utils import quat_normalize
 
-
 SIM_CALIBRATION_DIR = RESOURCE_ROOT / "configs" / "calibration" / "table" / "sim"
 
 

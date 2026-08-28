@@ -6,9 +6,9 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 import cv2
 import numpy as np
@@ -49,7 +49,6 @@ from handumi.tracking.pico import PicoTrackingProvider
 from handumi.utils.trajectory import TrajectoryTrail
 from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
 
-
 log = logging.getLogger("handumi.calibrate_spatial")
 DEFAULT_SPATIAL = Path("outputs/calibration/spatial.yaml")
 DEFAULT_SESSION = Path("outputs/calibration/session.yaml")
@@ -87,7 +86,7 @@ MOUNT_VIEW_PROMPTS = (
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _board_from_rig(path: Path) -> CharucoBoardSpec:

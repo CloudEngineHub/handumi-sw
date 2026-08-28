@@ -8,7 +8,6 @@ import numpy as np
 
 from handumi.dataset.raw import LEFT_GRIPPER_INDEX, RIGHT_GRIPPER_INDEX
 
-
 SIDES = ("left", "right")
 
 

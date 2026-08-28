@@ -34,12 +34,14 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from dotenv import load_dotenv
 
 import numpy as np
+from dotenv import load_dotenv
 
 from handumi.calibration.control_tcp import (
     DEFAULT_DEVICE as DEFAULT_CONTROLLER_DEVICE,
+)
+from handumi.calibration.control_tcp import (
     ControllerTcpCalibration,
     apply_controller_tcp_calibration,
     calibration_path_for_device,
@@ -54,7 +56,6 @@ from handumi.calibration.deployment import (
     resolve_deployment_calibration,
 )
 from handumi.config import DEFAULT_RIG_CONFIG
-from handumi.dataset.reader import dataset_root_from_repo_id, handumi_metadata
 from handumi.dataset.canonical import (
     canonical_joint_layout,
     canonicalize_joint_trajectory,
@@ -66,6 +67,7 @@ from handumi.dataset.raw import (
     RIGHT_GRIPPER_INDEX,
     RIGHT_POSE_SLICE,
 )
+from handumi.dataset.reader import dataset_root_from_repo_id, handumi_metadata
 from handumi.retargeting.handumi_to_robot import (
     local_frame_adapter,
     local_relative_robot_target_pose7,
@@ -516,7 +518,7 @@ def _resolve_conversion_tcp_calibration(
 
     try:
         source_config = load_robot_config(source_robot)
-    except ValueError:
+    except (TypeError, ValueError):
         source_config = None
     source_gripper = (
         source_config.handumi_gripper if source_config is not None else None
@@ -825,6 +827,8 @@ def _solve_with_replay_pipeline(
     """Run the replay solver so absolute-table conversion has exact qpos parity."""
     from handumi.scripts.replay.replay_in_sim import (
         build_parser as build_replay_parser,
+    )
+    from handumi.scripts.replay.replay_in_sim import (
         solve_episode as solve_replay_episode,
     )
 

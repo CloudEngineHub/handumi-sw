@@ -28,9 +28,10 @@ import struct
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -238,7 +239,7 @@ class MetaQuestConfig:
     rtt_accept_ns: int = 8_000_000
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "MetaQuestConfig":
+    def from_yaml(cls, path: str | Path) -> MetaQuestConfig:
         data = load_rig_section(Path(path), "meta_quest")
         conn = data.get("connection", {}) or {}
         health = data.get("health", {}) or {}
@@ -307,7 +308,7 @@ class MetaQuestReceiver:
             thread.join(timeout=2.0)
         self._thread = None
 
-    def __enter__(self) -> "MetaQuestReceiver":
+    def __enter__(self) -> MetaQuestReceiver:
         self.start()
         return self
 
@@ -436,7 +437,7 @@ class MetaQuestReceiver:
         while self._running:
             try:
                 raw = sock.recv(1024 * 1024)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError as exc:
                 log.warning("TCP error: %s", exc)
@@ -502,7 +503,7 @@ class MetaQuestReceiver:
                         self._rtt_ns = rtt
                         self._offset_hist.append(int(offset))
                         self._offset_ns = int(statistics.median(self._offset_hist))
-                except socket.timeout:
+                except TimeoutError:
                     pass
                 except OSError:
                     time.sleep(0.5)

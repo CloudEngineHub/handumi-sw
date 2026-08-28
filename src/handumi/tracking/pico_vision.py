@@ -8,9 +8,10 @@ import socket
 import struct
 import subprocess
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Iterator
+from typing import BinaryIO
 
 log = logging.getLogger("handumi.pico_vision")
 
@@ -464,7 +465,7 @@ class PicoRemoteVisionBridge:
                 while not self.state.shutdown.is_set():
                     try:
                         connection, address = server.accept()
-                    except socket.timeout:
+                    except TimeoutError:
                         continue
                     log.info("PICO Remote Vision connected from %s.", address)
                     self._serve_connection(connection)
@@ -481,7 +482,7 @@ class PicoRemoteVisionBridge:
             while not self.state.shutdown.is_set():
                 try:
                     chunk = connection.recv(65536)
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 if not chunk:
                     break

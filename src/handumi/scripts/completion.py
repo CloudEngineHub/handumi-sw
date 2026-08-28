@@ -11,7 +11,6 @@ import sys
 
 from handumi.scripts.cli import COMMANDS
 
-
 BASH_COMPLETION = r'''_handumi_complete() {
   local -a request
   local candidate

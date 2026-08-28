@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import numpy as np
@@ -59,7 +58,7 @@ class ControllerPairSample:
     sequence: int = 0
 
     @classmethod
-    def empty(cls, device: str) -> "ControllerPairSample":
+    def empty(cls, device: str) -> ControllerPairSample:
         pose = IDENTITY_POSE7.astype(np.float32)
         return cls(
             device=device,

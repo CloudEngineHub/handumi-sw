@@ -74,9 +74,15 @@ from handumi.teleop.common import (
     SIDE_CHOICES,
     KeyboardSpaceListener,
     TeleopLoopTimer,
-    enabled_sides as _enabled_sides,
     latest_widths,
+)
+from handumi.teleop.common import (
+    enabled_sides as _enabled_sides,
+)
+from handumi.teleop.common import (
     tracking_ready_for_sides as _tracking_ready_for_sides,
+)
+from handumi.teleop.common import (
     tracking_world_map as _tracking_world_map,
 )
 from handumi.teleop.core import TeleopController

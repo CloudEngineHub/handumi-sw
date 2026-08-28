@@ -30,7 +30,7 @@ class GripperWidths:
     right_ticks: int
 
     @classmethod
-    def zero(cls) -> "GripperWidths":
+    def zero(cls) -> GripperWidths:
         """All-zero widths, used when Feetech is skipped or unavailable."""
         return cls(
             left=0.0,
@@ -59,7 +59,7 @@ class FeetechGripperSampler:
 
     def __init__(
         self,
-        grippers: "FeetechGripperPair",
+        grippers: FeetechGripperPair,
         *,
         sample_hz: float = 100.0,
         buffer_seconds: float = 1.0,
@@ -297,7 +297,7 @@ class FeetechGripperPair:
         time.sleep(0.02)
         self.open()
 
-    def __enter__(self) -> "FeetechGripperPair":
+    def __enter__(self) -> FeetechGripperPair:
         self.open()
         return self
 

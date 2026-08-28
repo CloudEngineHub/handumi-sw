@@ -118,5 +118,27 @@ venv = ".venv"
 extraPaths = ["external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"]
 reportMissingModuleSource = false
 
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+# Explicit selection so the editor, CLI, and CI all agree. Without this
+# section ruff enables its full default rule set (~400 rules), which floods
+# the editor with optional style warnings. E501 (line-too-long) is left out
+# deliberately: the pre-existing codebase was not written to a hard column
+# limit, and enforcing one now would touch hundreds of unrelated lines.
+select = [
+    "E4",      # import placement
+    "E7",      # statement errors (comparison to None/True, etc.)
+    "E9",      # syntax/io errors
+    "F",       # pyflakes: undefined names, unused imports/variables
+    "W",       # warnings: trailing whitespace, deprecated escapes
+    "I",       # import sorting
+    "UP",      # pyupgrade: modernize syntax for the 3.12 floor
+    "RET501",  # no explicit `return None` when it is the only return
+    "PLR1711", # no useless trailing `return`
+    "TRY004",  # raise TypeError (not ValueError) for bad types
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

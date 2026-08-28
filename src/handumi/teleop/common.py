@@ -8,7 +8,8 @@ import termios
 import threading
 import time
 import tty
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 

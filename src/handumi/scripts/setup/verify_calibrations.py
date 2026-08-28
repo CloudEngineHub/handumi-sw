@@ -44,7 +44,6 @@ from handumi.robots.registry import (
 )
 from handumi.tracking.base import TrackingProvider
 
-
 DEFAULT_SPATIAL = Path("outputs/calibration/spatial.yaml")
 DEFAULT_SESSION = Path("outputs/calibration/session.yaml")
 DEFAULT_MAX_TIP_DISTANCE_M = 0.35

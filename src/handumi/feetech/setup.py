@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import glob
 import getpass
+import glob
 import grp
 import os
 import shutil
 import subprocess
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 import yaml
 
