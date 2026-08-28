@@ -118,14 +118,16 @@ JAX_PLATFORMS=cpu uv run python -c \
 
 ### Table placement for absolute replay
 
-Add `configs/calibration/table/<robot>.yaml`. This is the transform from the
-demonstration table frame to the target robot world; it is not a TCP offset.
+Add `configs/calibration/table/sim/<robot>.yaml`. This is the canonical
+simulation transform from the demonstration table frame to the target robot
+world; it is not a TCP offset or a physical-lab measurement.
 
 ```yaml
 schema_version: 1
 kind: handumi_robot_table_calibration
 robot: myrobot
-source: measured_installation
+scope: simulation
+source: configured_simulation_layout
 verified: false
 calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
@@ -134,9 +136,13 @@ calibration:
     quaternion: [0.0, 0.0, 0.0, 1.0]
 ```
 
-Use `verified: false` for a simulation placement. Set it to `true` only after
-measuring the physical installation. Never compensate a wrong TCP calibration
-by changing this transform.
+Simulation placements stay `verified: false`. For a physical installation,
+copy `configs/calibration/table/local/example.yaml` to
+`configs/calibration/table/local/<robot>.yaml`, set `scope: physical`, and
+measure it. Set that ignored local file to `verified: true` only after the
+physical checks pass. Use `deployment.table_calibrations.<robot>` only as a
+non-standard path override. Never compensate a wrong TCP calibration by
+changing either transform.
 
 ### HandUMI controller-to-TCP calibration
 

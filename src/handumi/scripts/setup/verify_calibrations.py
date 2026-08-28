@@ -22,6 +22,10 @@ from handumi.calibration.control_tcp import (
     calibration_path_for_robot_device,
     load_controller_tcp_calibration,
 )
+from handumi.calibration.deployment import (
+    load_deployment_calibration,
+    local_calibration_path,
+)
 from handumi.calibration.spatial import (
     CharucoBoardSpec,
     calibration_hash,
@@ -35,7 +39,6 @@ from handumi.config import (
 )
 from handumi.feetech.calibration import load_config, user_calibration_path
 from handumi.robots.registry import (
-    RESOURCE_ROOT,
     available_robot_names,
     load_robot_config,
 )
@@ -381,38 +384,43 @@ def _verify_tcp(
 def _verify_robot_table(
     args: argparse.Namespace, robot: str, checks: list[Check]
 ) -> None:
-    path = (
-        args.table_calibration
-        or RESOURCE_ROOT / "configs" / "calibration" / "table" / f"{robot}.yaml"
-    )
     try:
-        data = load_yaml(path)
-    except (OSError, ValueError) as exc:
+        path = args.table_calibration or local_calibration_path(
+            robot,
+            rig_config=args.rig_config,
+        )
+    except SystemExit as exc:
+        _add(checks, "FAIL", "robot/table", str(exc))
+        return
+    if path is None:
+        _add(
+            checks,
+            "WARN",
+            "robot/table",
+            f"no lab-local calibration for {robot}; absolute-table replay on this "
+            "hardware needs one. Create "
+            f"{args.rig_config.parent / 'calibration' / 'table' / 'local' / f'{robot}.yaml'} "
+            f"or configure deployment.table_calibrations.{robot} in {args.rig_config}",
+        )
+        return
+    try:
+        calibration = load_deployment_calibration(
+            path,
+            expected_robot=robot,
+            profile="local",
+        )
+    except (OSError, ValueError, SystemExit) as exc:
         _add(checks, "FAIL", "robot/table", f"cannot load {path}: {exc}")
         return
-    if (
-        data.get("kind") != "handumi_robot_table_calibration"
-        or data.get("robot") != robot
-    ):
-        _add(checks, "FAIL", "robot/table", f"{path} does not declare robot {robot}")
-        return
-    raw_pose = (data.get("calibration") or {}).get("robot_from_table") or {}
-    try:
-        position = np.asarray(raw_pose["position"], dtype=float).reshape(3)
-        quaternion = np.asarray(raw_pose["quaternion"], dtype=float).reshape(4)
-    except (KeyError, TypeError, ValueError):
-        _add(checks, "FAIL", "robot/table", "missing or invalid robot_from_table pose")
-        return
-    if not np.all(np.isfinite(position)) or not np.isclose(
-        np.linalg.norm(quaternion), 1.0, atol=1e-3
-    ):
+    if calibration.scope != "physical":
         _add(
             checks,
             "FAIL",
             "robot/table",
-            "robot_from_table is not a finite normalized pose",
+            f"{path} has scope={calibration.scope!r}; physical verification requires scope: physical",
         )
-    elif data.get("verified") is not True:
+        return
+    if not calibration.verified:
         _add(
             checks,
             "WARN",

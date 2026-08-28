@@ -1,6 +1,7 @@
 schema_version: 1
 kind: handumi_robot_table_calibration
 robot: piper
+scope: simulation
 source: configured_layout
 verified: false
 calibration:

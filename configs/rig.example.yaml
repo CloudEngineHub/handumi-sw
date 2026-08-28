@@ -39,6 +39,15 @@ recording:
   fps: 30
   robot: piper
 
+# Optional physical robot/table placement for this laboratory. Put the ignored
+# per-robot files in configs/calibration/table/local/<robot>.yaml. Replay profile
+# `auto` discovers them and otherwise uses the canonical simulation placement.
+# deployment:
+#   lab: example_research_lab
+#   # Optional overrides for calibrations stored outside the conventional path.
+#   table_calibrations:
+#     piper: /private/calibrations/piper.yaml
+
 feetech:
   baudrate: 1000000
   protocol_version: 0

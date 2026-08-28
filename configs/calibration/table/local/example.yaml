@@ -1,0 +1,16 @@
+schema_version: 1
+kind: handumi_robot_table_calibration
+robot: replace_with_robot_name
+scope: physical
+lab: replace_with_research_lab_id
+source: measured_installation
+verified: false
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  # Copy this file to <robot>.yaml. Replace this identity pose with
+  # T_robot_world_table measured for the
+  # laboratory's physical robot bases and table. Set verified: true only after
+  # checking the measurement on hardware.
+  robot_from_table:
+    position: [0.0, 0.0, 0.0]
+    quaternion: [0.0, 0.0, 0.0, 1.0]

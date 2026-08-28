@@ -1,6 +1,7 @@
 schema_version: 1
 kind: handumi_robot_table_calibration
 robot: r1lite
+scope: simulation
 source: simulation_initial_pose_alignment
 verified: false
 calibration:
@@ -10,8 +11,7 @@ calibration:
   # Provisional sim placement aligned with NONHUMAN-RESEARCH/test_handumi_pickandplace
   # episode 0 frame 0: tuned with calibrated TCP poses (same pipeline as replay).
   # The mobile base stays fixed; only the demonstrated table frame is placed in
-  # robot world. Measure the physical table pose and set verified: true before
-  # hardware deployment.
+  # robot world. Hardware uses a separate scope: physical lab-local file.
   robot_from_table:
     position: [0.40581, 0.09585, 0.93974]
     quaternion: [0.0, 0.0, -0.70710678, 0.70710678]

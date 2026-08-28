@@ -1,6 +1,7 @@
 schema_version: 1
 kind: handumi_robot_table_calibration
 robot: axol
+scope: simulation
 source: simulation_workspace_fit
 verified: false
 calibration:

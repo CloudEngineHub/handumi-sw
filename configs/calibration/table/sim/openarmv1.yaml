@@ -1,6 +1,7 @@
 schema_version: 1
 kind: handumi_robot_table_calibration
 robot: openarmv1
+scope: simulation
 source: simulation_initial_pose_alignment
 verified: false
 calibration:
@@ -11,8 +12,8 @@ calibration:
   # midpoint while preserving the complete table-frame trajectory rigidly.
   # This moves the table frame, not the robot: the OpenArm pedestal remains
   # fixed to world Z=0 and its shoulder mounts remain at Z=0.698 m.
-  # Measure the physical table pose and set verified: true before relying on
-  # this file for a real deployment.
+  # For hardware, create a separate scope: physical lab-local calibration;
+  # never mark this canonical simulation file physically verified.
   robot_from_table:
     position: [0.17214, -0.01286, 0.28755]
     quaternion: [0.0, 0.0, -0.70710678, 0.70710678]

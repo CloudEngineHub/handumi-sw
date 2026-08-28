@@ -5,6 +5,34 @@ bimanual robot and displays the target and achieved TCP trajectories in Viser.
 The source recording remains robot agnostic: the robot model, IK profile, and
 table placement are selected when replay starts.
 
+## Install Replay Dependencies
+
+Install the Python simulation extra before the first replay:
+
+```bash
+uv sync --extra sim
+```
+
+On a PICO workstation, use `bash install.sh --sim` in place of the final
+`uv sync` command. This preserves the locally built XRoboToolkit package by
+reinstalling it after the dependency sync. XRoboToolkit is not needed when the
+workstation only replays existing datasets.
+
+Trajectory replay reads Parquet state columns directly and does not decode the
+dataset's MP4 camera features. FFmpeg is therefore not required for IK replay.
+Install and verify it when inspecting or curating camera videos:
+
+```bash
+sudo apt update
+sudo apt install -y ffmpeg
+ffmpeg -version
+ffprobe -version
+uv run python -c "from torchcodec.decoders import VideoDecoder; print('TorchCodec OK')"
+```
+
+If this reports `Could not load libtorchcodec`, see
+[Dataset Video Loading Fails in TorchCodec](../troubleshooting.md#dataset-video-loading-fails-in-torchcodec).
+
 ## Use a Local Dataset
 
 Pass the recording directory as `DATASET`. A local replay does not download
@@ -38,18 +66,106 @@ JAX_PLATFORMS=cpu uv run handumi replay \
   --robot openarmv1 \
   --episode 0 \
   --retarget-mode absolute-table \
-  --deployment-calibration configs/calibration/table/openarmv1.yaml
+  --deployment-profile sim
 ```
 
 `robot_from_table` places the demonstrated table frame in the robot world. It
 does **not** move the robot base. For OpenArm v1, for example, the URDF pedestal
 remains fixed to world `Z=0`, the shoulder mounts are at `Z=0.698 m`, and the
-calibration's `Z=0.28755 m` is the provisional table-plane height.
+simulation calibration's `Z=0.28755 m` is the provisional table-plane height.
 
-Keep `verified: false` for simulation-derived transforms. Measure the physical
-table pose and change it to `true` before relying on absolute placement on real
-hardware. Do not use `robot_from_table` to compensate for an incorrect
-Controller-to-TCP calibration.
+The deployment profiles intentionally have different ownership:
+
+| Profile | Location | Meaning |
+| --- | --- | --- |
+| `sim` | `configs/calibration/table/sim/<robot>.yaml` | Portable canonical simulation layout; committed, `scope: simulation`, never a claim about a lab |
+| `local` | ignored `configs/calibration/table/local/<robot>.yaml` | Measured placement of one laboratory's physical robot and table; `scope: physical` |
+| `auto` | local when configured, otherwise sim | Convenient default; the resolved profile and file are always printed and saved |
+
+An explicit `--deployment-calibration FILE` overrides all profiles. Do not edit
+the canonical simulation file to match a physical lab and do not use
+`robot_from_table` to compensate for an incorrect Controller-to-TCP
+calibration.
+
+### Configure a Laboratory Placement
+
+Create one private calibration per installed robot. The destination is ignored
+by Git:
+
+```bash
+cp configs/calibration/table/local/example.yaml \
+  configs/calibration/table/local/piper.yaml
+```
+
+Set the copied file's `lab` to the same stable identifier used below, measure
+`T_robot_world_table`, and keep `verified: false` until the physical touch
+checks pass. Select it in `configs/rig.yaml`:
+
+```yaml
+deployment:
+  lab: my_research_lab
+```
+
+Replay discovers `local/piper.yaml` automatically. Use the optional
+`deployment.table_calibrations.piper` setting only when the lab stores its
+private file outside this conventional directory.
+
+Then require it explicitly during a lab check:
+
+```bash
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/datasets/tblock \
+  --robot piper \
+  --episode 0 \
+  --deployment-profile local
+```
+
+`handumi calibrate verify --robot piper --device pico` rejects a simulation
+file as a physical calibration and reports an unverified local file.
+
+### Use a Dataset-Specific Placement for Visualization
+
+The canonical placement assumes the session board sat at the near edge of the
+task scene, so the demonstrations happen on the table's `+Y` side. When a
+recording placed the board beyond the task zone instead (the demos then sit at
+negative table `Y`), the mapped targets land on the robot bases and the strict
+start check fails. Diagnose this with the printed
+`source TCP workspace bounds` line: a mostly negative `Y` range means the
+board placement, not the calibration files, is the problem.
+
+For such datasets, write a dataset-specific table YAML that shifts the scene
+back in front of the arms and pass it explicitly. For `tblock` with Piper:
+
+```bash
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/datasets/tblock \
+  --robot piper \
+  --episode 0 \
+  --retarget-mode absolute-table \
+  --deployment-calibration outputs/calibration/table/tblock_piper_viz.yaml \
+  --initial-position-tolerance-m 0.05
+```
+
+This preserves the demonstrated world-space motion for inspection. It is not a
+fidelity claim: for `tblock` episode 0 the median tracking error is `2.4 cm`,
+but the final segment still exceeds `10 cm` because the demonstration leaves
+the BiPiper's bimanual workspace under any rigid placement. Keep such YAMLs
+under `outputs/calibration/table/` rather than the canonical `sim/` directory,
+and prevent the root cause during collection by placing the ChArUco board so
+the manipulation happens in front of it (`+Y`, away from the operator).
+
+Deriving the correction is pure post-processing; the raw dataset never needs
+to change. Frame reminder: in the table frame `+Z` is up and `+Y` is the
+horizontal depth away from the operator (unlike the headset world, where `+Y`
+is up), so a mostly negative `Y` range is a horizontal offset, not a height
+problem. Read the demo volume from the printed
+`source TCP workspace bounds`, then shift the canonical placement's position
+until that volume sits centered in front of the arms, leaving the quaternion
+untouched. For `tblock`, bounds of `y = [-0.273, 0.045]` (centered near
+`-0.11 m`) turned the canonical `[0.30, 0.0, 0.0]` into
+`[0.5422, -0.1106, 0.0446]`: forward by roughly the demos' depth behind the
+origin, and re-centered laterally. The same recorded episodes replay unchanged
+on any robot once that robot's own placement is adjusted the same way.
 
 ## OpenArm v1
 
@@ -90,7 +206,7 @@ JAX_PLATFORMS=cpu uv run handumi replay \
   --robot trlc_dk1 \
   --episode 0 \
   --retarget-mode absolute-table \
-  --deployment-calibration configs/calibration/table/trlc_dk1.yaml
+  --deployment-profile sim
 ```
 
 The bimanual URDF uses two namespaced DK1 followers with a provisional `0.60 m`
@@ -146,6 +262,10 @@ TCP; the target embodiment is applied afterward.
 
 Important output fields are:
 
+- `deployment calibration`: resolved profile, scope, verification state, and
+  source file;
+- `source TCP workspace bounds`: robot-agnostic table-frame volume used by the
+  reachability check;
 - `start prepared`: initial solve iterations and first-frame error;
 - `IK EE error`: mean and maximum position/orientation error over both arms;
 - `max_joint_delta`: the offline joint-step limit selected for the embodiment;

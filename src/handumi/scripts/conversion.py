@@ -48,6 +48,12 @@ from handumi.calibration.control_tcp import (
     is_identity_bound_controller_tcp_metadata,
     load_controller_tcp_calibration,
 )
+from handumi.calibration.deployment import (
+    deployment_calibration_metadata,
+    print_deployment_calibration,
+    resolve_deployment_calibration,
+)
+from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset.reader import dataset_root_from_repo_id, handumi_metadata
 from handumi.dataset.canonical import (
     canonical_joint_layout,
@@ -115,6 +121,12 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         "--revision",
         default="main",
         help=advanced("Git revision of the source dataset."),
+    )
+    ds.add_argument(
+        "--rig-config",
+        type=Path,
+        default=DEFAULT_RIG_CONFIG,
+        help=advanced("Machine-local rig YAML used to select lab deployment calibration."),
     )
     ds.add_argument(
         "--source",
@@ -255,7 +267,16 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         default=None,
         help=advanced(
             "YAML containing robot_from_table for absolute-table conversion. "
-            "Defaults to configs/calibration/table/<robot>.yaml."
+            "Overrides both lab-local and canonical simulation profiles."
+        ),
+    )
+    ik.add_argument(
+        "--deployment-profile",
+        choices=("auto", "local", "sim"),
+        default="auto",
+        help=(
+            "Table placement source: auto uses rig.yaml when configured, "
+            "otherwise the canonical simulation profile."
         ),
     )
     ik.add_argument(
@@ -329,18 +350,6 @@ def _resolve_cli_profile(
     """Resolve conversion defaults that do not require source dataset metadata."""
     args.piper = args.embodiment == "piper"
 
-    if args.retarget_mode == "absolute-table":
-        path = args.deployment_calibration or (
-            Path("configs/calibration/table") / f"{args.embodiment}.yaml"
-        )
-        from handumi.scripts.replay.replay_in_sim import load_robot_from_table
-
-        try:
-            load_robot_from_table(path, expected_robot=args.embodiment)
-        except SystemExit as exc:
-            parser.error(str(exc))
-        args.deployment_calibration = path
-
     if args.initial_solve_iterations < 1:
         parser.error("--initial-solve-iterations must be >= 1.")
     if args.initial_position_tolerance_m <= 0.0:
@@ -373,28 +382,27 @@ def _resolve_retarget_mode(
         )
 
     if args.retarget_mode == "absolute-table":
-        from handumi.scripts.replay.replay_in_sim import load_robot_from_table
-
-        path = args.deployment_calibration or (
-            Path("configs/calibration/table") / f"{args.embodiment}.yaml"
-        )
         try:
-            load_robot_from_table(path, expected_robot=args.embodiment)
+            selection = resolve_deployment_calibration(
+                args.embodiment,
+                explicit_path=args.deployment_calibration,
+                profile=args.deployment_profile,
+                rig_config=args.rig_config,
+            )
         except SystemExit as exc:
             parser.error(str(exc))
-        args.deployment_calibration = path
+        args.deployment_selection = selection
+        args.deployment_calibration = selection.path
+        print_deployment_calibration(selection, prefix="[convert]")
 
 
 def _deployment_calibration_metadata(args: argparse.Namespace) -> dict[str, Any] | None:
-    path = args.deployment_calibration
-    if path is None:
+    selection = getattr(args, "deployment_selection", None)
+    if selection is None:
         return None
-    raw = Path(path).read_bytes()
-    return {
-        "robot": args.embodiment,
-        "path": str(path),
-        "sha256": hashlib.sha256(raw).hexdigest(),
-    }
+    metadata = deployment_calibration_metadata(selection)
+    metadata["sha256"] = hashlib.sha256(selection.path.read_bytes()).hexdigest()
+    return metadata
 
 
 def _write_calibration_catalog(output_root: Path, args: argparse.Namespace) -> None:
@@ -834,6 +842,9 @@ def _solve_with_replay_pipeline(
     replay_args.controller_tcp_calibration = args.controller_tcp_calibration
     replay_args.raw_controller_debug = args.raw_controller_debug
     replay_args.deployment_calibration = args.deployment_calibration
+    replay_args.deployment_profile = args.deployment_profile
+    replay_args.rig_config = args.rig_config
+    replay_args.deployment_selection = getattr(args, "deployment_selection", None)
     replay_args.absolute_orientation = args.absolute_orientation
     replay_args.initial_solve_iterations = args.initial_solve_iterations
     replay_args.initial_position_tolerance_m = args.initial_position_tolerance_m

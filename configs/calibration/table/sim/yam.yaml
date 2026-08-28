@@ -1,6 +1,7 @@
 schema_version: 1
 kind: handumi_robot_table_calibration
 robot: yam
+scope: simulation
 source: simulation_initial_pose_alignment
 verified: false
 calibration:
@@ -10,7 +11,7 @@ calibration:
   # so the table transform has no vertical offset. The forward translation
   # centers the validated trajectory in the shared workspace without raising
   # the visual table above the robot base.
-  # Measure the physical installation and set verified: true before hardware use.
+  # Hardware uses a separately measured scope: physical lab-local file.
   robot_from_table:
     position: [0.01286, 0.26, 0.0]
     quaternion: [0.0, 0.0, 0.0, 1.0]

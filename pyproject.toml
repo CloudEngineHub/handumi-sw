@@ -85,7 +85,14 @@ packages = ["src/handumi"]
 "configs/quality.yaml" = "handumi/configs/quality.yaml"
 "configs/rig.example.yaml" = "handumi/configs/rig.example.yaml"
 "configs/robots" = "handumi/configs/robots"
-"configs/calibration" = "handumi/configs/calibration"
+# Include calibration pieces explicitly: lab-local measurements under
+# configs/calibration/table/local/*.yaml are private and must never ship in a
+# built artifact, so the table directory is not included wholesale.
+"configs/calibration/controller_tcp" = "handumi/configs/calibration/controller_tcp"
+"configs/calibration/table/sim" = "handumi/configs/calibration/table/sim"
+"configs/calibration/table/README.md" = "handumi/configs/calibration/table/README.md"
+"configs/calibration/table/local/README.md" = "handumi/configs/calibration/table/local/README.md"
+"configs/calibration/table/local/example.yaml" = "handumi/configs/calibration/table/local/example.yaml"
 
 [tool.hatch.build.targets.sdist]
 include = [

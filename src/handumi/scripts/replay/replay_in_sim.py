@@ -21,6 +21,12 @@ from handumi.calibration.control_tcp import (
     is_identity_bound_controller_tcp_metadata,
     load_controller_tcp_calibration,
 )
+from handumi.calibration.deployment import (
+    deployment_calibration_metadata,
+    print_deployment_calibration,
+    resolve_deployment_calibration,
+)
+from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset import (
     DatasetRef,
     ensure_metadata,
@@ -48,10 +54,9 @@ from handumi.retargeting.handumi_to_robot import (
 )
 from handumi.robots.kinematics import optimization_score_from_errors, pose_error_arrays
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, load_robot_config
-from handumi.robots.utils import pose_mul, quat_normalize
+from handumi.robots.utils import pose_mul
 
 DEFAULT_OUT_DIR = Path("outputs/replay_in_sim")
-DEFAULT_DEPLOYMENT_CALIBRATION_DIR = Path("configs/calibration/table")
 GRIPPER_NORMALIZED_KEYS = (
     "observation.feetech.left_normalized",
     "observation.feetech.right_normalized",
@@ -82,6 +87,12 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
     )
     parser.add_argument("--help-advanced", action="store_true", help="Show expert IK and calibration options.")
     parser.add_argument("--revision", default="main", help=advanced("Hub dataset revision."))
+    parser.add_argument(
+        "--rig-config",
+        type=Path,
+        default=DEFAULT_RIG_CONFIG,
+        help=advanced("Machine-local rig YAML used to select lab deployment calibration."),
+    )
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--robot", choices=EMBODIMENT_NAMES, default="piper")
     parser.add_argument(
@@ -157,7 +168,16 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         default=None,
         help=advanced(
             "YAML containing robot_from_table for --retarget-mode absolute-table. "
-            "Defaults to configs/calibration/table/{robot}.yaml."
+            "Overrides both the lab-local and canonical simulation profiles."
+        ),
+    )
+    parser.add_argument(
+        "--deployment-profile",
+        choices=("auto", "local", "sim"),
+        default="auto",
+        help=(
+            "Table placement source: auto uses the lab-local calibration from "
+            "rig.yaml when configured, otherwise the canonical simulation profile."
         ),
     )
     parser.add_argument(
@@ -277,43 +297,39 @@ def load_episode_states(
     )
     source_info = ensure_metadata(ref)
     validate_raw_state_metadata(source_info)
-    dataset = open_dataset(ref, episode=args.episode)
+    dataset = open_dataset(ref, episode=args.episode, download_videos=False)
     fps = float(getattr(dataset, "fps", 30) or 30)
-    states: list[np.ndarray] = []
-    normalized_grippers: list[np.ndarray] = []
-    has_normalized_grippers = True
-
-    for item in dataset:
-        if args.source not in item:
-            raise ValueError(f"Dataset item has no {args.source!r} feature.")
-        state = np.asarray(item[args.source], dtype=np.float32).reshape(-1)
-        if len(state) != HANDUMI_RAW_STATE_SIZE:
-            raise ValueError(
-                f"Expected HandUMI state length {HANDUMI_RAW_STATE_SIZE} "
-                f"(poses + grippers) in {args.source!r}, got {len(state)}."
-            )
-        states.append(state)
-        if all(key in item for key in GRIPPER_NORMALIZED_KEYS):
-            normalized_grippers.append(
-                np.asarray(
-                    [
-                        np.asarray(item[key], dtype=np.float32).reshape(-1)[0]
-                        for key in GRIPPER_NORMALIZED_KEYS
-                    ],
-                    dtype=np.float32,
-                )
-            )
-        else:
-            has_normalized_grippers = False
-
-    if not states:
+    table = dataset.hf_dataset
+    if args.source not in table.column_names:
+        raise ValueError(f"Dataset has no {args.source!r} feature.")
+    states = _column_float32(table, args.source)
+    if len(states) == 0:
         raise ValueError(f"Episode {args.episode} is empty.")
-    normalized = (
-        np.clip(np.stack(normalized_grippers, axis=0), 0.0, 1.0)
-        if has_normalized_grippers and len(normalized_grippers) == len(states)
-        else None
-    )
-    return np.stack(states, axis=0), fps, source_info, normalized
+    if states.ndim != 2 or states.shape[1] != HANDUMI_RAW_STATE_SIZE:
+        width = states.shape[1] if states.ndim == 2 else states.shape
+        raise ValueError(
+            f"Expected HandUMI state width {HANDUMI_RAW_STATE_SIZE} "
+            f"(poses + grippers) in {args.source!r}, got {width}."
+        )
+    if all(key in table.column_names for key in GRIPPER_NORMALIZED_KEYS):
+        normalized = np.column_stack(
+            [_column_float32(table, key).reshape(-1) for key in GRIPPER_NORMALIZED_KEYS]
+        )
+        normalized = np.clip(normalized, 0.0, 1.0)
+    else:
+        normalized = None
+    return states, fps, source_info, normalized
+
+
+def _column_float32(table: object, key: str) -> np.ndarray:
+    """Read one column as float32 without the per-row torch formatter."""
+    arrow = getattr(table, "data", None)
+    if arrow is not None and hasattr(arrow, "column"):
+        values = arrow.column(key).to_numpy(zero_copy_only=False)
+        if len(values) and isinstance(values[0], np.ndarray):
+            return np.stack(values).astype(np.float32)
+        return np.asarray(values, dtype=np.float32)
+    return np.asarray(table[key], dtype=np.float32)
 
 
 def _resolve_gripper_openings(
@@ -532,52 +548,29 @@ def _resolved_tcp_calibration(
     )
 
 
-def _pose7_from_mapping(value: object, *, name: str) -> np.ndarray:
-    if not isinstance(value, dict):
-        raise ValueError(f"{name} must be a mapping")
-    try:
-        position = np.asarray(value["position"], dtype=np.float32).reshape(3)
-        quaternion = quat_normalize(
-            np.asarray(value["quaternion"], dtype=np.float32).reshape(4)
-        )
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(
-            f"{name} must contain position[3] and quaternion[4]"
-        ) from exc
-    return np.concatenate([position, quaternion]).astype(np.float32)
-
-
-def load_robot_from_table(
-    path: Path,
-    *,
-    expected_robot: str | None = None,
-) -> np.ndarray:
-    """Load ``T_robot_world_table`` from a deployment calibration YAML."""
-    if not path.exists():
-        raise SystemExit(
-            f"Missing deployment calibration: {path}\n"
-            "Create it with calibration.robot_from_table position/quaternion values."
-        )
-    import yaml
-
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if expected_robot is not None:
-        declared_robot = data.get("robot")
-        if declared_robot != expected_robot:
-            raise SystemExit(
-                f"Deployment calibration {path} declares robot "
-                f"{declared_robot!r}; expected {expected_robot!r}."
+def _deployment_npz_entries(calibration) -> dict[str, np.ndarray]:
+    """Serialize placement provenance from the one canonical metadata dict."""
+    if calibration is not None:
+        metadata = deployment_calibration_metadata(calibration)
+    else:
+        metadata = {
+            "robot": "",
+            "path": "",
+            "profile": "",
+            "scope": "",
+            "source": "",
+            "verified": False,
+            "lab": None,
+        }
+    entries: dict[str, np.ndarray] = {}
+    for key, value in metadata.items():
+        if isinstance(value, bool):
+            entries[f"deployment_calibration_{key}"] = np.asarray([value], dtype=np.bool_)
+        else:
+            entries[f"deployment_calibration_{key}"] = np.asarray(
+                [str(value) if value is not None else ""]
             )
-    if data.get("verified") is not True:
-        print(
-            f"[replay] warning: deployment calibration {path} is not marked "
-            "verified; absolute task placement depends on the physical rig matching it."
-        )
-    root = data.get("calibration", data)
-    try:
-        return _pose7_from_mapping(root["robot_from_table"], name="robot_from_table")
-    except (KeyError, TypeError, ValueError) as exc:
-        raise SystemExit(f"Invalid deployment calibration {path}: {exc}") from exc
+    return entries
 
 
 def apply_tcp_calibration_to_states(
@@ -634,6 +627,7 @@ def _tcp_geometry_diagnostics(
     if left.shape[1] < 3 or len(left) == 0:
         raise ValueError("calibrated TCP trajectories must contain at least one position")
     separation = np.linalg.norm(left[:, :3] - right[:, :3], axis=1)
+    combined_positions = np.concatenate([left[:, :3], right[:, :3]], axis=0)
     return {
         "offset_position_norm_m": np.asarray(
             [
@@ -650,6 +644,16 @@ def _tcp_geometry_diagnostics(
             [np.min(separation)],
             dtype=np.float32,
         ),
+        "same_frame_max_separation_m": np.asarray(
+            [np.max(separation)],
+            dtype=np.float32,
+        ),
+        "workspace_position_min_m": np.min(combined_positions, axis=0).astype(
+            np.float32
+        ),
+        "workspace_position_max_m": np.max(combined_positions, axis=0).astype(
+            np.float32
+        ),
     }
 
 
@@ -662,6 +666,9 @@ def _print_tcp_geometry_diagnostics(
     offsets = diagnostics["offset_position_norm_m"]
     min_z = diagnostics["workspace_min_z_m"]
     min_separation = float(diagnostics["same_frame_min_separation_m"][0])
+    max_separation = float(diagnostics["same_frame_max_separation_m"][0])
+    workspace_min = diagnostics["workspace_position_min_m"]
+    workspace_max = diagnostics["workspace_position_max_m"]
     print(
         "[replay] source tool: "
         f"robot={selection.source_robot} gripper={selection.source_gripper} "
@@ -677,7 +684,13 @@ def _print_tcp_geometry_diagnostics(
         f"[replay] calibrated TCP geometry in {workspace or 'tracking'} frame: "
         f"z_min left={float(min_z[0]) * 100:.1f}cm "
         f"right={float(min_z[1]) * 100:.1f}cm; "
-        f"same-frame separation_min={min_separation * 100:.1f}cm"
+        f"same-frame separation={min_separation * 100:.1f}.."
+        f"{max_separation * 100:.1f}cm"
+    )
+    print(
+        "[replay] source TCP workspace bounds: "
+        f"min=[{workspace_min[0]:.3f}, {workspace_min[1]:.3f}, {workspace_min[2]:.3f}]m "
+        f"max=[{workspace_max[0]:.3f}, {workspace_max[1]:.3f}, {workspace_max[2]:.3f}]m"
     )
 
 
@@ -816,6 +829,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     left_adapter = None
     right_adapter = None
     robot_from_table = None
+    deployment_calibration = None
     left_tool_adapter = None
     right_tool_adapter = None
     initial_solve_count = 0
@@ -850,17 +864,20 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
                 "--retarget-mode absolute-table requires a dataset recorded in the "
                 "calibrated table workspace."
             )
-        deployment_path = args.deployment_calibration or (
-            DEFAULT_DEPLOYMENT_CALIBRATION_DIR / f"{args.robot}.yaml"
-        )
-        robot_from_table = load_robot_from_table(
-            deployment_path,
-            expected_robot=args.robot,
-        )
+        deployment_calibration = getattr(args, "deployment_selection", None)
+        if deployment_calibration is None:
+            deployment_calibration = resolve_deployment_calibration(
+                args.robot,
+                explicit_path=args.deployment_calibration,
+                profile=args.deployment_profile,
+                rig_config=args.rig_config,
+            )
+        robot_from_table = deployment_calibration.pose7
+        print_deployment_calibration(deployment_calibration)
         print(
             "[replay] robot_from_table: "
             f"translation=[{robot_from_table[0]:.4f}, {robot_from_table[1]:.4f}, "
-            f"{robot_from_table[2]:.4f}]m source={deployment_path}"
+            f"{robot_from_table[2]:.4f}]m source={deployment_calibration.path}"
         )
         mapped_left, mapped_right = absolute_table_robot_target_pose7(
             states_for_retarget[frame_indices[0]],
@@ -912,7 +929,10 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
                 "Unable to prepare replay start pose: maximum TCP position error "
                 f"is {initial_max_position_error_m * 100:.2f} cm after "
                 f"{initial_solve_count} IK iterations. Check robot_from_table, TCP "
-                "calibration, or robot reachability."
+                "calibration, or robot reachability. Pass a dataset-specific "
+                "--deployment-calibration or raise --initial-position-tolerance-m "
+                "to visualize; use --retarget-mode local-relative when morphology "
+                "adaptation is acceptable."
             )
 
     start = time.perf_counter()
@@ -1125,6 +1145,18 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             "same_frame_min_separation_m",
             np.asarray([], dtype=np.float32),
         ),
+        "calibrated_tcp_same_frame_max_separation_m": tcp_diagnostics.get(
+            "same_frame_max_separation_m",
+            np.asarray([], dtype=np.float32),
+        ),
+        "calibrated_tcp_workspace_position_min_m": tcp_diagnostics.get(
+            "workspace_position_min_m",
+            np.asarray([], dtype=np.float32),
+        ),
+        "calibrated_tcp_workspace_position_max_m": tcp_diagnostics.get(
+            "workspace_position_max_m",
+            np.asarray([], dtype=np.float32),
+        ),
         "controller_device": np.asarray([controller_device]),
         "tracking_workspace": np.asarray(
             [str(source_metadata.get("tracking_workspace", ""))]
@@ -1133,6 +1165,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             [robot_from_table] if robot_from_table is not None else [],
             dtype=np.float32,
         ),
+        **_deployment_npz_entries(deployment_calibration),
         "left_tool_adapter_pose7": np.asarray(
             [left_tool_adapter] if left_tool_adapter is not None else [],
             dtype=np.float32,
@@ -1229,6 +1262,16 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
     urdf = runtime.load_urdf(load_meshes=True)
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     _render_task_scene(server, args, rollout)
+    table_transforms = rollout.get("robot_from_table_pose7")
+    if table_transforms is not None and len(table_transforms) == 1:
+        table_pose7 = table_transforms[0]
+        server.scene.add_frame(
+            "/table_origin",
+            position=tuple(table_pose7[:3]),
+            wxyz=tuple(table_pose7[[6, 3, 4, 5]]),
+            axes_length=0.15,
+            axes_radius=0.004,
+        )
     if not args.hide_trajectories:
         server.scene.add_spline_catmull_rom(
             "/traj/target_left",
@@ -1325,7 +1368,8 @@ def main() -> None:
         f"  Repository: {selection.repo_id}\n"
         f"  Episode: {args.episode}\n"
         f"  Robot profile: {args.robot}\n"
-        f"  Retargeting: {args.retarget_mode}"
+        f"  Retargeting: {args.retarget_mode}\n"
+        f"  Deployment profile: {args.deployment_profile}"
     )
     if args.dry_run:
         return

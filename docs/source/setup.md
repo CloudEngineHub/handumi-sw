@@ -353,6 +353,31 @@ calibration. `--robot` and `--device` may be omitted when they are set under
 handumi calibrate verify --robot piper --device pico
 ```
 
+Physical robot/table placement is laboratory-local. Copy
+`configs/calibration/table/local/example.yaml` to the ignored conventional
+per-robot path, then measure it:
+
+```bash
+cp configs/calibration/table/local/example.yaml \
+  configs/calibration/table/local/piper.yaml
+```
+
+Identify the laboratory in `configs/rig.yaml`:
+
+```yaml
+deployment:
+  lab: my_research_lab
+```
+
+Use the same stable `lab` identifier inside the copied calibration file. This
+identifier is saved with replay and conversion provenance; a mismatch is
+rejected instead of silently applying another laboratory's transform.
+`deployment.table_calibrations.<robot>` remains available as an optional path
+override for laboratories that keep private calibration outside the repository.
+
+The verifier requires `scope: physical`; it never treats the portable files in
+`configs/calibration/table/sim/` as measurements of the current lab.
+
 The command first checks:
 
 - both cached gripper calibrations and their encoder spans;
