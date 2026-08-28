@@ -66,7 +66,7 @@ def controller_tcp_calibration_from_metadata(
     """Load a self-contained controller->TCP snapshot from dataset metadata."""
     root = metadata.get("controller_to_gripper_tcp", metadata)
     if not isinstance(root, dict):
-        raise ValueError("controller TCP metadata must be a mapping")
+        raise TypeError("controller TCP metadata must be a mapping")
     try:
         left = _side_pose_from_mapping(root, "left")
         right = _side_pose_from_mapping(root, "right")

@@ -556,7 +556,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         value = yaml.safe_load(handle) or {}
     if not isinstance(value, dict):
-        raise ValueError(f"Expected a mapping in {path}.")
+        raise TypeError(f"Expected a mapping in {path}.")
     return value
 
 
@@ -592,7 +592,7 @@ def session_calibration_metadata(path: Path | None) -> dict[str, Any] | None:
         raise ValueError("Session calibration does not match its spatial calibration file.")
     table_from_device = data.get("table_from_device") or data.get("table_from_quest")
     if not isinstance(table_from_device, dict):
-        raise ValueError("Session calibration is missing table_from_device.")
+        raise TypeError("Session calibration is missing table_from_device.")
     tracking_device = str(data.get("tracking_device") or "meta")
     return {
         "path": str(path),
@@ -617,7 +617,7 @@ def session_table_from_device(path: Path) -> np.ndarray:
         raise ValueError(f"Not a HandUMI session calibration: {path}")
     table_from_device = data.get("table_from_device") or data.get("table_from_quest")
     if not isinstance(table_from_device, dict):
-        raise ValueError("Session calibration is missing table_from_device.")
+        raise TypeError("Session calibration is missing table_from_device.")
     return pose7_from_dict(table_from_device)
 
 

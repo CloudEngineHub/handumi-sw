@@ -767,7 +767,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         source_config = None
         try:
             source_config = load_robot_config(source_robot)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             snapshot = _metadata_tcp_snapshot(source_info)
             can_replay_without_profile = (
                 args.controller_tcp_calibration is not None

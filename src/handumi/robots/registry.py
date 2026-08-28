@@ -579,13 +579,13 @@ def _parse_arms(data: dict[str, Any]) -> dict[str, RobotArmConfig]:
             raise ValueError("Robot config must define arms or legacy ee_links.")
         arms_data = {side: {"ee_link": legacy_ee_links[side]} for side in SIDES}
     if not isinstance(arms_data, dict):
-        raise ValueError("arms must be a mapping.")
+        raise TypeError("arms must be a mapping.")
 
     arms: dict[str, RobotArmConfig] = {}
     for side in SIDES:
         raw_arm = arms_data.get(side)
         if not isinstance(raw_arm, dict):
-            raise ValueError(f"arms.{side} must be a mapping.")
+            raise TypeError(f"arms.{side} must be a mapping.")
         ee_link = raw_arm.get("ee_link")
         if not ee_link:
             raise ValueError(f"arms.{side}.ee_link is required.")
@@ -602,7 +602,7 @@ def _parse_gripper_joints(value: Any) -> tuple[GripperJointConfig, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
-        raise ValueError("gripper_joints must be a list.")
+        raise TypeError("gripper_joints must be a list.")
     joints: list[GripperJointConfig] = []
     for item in value:
         if isinstance(item, str):

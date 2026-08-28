@@ -272,7 +272,7 @@ def _restore_enabled_signals(
 ) -> None:
     sources = metadata.get("sources")
     if not isinstance(sources, dict):
-        raise ValueError("Current HandUMI layout requires handumi.sources metadata.")
+        raise TypeError("Current HandUMI layout requires handumi.sources metadata.")
 
     feetech = sources.get("feetech")
     if isinstance(feetech, dict) and "enabled" in feetech:

@@ -659,7 +659,11 @@ def _prepare_streaming_episode(dataset: object, expected_frames: int) -> None:
     writer = getattr(dataset, "writer", None)
     encoder = getattr(writer, "_streaming_encoder", None)
     if not isinstance(encoder, _StrictStreamingEncoder):
-        raise RuntimeError("HandUMI strict streaming encoder is not installed.")
+        # RuntimeError on purpose: this guards an internal setup invariant
+        # (install_strict_streaming_encoder ran), not a caller-supplied type.
+        raise RuntimeError(  # noqa: TRY004
+            "HandUMI strict streaming encoder is not installed."
+        )
     encoder.prepare_episode(expected_frames)
 
 
