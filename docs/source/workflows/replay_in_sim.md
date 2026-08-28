@@ -267,6 +267,11 @@ Important output fields are:
 - `source TCP workspace bounds`: robot-agnostic table-frame volume used by the
   reachability check;
 - `start prepared`: initial solve iterations and first-frame error;
+- `approach`: the playback lead-in that ramps the robot from its home pose to
+  that prepared start pose, so the viewer opens at home exactly like sim
+  teleop. It is render-only, stored separately as `approach_qpos`, and never
+  enters `qpos` or the error metrics. Tune it with `--approach-seconds`
+  (`0` starts playback directly at frame 0);
 - `IK EE error`: mean and maximum position/orientation error over both arms;
 - `max_joint_delta`: the offline joint-step limit selected for the embodiment;
 - `saved`: the NPZ containing targets, achieved TCP poses, errors, and qpos.

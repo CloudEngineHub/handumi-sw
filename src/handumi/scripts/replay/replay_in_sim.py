@@ -207,6 +207,16 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         help=advanced("Required maximum TCP position error before starting replay."),
     )
     parser.add_argument(
+        "--approach-seconds",
+        type=float,
+        default=1.0,
+        help=advanced(
+            "Playback lead-in that ramps the robot from its home pose to the "
+            "episode start pose, mirroring how sim teleop parks at home. "
+            "0 starts playback directly at frame 0."
+        ),
+    )
+    parser.add_argument(
         "--gripper-max-width-m",
         type=float,
         default=None,
@@ -275,6 +285,29 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         help="Resolve and print the replay plan without loading the dataset.",
     )
     return parser
+
+
+def joint_approach_ramp(
+    home_q: np.ndarray,
+    start_q: np.ndarray,
+    *,
+    frames: int,
+) -> np.ndarray:
+    """Smoothstep joint-space lead-in from the home pose to the episode start.
+
+    Playback then begins where sim teleop parks the robot instead of popping
+    straight into the first solved frame (absolute-table prepares that pose
+    with the joint-delta limit disabled, so the jump can exceed a radian).
+    The ramp includes ``home_q`` and excludes ``start_q``: the caller plays
+    the solved trajectory right after it.
+    """
+    home = np.asarray(home_q, dtype=np.float32)
+    start = np.asarray(start_q, dtype=np.float32)
+    if frames <= 0 or float(np.abs(start - home).max()) <= 1e-3:
+        return np.empty((0, home.shape[0]), dtype=np.float32)
+    alpha = np.linspace(0.0, 1.0, frames + 1, dtype=np.float32)[:-1]
+    eased = alpha * alpha * (3.0 - 2.0 * alpha)
+    return (home + eased[:, None] * (start - home)).astype(np.float32)
 
 
 def _replay_locked_joint_indices(
@@ -1022,6 +1055,11 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         left_achieved.append(fk_left_pose7)
         right_achieved.append(fk_right_pose7)
     elapsed = time.perf_counter() - start
+    approach_qs = joint_approach_ramp(
+        runtime.config.home_q.astype(np.float32),
+        qs[0],
+        frames=int(round(fps * args.approach_seconds)),
+    )
     target_left = np.asarray(left_targets, dtype=np.float32)
     target_right = np.asarray(right_targets, dtype=np.float32)
     achieved_left = np.asarray(left_achieved, dtype=np.float32)
@@ -1068,6 +1106,12 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             f"rot_max={initial_max_rotation_error_deg:.2f}deg "
             f"orientation={args.absolute_orientation}"
         )
+    if len(approach_qs):
+        print(
+            "[replay] approach: "
+            f"{len(approach_qs)} frames ({len(approach_qs) / fps:.2f}s) from home, "
+            f"max joint step={float(np.abs(np.diff(np.concatenate([approach_qs, qs[0][None]]), axis=0)).max()):.3f}rad"
+        )
     print(
         "[replay] IK EE error: "
         f"pos mean={all_pos_err.mean() * 100:.2f}cm "
@@ -1093,6 +1137,9 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         print(f"[replay] warning: {message}")
     return {
         "qpos": np.asarray(qs, dtype=np.float32),
+        # Render-only lead-in; kept out of qpos so every per-frame array stays
+        # index-aligned with the solved episode.
+        "approach_qpos": approach_qs,
         "raw_left_pose7_ground_truth": np.asarray(raw_left_gt, dtype=np.float32),
         "raw_right_pose7_ground_truth": np.asarray(raw_right_gt, dtype=np.float32),
         "raw_left_controller_pose7": raw_left_controller_arr[frame_indices],
@@ -1309,12 +1356,22 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
         achieved_right = server.scene.add_icosphere(
             "/achieved/right", radius=0.014, color=(255, 90, 90)
         )
+    approach = rollout.get("approach_qpos")
+    approach_frames = 0 if approach is None else len(approach)
+    total_frames = approach_frames + len(rollout["qpos"])
     play = server.gui.add_checkbox("Play", True)
-    frame = server.gui.add_slider("Frame", 0, len(rollout["qpos"]) - 1, 1, 0)
+    frame = server.gui.add_slider("Frame", 0, total_frames - 1, 1, 0)
     err_text = server.gui.add_text("EE error (cm/deg)", "-", disabled=True)
 
-    def draw(i: int) -> None:
-        robot_view.update_cfg(rollout["qpos"][i])
+    def draw(index: int) -> None:
+        # Frames before the episode replay the home -> start lead-in; markers
+        # stay pinned on frame 0 so the approach visibly aims at it.
+        if index < approach_frames:
+            robot_view.update_cfg(approach[index])
+            i = 0
+        else:
+            i = index - approach_frames
+            robot_view.update_cfg(rollout["qpos"][i])
         if not args.hide_trajectories:
             target_left.position = tuple(rollout["target_left_pose7_robot_world"][i, :3])
             target_right.position = tuple(rollout["target_right_pose7_robot_world"][i, :3])
@@ -1324,19 +1381,22 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
             achieved_right.position = tuple(
                 rollout["achieved_right_pose7_robot_world"][i, :3]
             )
-        err_text.value = (
-            f"L={rollout['left_pos_error_m'][i] * 100:.1f}cm/"
-            f"{rollout['left_rot_error_deg'][i]:.1f}deg "
-            f"R={rollout['right_pos_error_m'][i] * 100:.1f}cm/"
-            f"{rollout['right_rot_error_deg'][i]:.1f}deg"
-        )
+        if index < approach_frames:
+            err_text.value = "home -> start approach"
+        else:
+            err_text.value = (
+                f"L={rollout['left_pos_error_m'][i] * 100:.1f}cm/"
+                f"{rollout['left_rot_error_deg'][i]:.1f}deg "
+                f"R={rollout['right_pos_error_m'][i] * 100:.1f}cm/"
+                f"{rollout['right_rot_error_deg'][i]:.1f}deg"
+            )
 
     draw(0)
     print(f"[replay] viewer: http://localhost:{server.get_port()}")
     current = 0
     while True:
         if play.value:
-            current = (current + 1) % len(rollout["qpos"])
+            current = (current + 1) % total_frames
             frame.value = current
         else:
             current = int(frame.value)
@@ -1379,6 +1439,8 @@ def main() -> None:
         raise ValueError("--initial-solve-iterations must be >= 1.")
     if args.initial_position_tolerance_m <= 0.0:
         raise ValueError("--initial-position-tolerance-m must be > 0.")
+    if args.approach_seconds < 0.0:
+        raise ValueError("--approach-seconds must be >= 0.")
     if args.max_ik_position_error_m <= 0.0:
         raise ValueError("--max-ik-position-error-m must be > 0.")
     if args.max_ik_rotation_error_deg <= 0.0:
