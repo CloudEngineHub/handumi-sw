@@ -8,10 +8,14 @@ calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
   # Both frames use +X right, +Y away from the operator, and +Z up, so no
   # rotation is required. The Metal mounting rail and tabletop share world
-  # Z=0. The forward translation centers the demonstration table in the
-  # shared workspace in front of the two bases; 0.35 m keeps the table
-  # clear of the arms' folded poses while staying inside the ~0.6 m reach.
+  # Z=0. The forward offset places the tblock workspace in front of the arms
+  # rather than on top of their bases: demo hands live at table-frame y in
+  # [-0.54, 0.08] (operator side of the board), which 0.45 m maps to world y
+  # in [-0.09, 0.53]. Validated by replaying episode 0 through the actual IK
+  # solver: EE position error mean 0.26 cm / max 0.56 cm. Euclidean
+  # distance-to-home is NOT a valid placement metric (see openarmv1.yaml);
+  # trust solver rollouts only.
   # Hardware uses a separately measured scope: physical lab-local file.
   robot_from_table:
-    position: [0.0, 0.35, 0.0]
+    position: [0.00, 0.45, 0.0]
     quaternion: [0.0, 0.0, 0.0, 1.0]
