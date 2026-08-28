@@ -103,6 +103,41 @@ JAX_PLATFORMS=cpu uv run handumi replay \
 This warning concerns optional CUDA profiling libraries, not the dataset or
 robot IK.
 
+## Dataset Video Loading Fails in TorchCodec
+
+A traceback ending in `Could not load libtorchcodec`, `libavutil.so.*`, or
+`libavdevice.so.*` occurs while LeRobot opens the dataset's MP4 features. It
+happens while a command decodes camera video and does not by itself indicate a
+damaged dataset. Current trajectory replay reads the Parquet state columns
+without opening MP4 files, so a plain `handumi replay` should not require
+TorchCodec. Report a replay traceback if it still enters `decode_video_frames`.
+
+On Ubuntu/Debian, install the system FFmpeg package:
+
+```bash
+sudo apt update
+sudo apt install -y ffmpeg
+```
+
+Confirm that the executables and TorchCodec loader work:
+
+```bash
+ffmpeg -version
+ffprobe -version
+uv run python -c "from torchcodec.decoders import VideoDecoder; print('TorchCodec OK')"
+```
+
+Errors for FFmpeg major versions that are not installed are expected in the
+expanded TorchCodec traceback. Inspect the block for the installed version; on
+Ubuntu 24.04 the repository package is FFmpeg 6 and provides, among the other
+runtime libraries, `libavdevice.so.60`.
+
+This video-runtime failure is unrelated to a preceding message such as
+`Uninstalled xrobotoolkit-sdk`. A standalone `uv sync --extra sim` may remove
+that locally installed PICO package because it is not part of the portable
+lockfile. Replay does not use XRoboToolkit. Run `bash install.sh --sim` later if
+the same workstation must retain or restore PICO capture support.
+
 ## Viser Shows Trajectories but No Robot
 
 Messages such as `Can't find meshes/visual/base_link.glb` mean the URDF loaded

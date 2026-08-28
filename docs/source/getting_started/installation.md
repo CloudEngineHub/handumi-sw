@@ -10,7 +10,7 @@ must come from the system:
 
 ```bash
 sudo apt update
-sudo apt install -y git curl python3-dev build-essential cmake libportaudio2 adb
+sudo apt install -y git curl python3-dev build-essential cmake libportaudio2 adb ffmpeg
 ```
 
 | Package | Needed for |
@@ -19,6 +19,13 @@ sudo apt install -y git curl python3-dev build-essential cmake libportaudio2 adb
 | `adb` | installing the Quest app and reading its IP; PICO USB diagnostics. `handumi doctor --device pico` fails without it |
 | `build-essential`, `cmake` | the PICO `PXREARobotSDK` native build; unused with `--skip-xrt` |
 | `libportaudio2` | microphone capture for the default voice control |
+| `ffmpeg` | FFmpeg executables and shared libraries loaded by LeRobot/TorchCodec when camera videos are decoded, inspected, or curated |
+
+`ffmpeg` is a system dependency, not a Python package, so `uv sync` cannot
+install it. Trajectory replay reads state columns directly and does not decode
+camera videos, but recording validation and video inspection still require the
+system libraries. A missing or incompatible installation can produce a
+`Could not load libtorchcodec` error in those video workflows.
 
 Install `uv` itself if the workstation does not already have it:
 
@@ -88,6 +95,14 @@ uv sync --extra piper
 uv sync --extra openarm
 uv sync --extra cuda --extra sim
 ```
+
+Use `bash install.sh --sim` instead of a standalone `uv sync --extra sim` on a
+workstation that must retain PICO support. XRoboToolkit is a locally built
+package installed after the project sync and is intentionally not part of the
+portable lockfile; a later standalone `uv sync` can remove it as an unmanaged
+package. Running `install.sh` without `--skip-xrt` performs the sync and then
+reinstalls XRoboToolkit. Its removal does not affect dataset replay or
+simulation.
 
 `install.sh --robot openarmv1` installs the official Ubuntu system packages
 before building the pinned Python binding. The equivalent manual sequence is:
