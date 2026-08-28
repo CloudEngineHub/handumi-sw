@@ -1,0 +1,70 @@
+kind: metal
+urdf: assets/metal/metal_bimanual.urdf
+pkg_root: assets/metal
+
+# Each arm exposes the six revolute joints plus the driven finger slide.
+# joint8 mirrors joint7 through the URDF mimic tag (same structure as piper),
+# so it is not an actuated joint and is not listed here.
+arms:
+  left:
+    ee_link: left_tcp
+    joint_names:
+      - left_joint1
+      - left_joint2
+      - left_joint3
+      - left_joint4
+      - left_joint5
+      - left_joint6
+      - left_joint7
+    gripper_joints:
+      - name: left_joint7
+        closed: 0.0
+        open: -0.05
+  right:
+    ee_link: right_tcp
+    joint_names:
+      - right_joint1
+      - right_joint2
+      - right_joint3
+      - right_joint4
+      - right_joint5
+      - right_joint6
+      - right_joint7
+    gripper_joints:
+      - name: right_joint7
+        closed: 0.0
+        open: -0.05
+
+# Conservative, symmetric simulation pose selected by FK scan: TCPs at
+# (+/-0.30, 0.31, 0.27) with the approach axis pointing forward and slightly
+# down, and joint2/joint3 well away from their one-sided limits (the vendor
+# zero pose rests exactly on both). Grippers start fully open. Validate a
+# separate physical home before adding a real-hardware backend.
+# home_q layout: [left_joint1..7, right_joint1..7].
+home_q: [0.0, -0.9, 0.6, 0.0, 0.0, 0.0, -0.05, 0.0, -0.9, 0.6, 0.0, 0.0, 0.0, -0.05]
+# 2 x 0.05 m finger stroke plus the 2 x 2.75 mm finger carriage offsets.
+gripper_max_width_m: 0.1055
+
+# Physical tool assembly used while demonstrating; datasets recorded with the
+# ARX5_beta tip replay on metal without a new pivot calibration.
+handumi_tool:
+  gripper: ARX5_beta
+  controller_mount: handumi_v1
+controller_tcp_calibrations:
+  meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
+  pico: configs/calibration/controller_tcp/pico_ARX5_beta.yaml
+
+# Initial kinematic profile carried over from yam.yaml; max_reach follows the
+# ~0.6 m Metal reach. Tune against replay IK errors on real datasets.
+ik_weights:
+  pos: 100.0
+  ori: 4.5
+  rest: 4.0
+  max_joint_delta: 0.12
+  max_reach: 0.55
+replay:
+  max_joint_delta: 0.35
+  # Preserve the demonstrated jaw aperture in meters. Metal opens to ~105 mm,
+  # whereas the source HandUMI/Piper gripper opens to 66 mm; normalized
+  # retargeting would exaggerate every grasp.
+  gripper_retarget: physical-width

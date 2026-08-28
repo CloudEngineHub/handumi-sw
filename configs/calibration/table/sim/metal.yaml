@@ -1,0 +1,17 @@
+schema_version: 1
+kind: handumi_robot_table_calibration
+robot: metal
+scope: simulation
+source: configured_simulation_layout
+verified: false
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  # Both frames use +X right, +Y away from the operator, and +Z up, so no
+  # rotation is required. The Metal mounting rail and tabletop share world
+  # Z=0. The forward translation centers the demonstration table in the
+  # shared workspace in front of the two bases; 0.35 m keeps the table
+  # clear of the arms' folded poses while staying inside the ~0.6 m reach.
+  # Hardware uses a separately measured scope: physical lab-local file.
+  robot_from_table:
+    position: [0.0, 0.35, 0.0]
+    quaternion: [0.0, 0.0, 0.0, 1.0]

@@ -95,6 +95,7 @@ flowchart LR
     D --> F[OpenArm]
     D --> G[TRLC-DK1]
     D --> H[I2RT YAM]
+    D --> J[MakerMods Metal]
     D --> I[Other bimanual arms with parallel grippers]
 ```
 
@@ -125,7 +126,8 @@ to contribute an integration. If you want support for a specific bimanual arm,
 
 - Tracking: PICO through XRoboToolkit and Meta Quest through
   [HandUMI Quest App](https://github.com/murobotics-ai/handumi-quest-app).
-- Robot models and simulation: AgileX PiPER, OpenArm, TRLC-DK1, Axol, and I2RT YAM.
+- Robot models and simulation: AgileX PiPER, OpenArm, TRLC-DK1, Axol, I2RT
+  YAM, and MakerMods Metal.
 - Real-robot teleoperation: AgileX PiPER and OpenArm through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
 - Episode control: hands-free by voice ("start recording", "stop recording",

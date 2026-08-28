@@ -1,0 +1,382 @@
+<?xml version="1.0"?>
+<!--
+  Bimanual MakerMods Metal model for HandUMI simulation and replay.
+
+  Derived from metal_with_gripper.urdf in makermods-robotics/metal-python-ros
+  (branch humble, commit ef4181f1305cbcfc63431d3bcfb96f5fb7f72763, MIT); see
+  assets/metal/README.md for the full derivation list. Two vendor copies are
+  namespaced left_/right_ under a shared base 0.60 m apart in a +X-right,
+  +Y-forward, +Z-up world, with both bases yawed -90 deg so the vendor zero
+  pose reaches into the shared +Y workspace. Vendor joint origins, axes,
+  limits, and the driven/mimic finger pair are preserved; finger velocity
+  limits are raised from the vendor's 0 so the joints stay usable, and one
+  fixed TCP link per side marks the grasp point between the finger pads.
+-->
+<robot name="metal_bimanual">
+
+  <material name="metal_body_black">
+    <color rgba="0.10 0.10 0.11 1" />
+  </material>
+  <material name="metal_gripper_black">
+    <color rgba="0.07 0.07 0.08 1" />
+  </material>
+  <material name="metal_finger_black">
+    <color rgba="0.17 0.17 0.18 1" />
+  </material>
+  <material name="metal_mount">
+    <color rgba="0.25 0.25 0.27 1" />
+  </material>
+
+  <link name="metal_bimanual_base">
+    <visual>
+      <origin xyz="0 0 -0.03" rpy="0 0 0" />
+      <geometry>
+        <box size="0.80 0.12 0.06" />
+      </geometry>
+      <material name="metal_mount" />
+    </visual>
+  </link>
+
+  <!-- Left arm: vendor chain under the left mount. -->
+  <link name="left_root" />
+  <joint name="left_mount" type="fixed">
+    <origin xyz="-0.30 0 0" rpy="0 0 1.5707963267949" />
+    <parent link="metal_bimanual_base" />
+    <child link="left_root" />
+  </joint>
+  <joint name="left_root_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="left_root" />
+    <child link="left_base_link" />
+  </joint>
+  <link name="left_tcp" />
+  <joint name="left_tcp_fixed" type="fixed">
+    <origin xyz="0 0 0.085" rpy="0 0 0" />
+    <parent link="left_gripper_base" />
+    <child link="left_tcp" />
+  </joint>
+  <link name="left_base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/base_link.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="left_link1">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link1.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="left_link2">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link2.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="left_link3">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link3.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="left_link4">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link4.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="left_link5">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link5.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="left_link6">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link6.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="left_gripper_base">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/gripper_base.STL" />
+      </geometry>
+      <material name="metal_gripper_black" />
+    </visual>
+  </link>
+  <link name="left_link7">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link7.STL" />
+      </geometry>
+      <material name="metal_finger_black" />
+    </visual>
+  </link>
+  <link name="left_link8">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link8.STL" />
+      </geometry>
+      <material name="metal_finger_black" />
+    </visual>
+  </link>
+  <joint name="left_joint1" type="revolute">
+    <origin xyz="0 0 0.06675" rpy="0 0 0" />
+    <parent link="left_base_link" />
+    <child link="left_link1" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.79" upper="2.79" effort="30" velocity="5" />
+  </joint>
+  <joint name="left_joint2" type="revolute">
+    <origin xyz="0.00075 0 0.055" rpy="1.5707963267949 0 0" />
+    <parent link="left_link1" />
+    <child link="left_link2" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.14" upper="0" effort="100" velocity="5" />
+  </joint>
+  <joint name="left_joint3" type="revolute">
+    <origin xyz="-0.28 0 0" rpy="0 0 0" />
+    <parent link="left_link2" />
+    <child link="left_link3" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="3.14" effort="30" velocity="5" />
+  </joint>
+  <joint name="left_joint4" type="revolute">
+    <origin xyz="0.215000000000004 0.0630000000000073 0" rpy="0 0 0" />
+    <parent link="left_link3" />
+    <child link="left_link4" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.145" upper="1.413" effort="10" velocity="20" />
+  </joint>
+  <joint name="left_joint5" type="revolute">
+    <origin xyz="0.0799999999999998 0.0519999999999981 0.000249997832942123" rpy="1.5707963267949 0 0" />
+    <parent link="left_link4" />
+    <child link="left_link5" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.482" upper="1.482" effort="10" velocity="20" />
+  </joint>
+  <joint name="left_joint6" type="revolute">
+    <origin xyz="0.0235 0 0.0440000000000001" rpy="-3.14159265330655 0 0" />
+    <parent link="left_link5" />
+    <child link="left_link6" />
+    <axis xyz="1 0 0" />
+    <limit lower="-2.529" upper="2.529" effort="10" velocity="20" />
+  </joint>
+  <joint name="left_gripper_base" type="fixed">
+    <origin xyz="0.0758 0 0" rpy="1.57079745225378 -1.57079631189374 1.57079520133601" />
+    <parent link="left_link6" />
+    <child link="left_gripper_base" />
+  </joint>
+  <joint name="left_joint7" type="prismatic">
+    <origin xyz="0 -0.00275000000000102 0" rpy="0 0 -1.5707963267949" />
+    <parent link="left_gripper_base" />
+    <child link="left_link7" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.05" upper="0" effort="3" velocity="0.1" />
+  </joint>
+  <joint name="left_joint8" type="prismatic">
+    <origin xyz="0 0.00274999999999902 0" rpy="0 0 -1.5707963267949" />
+    <parent link="left_gripper_base" />
+    <child link="left_link8" />
+    <axis xyz="1 0 0" />
+    <mimic joint="left_joint7" multiplier="-1.0" offset="0.0" />
+    <limit lower="0" upper="0.05" effort="3" velocity="0.1" />
+  </joint>
+
+  <!-- Right arm: vendor chain under the right mount. -->
+  <link name="right_root" />
+  <joint name="right_mount" type="fixed">
+    <origin xyz="0.30 0 0" rpy="0 0 1.5707963267949" />
+    <parent link="metal_bimanual_base" />
+    <child link="right_root" />
+  </joint>
+  <joint name="right_root_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="right_root" />
+    <child link="right_base_link" />
+  </joint>
+  <link name="right_tcp" />
+  <joint name="right_tcp_fixed" type="fixed">
+    <origin xyz="0 0 0.085" rpy="0 0 0" />
+    <parent link="right_gripper_base" />
+    <child link="right_tcp" />
+  </joint>
+  <link name="right_base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/base_link.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="right_link1">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link1.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="right_link2">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link2.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="right_link3">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link3.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="right_link4">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link4.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="right_link5">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link5.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="right_link6">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link6.STL" />
+      </geometry>
+      <material name="metal_body_black" />
+    </visual>
+  </link>
+  <link name="right_gripper_base">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/gripper_base.STL" />
+      </geometry>
+      <material name="metal_gripper_black" />
+    </visual>
+  </link>
+  <link name="right_link7">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link7.STL" />
+      </geometry>
+      <material name="metal_finger_black" />
+    </visual>
+  </link>
+  <link name="right_link8">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link8.STL" />
+      </geometry>
+      <material name="metal_finger_black" />
+    </visual>
+  </link>
+  <joint name="right_joint1" type="revolute">
+    <origin xyz="0 0 0.06675" rpy="0 0 0" />
+    <parent link="right_base_link" />
+    <child link="right_link1" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.79" upper="2.79" effort="30" velocity="5" />
+  </joint>
+  <joint name="right_joint2" type="revolute">
+    <origin xyz="0.00075 0 0.055" rpy="1.5707963267949 0 0" />
+    <parent link="right_link1" />
+    <child link="right_link2" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.14" upper="0" effort="100" velocity="5" />
+  </joint>
+  <joint name="right_joint3" type="revolute">
+    <origin xyz="-0.28 0 0" rpy="0 0 0" />
+    <parent link="right_link2" />
+    <child link="right_link3" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="3.14" effort="30" velocity="5" />
+  </joint>
+  <joint name="right_joint4" type="revolute">
+    <origin xyz="0.215000000000004 0.0630000000000073 0" rpy="0 0 0" />
+    <parent link="right_link3" />
+    <child link="right_link4" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.145" upper="1.413" effort="10" velocity="20" />
+  </joint>
+  <joint name="right_joint5" type="revolute">
+    <origin xyz="0.0799999999999998 0.0519999999999981 0.000249997832942123" rpy="1.5707963267949 0 0" />
+    <parent link="right_link4" />
+    <child link="right_link5" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.482" upper="1.482" effort="10" velocity="20" />
+  </joint>
+  <joint name="right_joint6" type="revolute">
+    <origin xyz="0.0235 0 0.0440000000000001" rpy="-3.14159265330655 0 0" />
+    <parent link="right_link5" />
+    <child link="right_link6" />
+    <axis xyz="1 0 0" />
+    <limit lower="-2.529" upper="2.529" effort="10" velocity="20" />
+  </joint>
+  <joint name="right_gripper_base" type="fixed">
+    <origin xyz="0.0758 0 0" rpy="1.57079745225378 -1.57079631189374 1.57079520133601" />
+    <parent link="right_link6" />
+    <child link="right_gripper_base" />
+  </joint>
+  <joint name="right_joint7" type="prismatic">
+    <origin xyz="0 -0.00275000000000102 0" rpy="0 0 -1.5707963267949" />
+    <parent link="right_gripper_base" />
+    <child link="right_link7" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.05" upper="0" effort="3" velocity="0.1" />
+  </joint>
+  <joint name="right_joint8" type="prismatic">
+    <origin xyz="0 0.00274999999999902 0" rpy="0 0 -1.5707963267949" />
+    <parent link="right_gripper_base" />
+    <child link="right_link8" />
+    <axis xyz="1 0 0" />
+    <mimic joint="right_joint7" multiplier="-1.0" offset="0.0" />
+    <limit lower="0" upper="0.05" effort="3" velocity="0.1" />
+  </joint>
+
+</robot>

@@ -95,7 +95,9 @@ target gripper has a different maximum width. The default, `normalized`,
 preserves the source opening percentage.
 
 Useful references are `configs/robots/piper.yaml`, `openarmv1.yaml`,
-`trlc_dk1.yaml`, `yam.yaml` and `r1lite.yaml`.
+`trlc_dk1.yaml`, `yam.yaml`, `metal.yaml` and `r1lite.yaml`. `metal.yaml`
+pairs with `assets/metal/README.md` as a complete worked example of combining
+a vendor single-arm URDF, including the driven/mimic finger pattern.
 
 ## 3. Add a simulation test
 
