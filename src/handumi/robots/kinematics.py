@@ -24,6 +24,31 @@ class KinematicsConfig:
     manipulability_weight: float = 0.0
     max_joint_delta: float | None = None
     max_reach: float | None = None
+    # Collision avoidance is opt-in per robot YAML: with both weights at 0 the
+    # solver keeps the exact legacy cost structure. Residuals are penetration
+    # depths in meters, so weights compare against pos_weight (per meter).
+    self_collision_weight: float = 0.0
+    self_collision_margin: float = 0.01
+    world_collision_weight: float = 0.0
+    world_collision_margin: float = 0.005
+    # World height of the tabletop plane in the ROBOT world frame. z=0 only
+    # holds for robots whose mounting rail shares the tabletop plane (piper,
+    # yam, metal); e.g. trlc_dk1's table sits at z=0.05 and r1lite's at 0.94.
+    # Keep it consistent with configs/calibration/table/sim/<robot>.yaml.
+    world_collision_plane_z: float = 0.0
+    # "all" keeps every non-adjacent capsule pair; "inter-arm" restricts the
+    # cost to left_*-vs-right_* pairs (intra-arm safety is the vendor's joint
+    # limits' job) -- a large solve-time saving for bimanual robots.
+    self_collision_pairs: str = "all"
+    # Frames whose capsules all clear the margins by this distance skip the
+    # collision costs entirely and use the legacy fast solve. Soft bound: a
+    # commanded step could theoretically close more than this in one frame,
+    # but retargeted human motion at 30 fps moves ~1-2 cm per frame.
+    collision_activation_distance: float = 0.10
+
+    @property
+    def collision_enabled(self) -> bool:
+        return self.self_collision_weight > 0.0 or self.world_collision_weight > 0.0
 
 
 def limit_joint_delta(
@@ -86,6 +111,90 @@ def _solve(
     return sol[JointVar(0)]
 
 
+@jdc.jit
+def _solve_collision(
+    robot,
+    robot_coll,
+    ee_indices,
+    tgt_pos,
+    tgt_wxyz,
+    q_prev,
+    pos_weight,
+    ori_weight,
+    rest_weight,
+    self_collision_weight,
+    self_collision_margin,
+    world_collision_weight,
+    world_collision_margin,
+    world_plane_z,
+    include_self: jdc.Static[bool] = True,
+):
+    """The legacy ``_solve`` costs plus capsule collision penalties.
+
+    Kept separate from ``_solve`` so robots without a collision model keep
+    the exact problem structure (and compiled cache) they had before.
+    ``include_self`` is static: tabletop manipulation keeps capsules near the
+    z=0 halfspace almost every frame, but the arms are usually far apart, so
+    a world-only variant (25 residuals) avoids paying for the self-collision
+    pairs (the dominant cost) when only the table is close.
+    """
+    JointVar = robot.joint_var_cls
+    target_pose = jaxlie.SE3.from_rotation_and_translation(
+        jaxlie.SO3(tgt_wxyz), tgt_pos
+    )
+    batch = target_pose.get_batch_axes()
+    # Tabletop plane at the robot-world height configured per robot.
+    table = pk.collision.HalfSpace.from_point_and_normal(
+        jnp.array([0.0, 0.0, 1.0]) * world_plane_z, jnp.array([0.0, 0.0, 1.0])
+    )
+    costs = [
+        pk.costs.pose_cost_analytic_jac(
+            jax.tree.map(lambda x: x[None], robot),
+            JointVar(jnp.full(batch, 0)),
+            target_pose,
+            ee_indices,
+            pos_weight=pos_weight,
+            ori_weight=ori_weight,
+        ),
+        pk.costs.rest_cost(
+            JointVar(0),
+            rest_pose=q_prev,
+            weight=rest_weight,
+        ),
+        pk.costs.limit_constraint(robot, JointVar(0)),
+    ]
+    if include_self:
+        costs.append(
+            pk.costs.self_collision_cost(
+                robot,
+                robot_coll,
+                JointVar(0),
+                margin=self_collision_margin,
+                weight=self_collision_weight,
+            )
+        )
+    costs.append(
+        pk.costs.world_collision_cost(
+            robot,
+            robot_coll,
+            JointVar(0),
+            table,
+            margin=world_collision_margin,
+            weight=world_collision_weight,
+        )
+    )
+    sol = (
+        jaxls.LeastSquaresProblem(costs=costs, variables=[JointVar(0)])
+        .analyze()
+        .solve(
+            verbose=False,
+            linear_solver="dense_cholesky",
+            trust_region=jaxls.TrustRegionConfig(lambda_initial=10.0),
+        )
+    )
+    return sol[JointVar(0)]
+
+
 def solve_bimanual(
     robot: pk.Robot,
     ee_indices,
@@ -95,21 +204,48 @@ def solve_bimanual(
     pos_weight=100.0,
     ori_weight=15.0,
     rest_weight=2.0,
+    robot_collision=None,
+    config: KinematicsConfig | None = None,
+    collision_mode: str = "full",
 ) -> np.ndarray:
     """Solve two end-effector targets and return the full actuated config."""
     nq = robot.joints.num_actuated_joints
     if q_prev is None:
         q_prev = np.zeros(nq, dtype=np.float32)
-    cfg = _solve(
-        robot,
-        jnp.array(ee_indices),
-        jnp.array(tgt_pos),
-        jnp.array(tgt_wxyz),
-        jnp.array(q_prev),
-        pos_weight,
-        ori_weight,
-        rest_weight,
-    )
+    if (
+        robot_collision is not None
+        and config is not None
+        and config.collision_enabled
+        and collision_mode != "off"
+    ):
+        cfg = _solve_collision(
+            robot,
+            robot_collision,
+            jnp.array(ee_indices),
+            jnp.array(tgt_pos),
+            jnp.array(tgt_wxyz),
+            jnp.array(q_prev),
+            pos_weight,
+            ori_weight,
+            rest_weight,
+            config.self_collision_weight,
+            config.self_collision_margin,
+            config.world_collision_weight,
+            config.world_collision_margin,
+            config.world_collision_plane_z,
+            include_self=collision_mode == "full",
+        )
+    else:
+        cfg = _solve(
+            robot,
+            jnp.array(ee_indices),
+            jnp.array(tgt_pos),
+            jnp.array(tgt_wxyz),
+            jnp.array(q_prev),
+            pos_weight,
+            ori_weight,
+            rest_weight,
+        )
     return np.array(cfg, dtype=np.float32)
 
 
@@ -125,12 +261,45 @@ class BimanualKinematicsSolver:
         home_q: np.ndarray,
         config: KinematicsConfig,
         locked_joint_indices: tuple[int, ...] = (),
+        robot_collision=None,
     ) -> None:
         self.robot = robot
         self.ee_indices = ee_indices
         self.home_q = np.asarray(home_q, dtype=np.float32)
         self.config = config
+        self.robot_collision = robot_collision
         self.locked_joint_indices = tuple(locked_joint_indices)
+        self._collision_gate = None
+        if robot_collision is not None and config.collision_enabled:
+            table = pk.collision.HalfSpace.from_point_and_normal(
+                jnp.array([0.0, 0.0, config.world_collision_plane_z]),
+                jnp.array([0.0, 0.0, 1.0]),
+            )
+            # Rigid pedestal capsules can poke through z=0 permanently; they
+            # have zero gradient in the cost but would pin the proximity gate
+            # shut, so mask world entries already violating at the rest pose.
+            world_home = np.asarray(
+                robot_collision.compute_world_collision_distance(
+                    robot, self.home_q, table
+                )
+            ).reshape(-1)
+            world_mask = jnp.asarray(
+                world_home >= config.world_collision_margin, dtype=bool
+            )
+            far = jnp.asarray(1e3, dtype=jnp.float32)
+
+            @jax.jit
+            def _gate(cfg):
+                self_min = robot_collision.compute_self_collision_distance(
+                    robot, cfg
+                ).min()
+                world = robot_collision.compute_world_collision_distance(
+                    robot, cfg, table
+                ).reshape(-1)
+                world_min = jnp.where(world_mask, world, far).min()
+                return self_min, world_min
+
+            self._collision_gate = _gate
         self.l_ee_idx, self.r_ee_idx = ee_indices
         arm_joint_indices = arm_joint_indices or {}
         self.left_indices = list(
@@ -154,6 +323,26 @@ class BimanualKinematicsSolver:
 
     def set_posture_pose(self, q: np.ndarray) -> None:
         self.home_q = np.asarray(q, dtype=np.float32)
+
+    def _collision_mode(self, q_prev: np.ndarray) -> str:
+        """Pick the cheapest solve variant that still covers nearby contacts.
+
+        Far from every margin, the collision residuals are all zero and the
+        costly terms buy nothing; the cheap jitted gate (~0.3 ms) picks the
+        legacy fast solve. During tabletop manipulation the fingers hover
+        near z=0 nearly every frame while the arms stay far apart, so the
+        world-only variant handles the common case without paying for the
+        self-collision pairs.
+        """
+        if self.robot_collision is None or self._collision_gate is None:
+            return "off"
+        self_min, world_min = self._collision_gate(jnp.asarray(q_prev))
+        activation = self.config.collision_activation_distance
+        if float(self_min) <= activation:
+            return "full"
+        if float(world_min) <= activation:
+            return "world"
+        return "off"
 
     def _with_locked_joints(self, q: np.ndarray) -> np.ndarray:
         if not self.locked_joint_indices:
@@ -219,6 +408,9 @@ class BimanualKinematicsSolver:
             pos_weight=self.config.pos_weight,
             ori_weight=self.config.ori_weight,
             rest_weight=self.config.rest_weight,
+            robot_collision=self.robot_collision,
+            config=self.config,
+            collision_mode=self._collision_mode(q_prev),
         )
         q_limited = limit_joint_delta(q_prev, q_target, self.config.max_joint_delta)
         return self._with_locked_joints(q_limited)

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import jax.numpy as jnp
 import numpy as np
 import pyroki as pk
 import yaml
@@ -350,6 +351,17 @@ def load_robot_config(name: str) -> RobotConfig:
                 if weights.get("max_joint_delta") is None
                 else float(weights["max_joint_delta"])
             ),
+            self_collision_weight=float(weights.get("self_collision", 0.0)),
+            self_collision_margin=float(weights.get("self_collision_margin", 0.01)),
+            world_collision_weight=float(weights.get("world_collision", 0.0)),
+            world_collision_margin=float(weights.get("world_collision_margin", 0.005)),
+            world_collision_plane_z=float(
+                weights.get("world_collision_plane_z", 0.0)
+            ),
+            self_collision_pairs=str(weights.get("self_collision_pairs", "all")),
+            collision_activation_distance=float(
+                weights.get("collision_activation_distance", 0.10)
+            ),
             max_reach=(
                 None
                 if weights.get("max_reach") is None
@@ -413,22 +425,110 @@ def load_embodiment(name: str) -> RobotRuntime:
                 f"{robot.joints.num_actuated_joints}."
             )
 
+    # Build the capsule collision model once per embodiment, and only when the
+    # YAML opts in: robots without collision weights keep the legacy solver
+    # path (and its compiled cache) untouched. Capsulized links overlap their
+    # structural neighbours (the fit is deliberately coarse), so pairs that
+    # already violate the margin at the rest pose are dropped -- the same idea
+    # as MoveIt's generated disable list -- leaving the cost to act only on
+    # genuinely avoidable contacts such as arm-vs-arm.
+    robot_collision = None
+    if cfg.ik_weights.collision_enabled:
+        pairs_mode = cfg.ik_weights.self_collision_pairs
+        if pairs_mode not in {"all", "inter-arm"}:
+            raise ValueError(
+                "ik_weights.self_collision_pairs must be 'all' or 'inter-arm'."
+            )
+        candidate = pk.collision.RobotCollision.from_urdf(urdf)
+        distances = np.asarray(
+            candidate.compute_self_collision_distance(robot, jnp.asarray(home_q))
+        )
+        margin = cfg.ik_weights.self_collision_margin
+        idx_i = np.asarray(candidate.active_idx_i)
+        idx_j = np.asarray(candidate.active_idx_j)
+        ignore = {
+            (candidate.link_names[idx_i[k]], candidate.link_names[idx_j[k]])
+            for k in np.flatnonzero(distances < margin)
+        }
+        # Pairs inside one gripper assembly are never meaningful: fingers must
+        # be free to close on each other (that is grasping, not a fault) and
+        # the TCP is a virtual grasp-point link between them.
+        joint_children = {j.name: j.child for j in urdf.robot.joints}
+        for side, arm in arms.items():
+            gripper_names = {g.name for g in cfg.arms[side].gripper_joints}
+            assembly = {arm.ee_link}
+            assembly.update(
+                joint_children[name]
+                for name in gripper_names
+                if name in joint_children
+            )
+            # Mimic followers (e.g. the mirrored second finger) belong to the
+            # same assembly even though only the driven joint is declared.
+            assembly.update(
+                j.child
+                for j in urdf.robot.joints
+                if j.mimic is not None and j.mimic.joint in gripper_names
+            )
+            for k in range(len(idx_i)):
+                a = candidate.link_names[idx_i[k]]
+                b = candidate.link_names[idx_j[k]]
+                if a in assembly and b in assembly:
+                    ignore.add((a, b))
+        if pairs_mode == "inter-arm":
+            # Keep only left_*-vs-right_* pairs: intra-arm interference is
+            # already prevented by the vendor's joint limits, and each dropped
+            # pair removes a residual (plus its FK jacobian) from every solve.
+            def _side(link_name: str) -> str | None:
+                for side in SIDES:
+                    if link_name.startswith(f"{side}_"):
+                        return side
+                return None
+
+            for k in range(len(idx_i)):
+                a = candidate.link_names[idx_i[k]]
+                b = candidate.link_names[idx_j[k]]
+                if _side(a) is None or _side(a) == _side(b):
+                    ignore.add((a, b))
+        robot_collision = (
+            pk.collision.RobotCollision.from_urdf(
+                urdf, user_ignore_pairs=tuple(sorted(ignore))
+            )
+            if ignore
+            else candidate
+        )
+        if (
+            cfg.ik_weights.self_collision_weight > 0.0
+            and len(np.asarray(robot_collision.active_idx_i)) == 0
+        ):
+            # A self-collision cost with no pairs would silently do nothing.
+            # inter-arm mode requires the repo's left_/right_ link prefixes;
+            # e.g. openarm's `openarm_left_*` names do not match it.
+            raise ValueError(
+                f"{name}: self_collision is enabled but no active capsule pairs "
+                "remain after pruning. With self_collision_pairs: inter-arm the "
+                "URDF links must be prefixed left_/right_; otherwise use 'all'."
+            )
+
     class _Solver(BimanualKinematicsSolver):
         def __init__(
             self,
             config: KinematicsConfig | None = None,
             locked_joint_indices: tuple[int, ...] | None = None,
         ) -> None:
+            resolved = config or cfg.ik_weights
             super().__init__(
                 robot=robot,
                 ee_indices=ee_indices,
                 arm_joint_indices=arm_joint_indices,
                 home_q=home_q,
-                config=config or cfg.ik_weights,
+                config=resolved,
                 locked_joint_indices=(
                     locked_joint_indices
                     if locked_joint_indices is not None
                     else ()
+                ),
+                robot_collision=(
+                    robot_collision if resolved.collision_enabled else None
                 ),
             )
 

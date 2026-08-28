@@ -63,6 +63,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/base_link.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="left_link1">
     <visual>
@@ -72,6 +78,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link1.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="left_link2">
     <visual>
@@ -81,6 +93,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link2.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="left_link3">
     <visual>
@@ -90,6 +108,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link3.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="left_link4">
     <visual>
@@ -99,6 +123,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link4.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="left_link5">
     <visual>
@@ -108,6 +138,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link5.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="left_link6">
     <visual>
@@ -117,6 +153,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link6.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="left_gripper_base">
     <visual>
@@ -126,6 +168,12 @@
       </geometry>
       <material name="metal_gripper_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/gripper_base.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="left_link7">
     <visual>
@@ -135,6 +183,12 @@
       </geometry>
       <material name="metal_finger_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link7.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="left_link8">
     <visual>
@@ -144,6 +198,12 @@
       </geometry>
       <material name="metal_finger_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link8.STL" />
+      </geometry>
+    </collision>
   </link>
   <joint name="left_joint1" type="revolute">
     <origin xyz="0 0 0.06675" rpy="0 0 0" />
@@ -234,6 +294,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/base_link.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="right_link1">
     <visual>
@@ -243,6 +309,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link1.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="right_link2">
     <visual>
@@ -252,6 +324,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link2.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="right_link3">
     <visual>
@@ -261,6 +339,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link3.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="right_link4">
     <visual>
@@ -270,6 +354,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link4.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="right_link5">
     <visual>
@@ -279,6 +369,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link5.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="right_link6">
     <visual>
@@ -288,6 +384,12 @@
       </geometry>
       <material name="metal_body_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link6.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="right_gripper_base">
     <visual>
@@ -297,6 +399,12 @@
       </geometry>
       <material name="metal_gripper_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/gripper_base.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="right_link7">
     <visual>
@@ -306,6 +414,12 @@
       </geometry>
       <material name="metal_finger_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link7.STL" />
+      </geometry>
+    </collision>
   </link>
   <link name="right_link8">
     <visual>
@@ -315,6 +429,12 @@
       </geometry>
       <material name="metal_finger_black" />
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/link8.STL" />
+      </geometry>
+    </collision>
   </link>
   <joint name="right_joint1" type="revolute">
     <origin xyz="0 0 0.06675" rpy="0 0 0" />

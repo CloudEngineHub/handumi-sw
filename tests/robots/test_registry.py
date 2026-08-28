@@ -69,6 +69,76 @@ def test_urdf_meshes_resolve(runtime) -> None:
         assert geometry.vertices.shape[0] > 0, f"empty mesh for {name}"
 
 
+@pytest.mark.parametrize("other", ("piper", "yam"))
+def test_collision_stays_opt_in_for_other_embodiments(other) -> None:
+    """Robots without collision weights keep the legacy solver path exactly."""
+    rt = load_embodiment(other)
+    assert not rt.config.ik_weights.collision_enabled
+    solver = rt.solver_cls(config=rt.config.ik_weights)
+    assert solver.robot_collision is None
+    assert solver._collision_gate is None
+
+
+def test_collision_model_clean_at_home(runtime) -> None:
+    """Structurally-overlapping capsule pairs are auto-ignored at build time."""
+    solver = runtime.solver_cls(config=runtime.config.ik_weights)
+    if solver.robot_collision is None:
+        pytest.skip("collision not enabled for this embodiment")
+    distances = np.asarray(
+        solver.robot_collision.compute_self_collision_distance(
+            runtime.robot, runtime.home_q()
+        )
+    )
+    margin = runtime.config.ik_weights.self_collision_margin
+    assert float(distances.min()) >= margin - 1e-6
+
+
+def test_self_collision_cost_prevents_interpenetration(runtime) -> None:
+    """Commanding both TCPs to one point must stop at contact, not merge."""
+    solver = runtime.solver_cls(config=runtime.config.ik_weights)
+    if solver.robot_collision is None:
+        pytest.skip("collision not enabled for this embodiment")
+    home = runtime.home_q()
+    left, right = solver.fk_pose7(home)
+    center = ((left[:3] + right[:3]) / 2).astype(np.float32)
+    q = home
+    for _ in range(20):
+        q = np.asarray(
+            solver.ik(
+                q,
+                left_pose=(center, left[3:7]),
+                right_pose=(center, right[3:7]),
+            ),
+            dtype=np.float32,
+        )
+    separation = float(
+        np.asarray(
+            solver.robot_collision.compute_self_collision_distance(runtime.robot, q)
+        ).min()
+    )
+    assert separation > -0.005  # capsules may touch but must not interpenetrate
+
+
+def test_world_collision_cost_keeps_tcp_above_table(runtime) -> None:
+    """Commanding TCPs below z=0 must stop at the tabletop halfspace."""
+    solver = runtime.solver_cls(config=runtime.config.ik_weights)
+    if solver.robot_collision is None:
+        pytest.skip("collision not enabled for this embodiment")
+    home = runtime.home_q()
+    left, right = solver.fk_pose7(home)
+    below_left = (np.array([left[0], left[1], -0.05], dtype=np.float32), left[3:7])
+    below_right = (np.array([right[0], right[1], -0.05], dtype=np.float32), right[3:7])
+    q = home
+    for _ in range(20):
+        q = np.asarray(
+            solver.ik(q, left_pose=below_left, right_pose=below_right),
+            dtype=np.float32,
+        )
+    l_sol, r_sol = solver.fk_pose7(q)
+    assert l_sol[2] > -0.005
+    assert r_sol[2] > -0.005
+
+
 def test_ik_converges_near_home(runtime) -> None:
     solver = runtime.solver_cls(config=runtime.config.ik_weights)
     home = runtime.home_q()

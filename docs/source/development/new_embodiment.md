@@ -81,6 +81,17 @@ ik_weights:
   rest: 2.0
   max_joint_delta: 0.06981317
   max_reach: 0.45
+  # Optional capsule collision penalties; omit for the legacy cost structure.
+  # Requires <collision> geometry in the URDF (capsulized automatically, and
+  # pairs violating the margin at home_q are auto-ignored as structural).
+  # self_collision: 100.0
+  # self_collision_margin: 0.015
+  # self_collision_pairs: inter-arm  # or "all"; inter-arm is much cheaper
+  # world_collision: 100.0        # keeps capsules above the tabletop plane
+  # world_collision_margin: 0.005
+  # world_collision_plane_z: 0.0  # tabletop height in ROBOT world; match the
+  #                               # z in configs/calibration/table/sim/<robot>.yaml
+  # collision_activation_distance: 0.05  # farther than this skips the costs
 
 replay:
   max_joint_delta: 0.20

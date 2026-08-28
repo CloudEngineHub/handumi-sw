@@ -26,7 +26,9 @@ kinematics and the ten visual meshes come from
   CAD's silver/blue engineering colors with the production arm's matte black
   finish (finger carriages slightly lighter so the jaw reads in the viewer);
 - vendor inertial blocks are dropped (kinematic model, matching
-  `assets/yam/yam_bimanual.urdf`);
+  `assets/yam/yam_bimanual.urdf`), but the vendor collision meshes are kept:
+  pyroki capsulizes them at load time for the opt-in IK collision penalties
+  configured in `configs/robots/metal.yaml`;
 - one fixed TCP link per side (`left_tcp`/`right_tcp`) marks the grasp point
   between the finger pads, 0.085 m from `gripper_base` along the approach
   axis (fingertips end at 0.0914 m per `link7.STL`).
