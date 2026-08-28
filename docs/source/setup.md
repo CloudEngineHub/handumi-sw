@@ -117,9 +117,13 @@ A healthy stream reports steady FPS and both controllers tracked.
 
 ### PICO
 
-Install the [XRoboToolkit PC Service](https://github.com/XR-Robotics/XRoboToolkit-PC-Service/releases)
-and follow the current [XR Robotics headset instructions](https://github.com/XR-Robotics).
-Start the PC service, then launch streaming:
+`install.sh` already installed the XRoboToolkit PC service unless it was run
+with `--skip-xrt`; install it from the
+[XRoboToolkit PC Service releases](https://github.com/XR-Robotics/XRoboToolkit-PC-Service/releases)
+only if `/opt/apps/roboticsservice/runService.sh` is missing. Follow the
+current [XR Robotics headset instructions](https://github.com/XR-Robotics) for
+the headset side. Start the PC service in its own terminal and leave it
+running -- `xrt.init()` aborts with a core dump without it:
 
 ```bash
 bash /opt/apps/roboticsservice/runService.sh

@@ -2,6 +2,33 @@
 
 Requires [uv](https://docs.astral.sh/uv/) and Python >= 3.12.
 
+## System Prerequisites
+
+On Ubuntu/Debian, install these before running `install.sh`. The PICO native
+build runs before the virtual environment exists, so its compiler and CMake
+must come from the system:
+
+```bash
+sudo apt update
+sudo apt install -y git curl python3-dev build-essential cmake libportaudio2 adb
+```
+
+| Package | Needed for |
+| --- | --- |
+| `python3-dev` | `Python.h`, required to build `evdev` (pulled in through `lerobot`) |
+| `adb` | installing the Quest app and reading its IP; PICO USB diagnostics. `handumi doctor --device pico` fails without it |
+| `build-essential`, `cmake` | the PICO `PXREARobotSDK` native build; unused with `--skip-xrt` |
+| `libportaudio2` | microphone capture for the default voice control |
+
+Install `uv` itself if the workstation does not already have it:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.local/bin/env
+```
+
+## Install HandUMI
+
 ```bash
 git clone https://github.com/murobotics-ai/handumi-sw.git
 cd handumi-sw
@@ -18,9 +45,12 @@ handumi record --help
 ```
 
 `install.sh` creates the virtual environment, runs `uv sync`, and builds the
-XRoboToolkit SDK needed for PICO. Use `--skip-xrt` when the setup only uses
-Meta Quest. It also creates the ignored machine-local `configs/rig.yaml` from
-`configs/rig.example.yaml` without overwriting an existing rig configuration.
+XRoboToolkit SDK needed for PICO. Without `--skip-xrt` it also installs the
+XRoboToolkit PC service system package, so it prompts for `sudo` partway
+through. Use `--skip-xrt` when the setup only uses Meta Quest, which needs no
+PC service and no system compiler. It also creates the ignored machine-local
+`configs/rig.yaml` from `configs/rig.example.yaml` without overwriting an
+existing rig configuration.
 Activating the environment loads command and option completion for Bash, Zsh,
 or Fish; for example, `handumi re<Tab>` offers `record` and `replay`.
 `hu` is an equivalent short alias for the complete CLI, including help and

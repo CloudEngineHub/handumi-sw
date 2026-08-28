@@ -1,5 +1,20 @@
 # Troubleshooting
 
+## Installation Stops During a Build
+
+`install.sh` aborts on the first failed build. Both common failures are missing
+system packages from
+[System Prerequisites](getting_started/installation.md#system-prerequisites):
+
+| Message | Install |
+| --- | --- |
+| `build.sh: line 25: cmake: command not found` | `build-essential cmake` |
+| `fatal error: Python.h: No such file or directory` (building `evdev`) | `python3-dev` |
+
+Install the package and rerun the same `install.sh` command. Completed steps
+are detected and skipped, so the XRoboToolkit clone and native build are not
+repeated.
+
 ## Device or Port Missing
 
 ```bash
