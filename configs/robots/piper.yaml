@@ -61,6 +61,21 @@ ik_weights:
   max_joint_delta: 0.03490659
   # Cartesian radius in meters around each home TCP; unrelated to FPS.
   max_reach: 0.70
+# Offline replay may follow recorded targets faster than real-time teleoperation.
+# This does not change the real Piper command-rate or speed safety limits below.
+# Without it, replay inherited the 2 deg/frame teleop cap and lagged the demo by
+# up to 15 cm on tblock; 0.35 matches every other embodiment.
+replay:
+  max_joint_delta: 0.35
+  # The teleop profile above holds the arm near home hard (rest 20) and
+  # weights orientation at 20, which is right for a human in the loop but
+  # cannot follow a recorded trajectory: on tblock it left the start pose
+  # 3.67 cm off after 12 unrestricted iterations (replay aborts over 1 cm)
+  # and 33 of 319 frames above 3 cm. These replay-only values reach the same
+  # episode at 0.14 cm mean. The real backend keeps ik_weights untouched.
+  ik_weights:
+    ori: 4.5
+    rest: 4.0
 real:
   backend: piper_can
   command_rate_hz: 100

@@ -7,8 +7,21 @@ verified: false
 calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
   # Table convention: +X right, +Y away from the operator, +Z up.
-  # Piper robot world: +X forward, +Y left, +Z up. The table origin is placed
-  # at the configured task-scene origin, midway between the two arm bases.
+  # Piper robot world: +X forward, +Y left, +Z up. The table origin stays
+  # laterally centered between the two arm bases.
+  #
+  # Depth adopted from outputs/calibration/table/tblock_piper_viz.yaml: the
+  # earlier 0.30 m mapped recorded sessions onto the bases themselves (demo
+  # hands at robot x in [0.03, 0.35]), which forced the arms to fold into
+  # their own upper links -- a tblock replay self-interpenetrated to -5.7 cm
+  # on 112 of 320 frames. At 0.45 m the same episode is collision-free
+  # (worst capsule pair +0.4 cm) and mean EE error drops 7.15 -> 1.83 cm.
+  #
+  # Simulation scope only: physical installations resolve
+  # configs/calibration/table/local/piper.yaml (scope: physical) first, so
+  # this file never overrides a measured lab placement. The BiPiper still
+  # cannot fully reach every tblock episode, so errors stay in the
+  # centimeter range; do not use this placement for quantitative validation.
   robot_from_table:
-    position: [0.30, 0.0, 0.0]
+    position: [0.45, 0.0, 0.0]
     quaternion: [0.0, 0.0, -0.70710678, 0.70710678]

@@ -123,7 +123,8 @@ def test_sim_profile_is_separate_from_lab_config(tmp_path: Path) -> None:
     assert selection.profile == "sim"
     assert selection.scope == "simulation"
     assert selection.path.as_posix().endswith("table/sim/piper.yaml")
-    np.testing.assert_allclose(selection.pose7[:3], [0.30, 0.0, 0.0])
+    # The shipped simulation placement, not the lab file above.
+    np.testing.assert_allclose(selection.pose7[:3], [0.45, 0.0, 0.0])
 
 
 def test_lab_local_calibration_requires_lab_identity(tmp_path: Path) -> None:
