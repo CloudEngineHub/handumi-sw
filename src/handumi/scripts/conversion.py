@@ -74,6 +74,7 @@ from handumi.dataset.screening import (
     load_cached_solve,
     solver_signature,
 )
+from handumi.dataset.tabular import row_scalar
 from handumi.retargeting.handumi_to_robot import (
     local_frame_adapter,
     local_relative_robot_target_pose7,
@@ -485,7 +486,7 @@ def _load_source_tasks(source_root: Path) -> dict[int, str]:
 
     tasks_df = pd.read_parquet(tasks_path)
     task_idx_to_str: dict[int, str] = {
-        int(row["task_index"]): str(task_str)
+        int(row_scalar(row, "task_index")): str(task_str)
         for task_str, row in tasks_df.iterrows()
     }
 
@@ -497,7 +498,7 @@ def _load_source_tasks(source_root: Path) -> dict[int, str]:
     for parquet_path in sorted(glob.glob(str(episodes_dir / "**/*.parquet"), recursive=True)):
         ep_df = pd.read_parquet(parquet_path)
         for _, row in ep_df.iterrows():
-            ep_idx = int(row["episode_index"])
+            ep_idx = int(row_scalar(row, "episode_index"))
             task_list = row.get("tasks", [])
             if task_list and len(task_list) > 0:
                 first_task_idx = task_list[0] if isinstance(task_list[0], (int, np.integer)) else 0
