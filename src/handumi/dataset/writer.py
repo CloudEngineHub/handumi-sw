@@ -167,6 +167,26 @@ class EpisodeResult:
 # ---------------------------------------------------------------------------
 
 
+def _row_scalar(row: pd.Series, column: str, default: Any = None) -> Any:
+    """Return one scalar metadata cell, rejecting duplicate-column results."""
+    value = row.get(column, default)
+    if isinstance(value, pd.Series):
+        raise TypeError(f"Metadata column {column!r} is duplicated")
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return value.item()
+        raise ValueError(f"Metadata column {column!r} must contain scalars")
+    return value
+
+
+def _vector_column(frame: pd.DataFrame, column: str) -> list[Any]:
+    """Return a vector-valued column with duplicate columns ruled out."""
+    values = frame[column]
+    if not isinstance(values, pd.Series):
+        raise TypeError(f"Data column {column!r} is duplicated")
+    return values.tolist()
+
+
 def _compute_feature_stats(values: np.ndarray) -> dict[str, Any]:
     """Compute LeRobot-style statistics for a 2-D float array (frames × dim)."""
     flat = values.reshape(-1) if values.ndim == 1 else values.reshape(len(values), -1)
@@ -431,7 +451,7 @@ def _load_source_video_refs(
     for path in episode_files:
         frame = pd.read_parquet(path)
         for _, row in frame.iterrows():
-            episode_index = int(row["episode_index"])
+            episode_index = int(_row_scalar(row, "episode_index"))
             episode_refs = refs.setdefault(episode_index, {})
             for key in video_keys:
                 prefix = f"videos/{key}"
@@ -444,10 +464,10 @@ def _load_source_video_refs(
                 if not all(column in frame.columns for column in required):
                     continue
                 episode_refs[key] = {
-                    "chunk_index": int(row[required[0]]),
-                    "file_index": int(row[required[1]]),
-                    "from_timestamp": float(row[required[2]]),
-                    "to_timestamp": float(row[required[3]]),
+                    "chunk_index": int(_row_scalar(row, required[0])),
+                    "file_index": int(_row_scalar(row, required[1])),
+                    "from_timestamp": float(_row_scalar(row, required[2])),
+                    "to_timestamp": float(_row_scalar(row, required[3])),
                 }
     return refs
 
@@ -521,7 +541,7 @@ def _load_existing_episode_results(root: Path) -> list[EpisodeResult]:
 
     tasks_df = pd.read_parquet(tasks_path)
     task_by_index = {
-        int(row["task_index"]): str(task)
+        int(_row_scalar(row, "task_index")): str(task)
         for task, row in tasks_df.iterrows()
     }
 
@@ -529,12 +549,12 @@ def _load_existing_episode_results(root: Path) -> list[EpisodeResult]:
     for meta_path in sorted(episodes_dir.glob("chunk-*/*.parquet")):
         meta_df = pd.read_parquet(meta_path)
         for _, row in meta_df.sort_values("episode_index").iterrows():
-            episode_index = int(row["episode_index"])
+            episode_index = int(_row_scalar(row, "episode_index"))
             data_path = (
                 root
                 / "data"
-                / f"chunk-{int(row['data/chunk_index']):03d}"
-                / f"file-{int(row['data/file_index']):03d}.parquet"
+                / f"chunk-{int(_row_scalar(row, 'data/chunk_index')):03d}"
+                / f"file-{int(_row_scalar(row, 'data/file_index')):03d}.parquet"
             )
             data = pd.read_parquet(data_path)
             task_index = int(data["task_index"].iloc[0]) if len(data) else 0
@@ -552,12 +572,12 @@ def _load_existing_episode_results(root: Path) -> list[EpisodeResult]:
                 EpisodeResult(
                     episode_index=episode_index,
                     source_episode_index=int(
-                        row.get("source_episode_index", episode_index)
+                        _row_scalar(row, "source_episode_index", episode_index)
                     ),
-                    states=np.stack(data["observation.state"].to_numpy()).astype(
+                    states=np.stack(_vector_column(data, "observation.state")).astype(
                         np.float32
                     ),
-                    actions=np.stack(data["action"].to_numpy()).astype(np.float32),
+                    actions=np.stack(_vector_column(data, "action")).astype(np.float32),
                     task=task_by_index.get(task_index, "task"),
                     calibration_id=calibration_id,
                     source_kind=source_kind,
