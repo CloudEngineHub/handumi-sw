@@ -337,13 +337,24 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
+JOINT_DATASET_SUFFIX = "joints"
+
+
 def _default_output_repo_id(source_repo_id: str, embodiment: str) -> str:
-    """Derive ``{namespace}/{source_name}-{embodiment}`` from the source repo id."""
+    """Derive ``{namespace}/{source_name}-{embodiment}-joints``.
+
+    The name states both halves of what makes the dataset specific: the
+    embodiment whose kinematics produced the values, and that they are joint
+    angles rather than the robot-agnostic capture. A raw dataset converted for
+    two robots then yields two names that cannot be mistaken for each other or
+    for their source.
+    """
     repo_id = source_repo_id.rstrip("/")
+    suffix = f"-{embodiment}-{JOINT_DATASET_SUFFIX}"
     if "/" in repo_id:
         namespace, name = repo_id.rsplit("/", 1)
-        return f"{namespace}/{name}-{embodiment}"
-    return f"{repo_id}-{embodiment}"
+        return f"{namespace}/{name}{suffix}"
+    return f"{repo_id}{suffix}"
 
 
 def _resolve_conversion_output(

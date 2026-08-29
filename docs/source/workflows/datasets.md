@@ -216,6 +216,23 @@ nothing about another.
 
 ## 5. Convert and Check Target Motion
 
+### Dataset naming
+
+Names carry what makes a dataset specific, so a directory or Hub listing can be
+read without opening anything:
+
+| kind | name | example |
+|---|---|---|
+| raw capture | `<task>` | `tblock` |
+| curated derivative | `<task>-clean` | `tblock-clean` |
+| joint angles | `<source>-<robot>-joints` | `tblock-clean-piper-joints` |
+
+Conversion derives the joint name automatically from the source and the
+`--robot` it was given, so the same capture converted for two embodiments
+produces two names that cannot be confused with each other or with their
+source. `--output` overrides it when a repository is already named.
+
+
 Conversion creates a target-specific dataset while preserving the raw source.
 `--retarget-mode` defaults to `auto` and is resolved with the exact same rule
 `handumi replay` uses, identically for every embodiment: when the source
