@@ -28,6 +28,15 @@ class EpisodeQualityConfig:
     max_bad_sensor_fraction: float = 0.01
     max_bad_sync_fraction: float = 0.01
     max_sync_error_ms: float = MAX_SYNC_SKEW_S * 1000.0
+    # Sensor health and synchronization are not judged during this opening
+    # window. Every source starts an episode with no fresh sample yet, so the
+    # first frames legitimately reuse a stale one and read as both unhealthy
+    # and desynchronized. Without the window the ceilings above, being
+    # fractions, turn episode length into a pass criterion: the same handful of
+    # start-up frames clears the limit in a long episode and exceeds it in a
+    # short one. Expressed in time rather than frames because it is the sensor
+    # period that decides how long a buffer takes to fill.
+    sensor_warmup_s: float = 0.2
     max_translation_speed_m_s: float = 5.0
     max_rotation_step_deg: float = 90.0
     max_pose_freeze_s: float = 1.0
@@ -43,6 +52,7 @@ class EpisodeQualityConfig:
             "max_bad_tracking_fraction",
             "max_bad_sensor_fraction",
             "max_bad_sync_fraction",
+            "sensor_warmup_s",
         ):
             value = float(getattr(self, name))
             if not 0.0 <= value <= 1.0:
@@ -168,8 +178,14 @@ def validate_episode(
 
     dt = _row_deltas(signals, frame_count, fps)
     _check_tracking_fraction(signals, frame_count, cfg, findings, metrics)
-    _check_sensor_health(signals, frame_count, cfg, findings, metrics)
-    _check_sync_error(signals, frame_count, cfg, findings, metrics)
+    # Ignore the opening frames while every source fills its buffer.
+    warmup = min(
+        int(round(max(float(fps), 1e-6) * cfg.sensor_warmup_s)),
+        max(frame_count // 4, 0),
+    )
+    metrics["sensor_warmup_frames"] = warmup
+    _check_sensor_health(signals, frame_count, cfg, findings, metrics, warmup)
+    _check_sync_error(signals, frame_count, cfg, findings, metrics, warmup)
     _check_signal_freezes(signals, frame_count, dt, cfg, findings, metrics)
     _check_kinematics(states, dt, cfg, findings, metrics)
     _check_pose_freezes(states, dt, cfg, findings, metrics)
@@ -245,6 +261,7 @@ def _check_sensor_health(
     cfg: EpisodeQualityConfig,
     findings: list[QualityFinding],
     metrics: dict[str, float | int | bool],
+    warmup: int = 0,
 ) -> None:
     for key in sorted(signals):
         if not key.endswith(".healthy"):
@@ -255,6 +272,7 @@ def _check_sensor_health(
         prefix = key.removesuffix(".healthy")
         enabled = _signal(signals, f"{prefix}.enabled", frame_count)
         mask = np.ones(frame_count, dtype=bool) if enabled is None else enabled >= 0.5
+        mask[:warmup] = False
         if not np.any(mask):
             continue
         fraction = float(np.mean(values[mask] < 0.5))
@@ -281,6 +299,7 @@ def _check_sync_error(
     cfg: EpisodeQualityConfig,
     findings: list[QualityFinding],
     metrics: dict[str, float | int | bool],
+    warmup: int = 0,
 ) -> None:
     for key in sorted(signals):
         if not key.endswith(".sync_error_ms"):
@@ -293,6 +312,7 @@ def _check_sync_error(
         mask = np.isfinite(values)
         if enabled is not None:
             mask &= enabled >= 0.5
+        mask[:warmup] = False
         if not np.any(mask):
             continue
         bad_fraction = float(np.mean(values[mask] > cfg.max_sync_error_ms))

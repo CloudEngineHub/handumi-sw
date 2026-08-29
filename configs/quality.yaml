@@ -5,6 +5,9 @@ quality:
   max_bad_sensor_fraction: 0.01
   max_bad_sync_fraction: 0.01
   max_sync_error_ms: 60.0
+  # Opening window excluded from the sensor health and sync checks: every
+  # source starts with no fresh sample and legitimately reuses a stale one.
+  sensor_warmup_s: 0.2
   max_translation_speed_m_s: 5.0
   max_rotation_step_deg: 90.0
   max_pose_freeze_s: 1.0
