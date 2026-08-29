@@ -909,12 +909,60 @@ def format_gate_guidance(gate: ScreeningGate, *, root: Path, robot: str) -> str:
 
 
 def write_screening_report(path: str | Path, payload: dict[str, Any]) -> Path:
+    """Write the report, and the solved trajectories beside it.
+
+    The trajectories live in a separate npz because they are arrays, not
+    findings: the report stays a readable audit document, and conversion can
+    reuse the solve instead of repeating it.
+    """
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(payload)
+    solves = payload.pop("_solves", None)
+    if solves:
+        cache = payload.get("solve_cache")
+        np.savez_compressed(
+            Path(cache) if cache else output.with_name(output.stem + "_solves.npz"),
+            **solves,
+        )
     output.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return output
+
+
+def load_cached_solve(
+    root: str | Path,
+    *,
+    robot: str,
+    episode: int,
+    signature: str,
+) -> dict[str, np.ndarray] | None:
+    """Return a previously solved rollout, or None when it cannot be trusted.
+
+    Freshness of the dataset and of the robot geometry is already enforced by
+    the screening gate, so this only has to confirm the solver settings match
+    and that this episode is present.
+    """
+    report_path = screening_report_path(root, robot)
+    cache_path = solve_cache_path(root, robot)
+    if not report_path.is_file() or not cache_path.is_file():
+        return None
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if report.get("solver_signature") != signature:
+        return None
+    try:
+        with np.load(cache_path, allow_pickle=False) as archive:
+            prefix = f"{episode}/"
+            keys = [name for name in archive.files if name.startswith(prefix)]
+            if not any(name == f"{prefix}qpos" for name in keys):
+                return None
+            return {name[len(prefix) :]: archive[name] for name in keys}
+    except (OSError, ValueError):
+        return None
 
 
 def render_screening_markdown(payload: dict[str, Any]) -> str:

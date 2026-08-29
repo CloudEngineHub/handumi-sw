@@ -138,11 +138,52 @@ slack of the capsule fit over the finger mesh.
 
 The report lands at `meta/handumi_screening_<robot>.json` and uses the
 `handumi validate` quality-report schema, so it feeds the existing pipeline
-directly:
+directly.
+
+### One command for the whole review
+
+The reviews are separate commands because they answer separate questions, but
+running them by hand invites leaving one out. `handumi dataset qa` sequences
+them and merges the result:
 
 ```bash
-handumi dataset analyze <dataset> --quality-report meta/handumi_screening_piper.json
-handumi dataset curate <dataset> --output <new_root> --exclude 3,4,6,9
+JAX_PLATFORMS=cpu handumi dataset qa \
+  outputs/datasets/handumi-demo \
+  --robot piper
+```
+
+That is exactly `validate`, then `screen` once per `--robot`, then `analyze`.
+`analyze` merges **every** findings report the dataset carries — the recording
+report and one screening report per embodiment — and labels each finding with
+the producer that raised it, so a merged review names the dimension that
+objected. Pass `--quality-report` (repeatable) to select reports explicitly.
+
+Each dimension is measured once, by one producer; `analyze` merges; a human
+decides; `curate` applies. Conversion executes that decision and does not
+re-judge it.
+
+### What needs a reviewer, and what does not
+
+Severity decides who acts, so the reviewer only sees decisions that are
+actually theirs:
+
+- **`reject`** — a mechanical failure: corrupt or non-finite state, an episode
+  below the minimum duration, an unreachable start pose, a position error the
+  robot holds, sensors down past the warm-up window. There is no judgement to
+  add, so `handumi dataset curate --exclude-rejected` removes them all without
+  anyone retyping indices a report already computed.
+- **`warning`** — context decides: a brief self-intersection is one thing
+  during the retraction after a task and another during the grasp; an
+  orientation outlier may be a second session or legitimate variation. These
+  stay opt-in through `--exclude`.
+
+Both compose, and the curation report records which removals were automatic and
+which a reviewer chose, so the audit trail still shows who decided what:
+
+```bash
+handumi dataset curate <dataset> --output <new_root> \
+  --exclude-rejected \
+  --exclude 11,19
 ```
 
 `handumi convert` refuses to run when this report is missing, when episodes it
@@ -151,6 +192,18 @@ dataset payload and the robot: the report records a fingerprint of the URDF,
 the embodiment YAML, and the resolved table calibration, because moving the arm
 bases or the table invalidates every joint solution in it while leaving the
 recorded episodes untouched.
+It also refuses when an episode fails the recording-quality checks, instead of
+skipping it: an output that silently holds fewer episodes than the curated
+input it was given is worse than a conversion that stops and says why.
+
+Conversion reuses the trajectories screening already solved, from the npz
+sidecar beside the report, whenever the solver settings match exactly --
+retarget mode, calibrations, orientation policy, frame selection. That halves
+the IK work of the pipeline, but the reason it matters more is fidelity: the
+solve warm-starts each frame from the previous one, so float32 differences
+compound and two runs of the same conversion disagree on a small fraction of
+frames. Reusing the screened solve is what makes the joints that get written
+the same ones the review graded. `--no-solve-cache` forces a fresh solve.
 Override with `--allow-flagged-episodes` when you have made the call
 deliberately. Screening is per embodiment: a dataset cleared for one robot says
 nothing about another.

@@ -1319,8 +1319,25 @@ def main() -> None:
                     for finding in report.findings
                     if finding.severity == "reject"
                 )
-                print(f"  SKIP: quality filter — {reasons}", file=sys.stderr)
-                continue
+                # Refuse rather than skip. Dropping episodes here produces an
+                # output that silently disagrees with the curated input, and it
+                # decides a second time what curation already decided once.
+                if not args.allow_flagged_episodes:
+                    raise SystemExit(
+                        f"[convert] episode {src_idx} fails recording quality "
+                        f"({reasons}).\n"
+                        "Recording quality is decided during curation, not "
+                        "here. Refresh the review and remove it:\n"
+                        f"  handumi validate {source_root}\n"
+                        f"  handumi dataset analyze {source_root}\n"
+                        f"  handumi dataset curate {source_root} "
+                        "--output <new_root> --exclude <indices>\n"
+                        "To convert it anyway, pass --allow-flagged-episodes."
+                    )
+                print(
+                    f"  WARNING: converting despite quality filter — {reasons}",
+                    file=sys.stderr,
+                )
 
         task = get_task(src_idx)
         try:

@@ -30,8 +30,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-repo-id", default=None)
     parser.add_argument(
         "--exclude",
-        required=True,
-        help="Human-confirmed, comma-separated source episode indices to remove.",
+        default="",
+        help=(
+            "Comma-separated source episode indices to remove. Use this for the "
+            "judgement calls the analysis flagged as warnings."
+        ),
+    )
+    parser.add_argument(
+        "--exclude-rejected",
+        action="store_true",
+        help=(
+            "Also remove every episode the analysis rejected. Those findings "
+            "are mechanical failures, so they need no reviewer to retype them."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -60,6 +71,7 @@ def main() -> None:
             source_repo_id=selection.repo_id,
             output_repo_id=args.output_repo_id,
             exclude_episode_indices=_parse_indices(args.exclude),
+            exclude_rejected=args.exclude_rejected,
         )
     except (OSError, TypeError, ValueError, RuntimeError) as exc:
         raise SystemExit(str(exc)) from exc
@@ -70,6 +82,8 @@ def main() -> None:
         f"  Analysis: {plan.analysis_path}\n"
         f"  Output: {plan.output_root}\n"
         f"  Remove source episodes: {list(plan.excluded_source_episode_indices)}\n"
+        f"    automatic (rejected): {list(plan.auto_excluded_source_episode_indices)}\n"
+        f"    reviewer: {list(plan.human_excluded_source_episode_indices)}\n"
         f"  Keep: {plan.output_total_episodes}/{plan.source_total_episodes}\n"
         "  Publish to Hub: no"
     )

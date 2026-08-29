@@ -28,6 +28,10 @@ COMMANDS = {
         "handumi.scripts.analyze_dataset",
         "Analyze statistics and episode outliers",
     ),
+    ("dataset", "qa"): Command(
+        "handumi.scripts.qa_dataset",
+        "Run every episode review a conversion depends on",
+    ),
     ("dataset", "screen"): Command(
         "handumi.scripts.screen_dataset",
         "Grade episodes by how well a robot can retarget them",

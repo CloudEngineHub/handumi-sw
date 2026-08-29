@@ -173,7 +173,7 @@ def test_plan_requires_human_exclusions_and_detects_stale_report(tmp_path: Path)
     _create_dataset(source)
     report_path = _analysis_report(source)
 
-    with pytest.raises(ValueError, match="explicitly confirmed"):
+    with pytest.raises(ValueError, match="requires episode indices"):
         plan_dataset_curation(
             source,
             analysis_path=report_path,
@@ -234,3 +234,68 @@ def test_curation_reencodes_shared_video_with_source_codec(tmp_path: Path) -> No
     assert len(video["files"]) == 1
     assert video["files"][0]["codec"] == "h264"
     assert video["files"][0]["pixel_format"] == "yuv420p"
+
+
+def test_rejected_episodes_need_no_reviewer_transcription(tmp_path: Path) -> None:
+    """Mechanical failures curate themselves; judgement calls still do not.
+
+    Retyping indices a report already computed adds transcription risk without
+    adding judgement, so `reject` findings are removable on their own. Warnings
+    stay opt-in because whether they disqualify an episode depends on the task.
+    """
+    source = tmp_path / "source"
+    _create_dataset(source)
+    (source / "meta" / "handumi_quality.json").write_text(
+        json.dumps(
+            {
+                "episodes": [
+                    {
+                        "episode_index": 1,
+                        "status": "rejected",
+                        "findings": [
+                            {
+                                "code": "sensor_health_fraction",
+                                "severity": "reject",
+                                "message": "sensor down",
+                                "metrics": {},
+                            }
+                        ],
+                    },
+                    {
+                        "episode_index": 2,
+                        "status": "accepted",
+                        "findings": [
+                            {
+                                "code": "retarget_self_collision",
+                                "severity": "warning",
+                                "message": "folds briefly",
+                                "metrics": {},
+                            }
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    report_path = _analysis_report(source)
+
+    auto = plan_dataset_curation(
+        source,
+        analysis_path=report_path,
+        output_root=tmp_path / "auto",
+        exclude_rejected=True,
+    )
+    assert auto.excluded_source_episode_indices == (1,)
+    assert auto.auto_excluded_source_episode_indices == (1,)
+    assert auto.human_excluded_source_episode_indices == ()
+
+    both = plan_dataset_curation(
+        source,
+        analysis_path=report_path,
+        output_root=tmp_path / "both",
+        exclude_episode_indices=[2],
+        exclude_rejected=True,
+    )
+    assert both.excluded_source_episode_indices == (1, 2)
+    assert both.human_excluded_source_episode_indices == (2,)

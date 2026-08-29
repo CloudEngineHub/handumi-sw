@@ -100,5 +100,6 @@ def test_analysis_merges_quality_rejections_and_round_trips_report(
 
     assert report["candidates_for_review"] == [1]
     finding = report["episodes"][1]["findings"][0]
-    assert finding["source"] == "quality_report"
+    # The producer is named so a merged review says which dimension objected.
+    assert finding["source"] == "quality"
     assert load_analysis_report(report_path) == report

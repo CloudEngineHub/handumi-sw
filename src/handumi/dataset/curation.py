@@ -49,6 +49,10 @@ class DatasetCurationPlan:
     source_total_frames: int
     excluded_source_episode_indices: tuple[int, ...]
     kept_source_episode_indices: tuple[int, ...]
+    # Split by who decided, so the record shows which removals were mechanical
+    # and which were a judgement call.
+    auto_excluded_source_episode_indices: tuple[int, ...] = ()
+    human_excluded_source_episode_indices: tuple[int, ...] = ()
 
     @property
     def output_total_episodes(self) -> int:
@@ -74,6 +78,7 @@ def plan_dataset_curation(
     source_repo_id: str | None = None,
     output_repo_id: str | None = None,
     exclude_episode_indices: list[int] | tuple[int, ...] = (),
+    exclude_rejected: bool = False,
 ) -> DatasetCurationPlan:
     """Build and validate a curation plan without changing either dataset."""
     source = Path(source_root).resolve()
@@ -115,7 +120,21 @@ def plan_dataset_curation(
             f"Analysis report belongs to a different dataset root: {report_root}"
         )
 
-    excluded = {int(value) for value in exclude_episode_indices}
+    human = {int(value) for value in exclude_episode_indices}
+    # Findings graded "reject" describe episodes no reasonable reviewer keeps --
+    # corrupt state, an unreachable start pose, sensors down beyond warm-up --
+    # so requiring a human to retype those indices adds transcription risk
+    # without adding judgement. Warnings still need a person: whether a brief
+    # self-intersection or an orientation outlier disqualifies an episode
+    # depends on the task, and no threshold knows that.
+    automatic: set[int] = set()
+    if exclude_rejected:
+        automatic = {
+            int(item["source_episode_index"])
+            for item in report["episodes"]
+            if isinstance(item, dict) and item.get("status") == "rejected"
+        }
+    excluded = human | automatic
     invalid = sorted(
         value for value in excluded if value < 0 or value >= total_episodes
     )
@@ -123,7 +142,8 @@ def plan_dataset_curation(
         raise ValueError(f"Episode indices out of range: {invalid}")
     if not excluded:
         raise ValueError(
-            "Curation requires explicitly confirmed episode indices to exclude"
+            "Curation requires episode indices to exclude: pass --exclude, or "
+            "--exclude-rejected when the analysis rejected any episode."
         )
     kept = tuple(value for value in range(total_episodes) if value not in excluded)
     if not kept:
@@ -143,6 +163,8 @@ def plan_dataset_curation(
         source_total_frames=total_frames,
         excluded_source_episode_indices=tuple(sorted(excluded)),
         kept_source_episode_indices=kept,
+        auto_excluded_source_episode_indices=tuple(sorted(automatic - human)),
+        human_excluded_source_episode_indices=tuple(sorted(human)),
     )
 
 
@@ -421,6 +443,8 @@ def _build_curated_dataset(
         "source_total_frames": plan.source_total_frames,
         "analysis_report": plan.analysis_path.name,
         "removed_source_episode_indices": list(plan.excluded_source_episode_indices),
+        "removed_automatically": list(plan.auto_excluded_source_episode_indices),
+        "removed_by_reviewer": list(plan.human_excluded_source_episode_indices),
         "removed_frames": sum(
             int(analysis_episodes[index]["frame_count"])
             for index in plan.excluded_source_episode_indices

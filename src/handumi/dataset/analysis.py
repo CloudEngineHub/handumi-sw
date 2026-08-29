@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ def analyze_dataset(
     *,
     repo_id: str | None = None,
     quality_report: str | Path | None = None,
+    quality_reports: Sequence[str | Path] | None = None,
 ) -> dict[str, Any]:
     """Analyze episode lengths and quality findings without changing dataset data."""
     dataset_root = Path(root)
@@ -70,9 +72,10 @@ def analyze_dataset(
     iqr = float(q3 - q1)
     lower_fence = float(q1 - IQR_MULTIPLIER * iqr)
     upper_fence = float(q3 + IQR_MULTIPLIER * iqr)
-    quality_by_episode, resolved_quality_report = _load_quality_findings(
+    quality_by_episode, resolved_quality_reports = _load_quality_findings(
         dataset_root,
         quality_report=quality_report,
+        quality_reports=quality_reports,
     )
 
     episode_results: list[dict[str, Any]] = []
@@ -148,8 +151,13 @@ def analyze_dataset(
             "quality_rejections_included": True,
             "automatic_removal": False,
         },
+        "quality_reports": [
+            str(path.resolve()) for path in resolved_quality_reports
+        ],
         "quality_report": (
-            str(resolved_quality_report.resolve()) if resolved_quality_report else None
+            str(resolved_quality_reports[0].resolve())
+            if resolved_quality_reports
+            else None
         ),
         "summary": {
             "duration_frames": {
@@ -308,49 +316,76 @@ def load_analysis_report(path: str | Path) -> dict[str, Any]:
     return report
 
 
+def discover_quality_reports(root: str | Path) -> list[Path]:
+    """Find every findings report a dataset carries, in a stable order.
+
+    Each report grades one dimension -- recording quality, retargeting for one
+    embodiment -- and they are independent, so an analysis has to see all of
+    them. Reading only one silently drops whole categories of defect from the
+    review a human then curates from.
+    """
+    meta = Path(root) / "meta"
+    if not meta.is_dir():
+        return []
+    found = [meta / "handumi_quality.json"]
+    found.extend(sorted(meta.glob("handumi_screening_*.json")))
+    return [path for path in found if path.is_file()]
+
+
 def _load_quality_findings(
     root: Path,
     *,
-    quality_report: str | Path | None,
-) -> tuple[dict[int, tuple[dict[str, Any], ...]], Path | None]:
-    path = (
-        Path(quality_report)
-        if quality_report is not None
-        else root / "meta" / "handumi_quality.json"
-    )
-    if not path.is_file():
-        if quality_report is not None:
+    quality_report: str | Path | None = None,
+    quality_reports: Sequence[str | Path] | None = None,
+) -> tuple[dict[int, tuple[dict[str, Any], ...]], list[Path]]:
+    if quality_report is not None and quality_reports is not None:
+        raise ValueError("Use only one of quality_report or quality_reports.")
+    if quality_report is not None:
+        requested: list[Path] | None = [Path(quality_report)]
+    elif quality_reports is not None:
+        requested = [Path(item) for item in quality_reports]
+    else:
+        requested = None
+
+    paths = discover_quality_reports(root) if requested is None else requested
+    for path in paths:
+        if not path.is_file():
             raise ValueError(f"Quality report does not exist: {path}")
-        return {}, None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Cannot read quality report {path}: {exc}") from exc
-    result: dict[int, tuple[dict[str, Any], ...]] = {}
-    for item in payload.get("episodes", []):
-        if not isinstance(item, dict) or "episode_index" not in item:
-            continue
-        findings: list[dict[str, Any]] = []
-        for finding in item.get("findings", []):
-            if not isinstance(finding, dict):
+
+    merged: dict[int, list[dict[str, Any]]] = {}
+    resolved: list[Path] = []
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Cannot read quality report {path}: {exc}") from exc
+        resolved.append(path)
+        # Name the producer so a merged review says which dimension objected.
+        source = path.stem.removeprefix("handumi_") or path.stem
+        for item in payload.get("episodes", []):
+            if not isinstance(item, dict) or "episode_index" not in item:
                 continue
-            copied = dict(finding)
-            copied["source"] = "quality_report"
-            findings.append(copied)
-        if item.get("status") == "rejected" and not any(
-            finding.get("severity") == "reject" for finding in findings
-        ):
-            findings.append(
-                {
-                    "code": "quality_report_rejection",
-                    "severity": "reject",
-                    "message": "Episode was rejected by the quality report.",
-                    "metrics": {},
-                    "source": "quality_report",
-                }
-            )
-        result[int(item["episode_index"])] = tuple(findings)
-    return result, path
+            findings: list[dict[str, Any]] = []
+            for finding in item.get("findings", []):
+                if not isinstance(finding, dict):
+                    continue
+                copied = dict(finding)
+                copied["source"] = source
+                findings.append(copied)
+            if item.get("status") == "rejected" and not any(
+                finding.get("severity") == "reject" for finding in findings
+            ):
+                findings.append(
+                    {
+                        "code": "quality_report_rejection",
+                        "severity": "reject",
+                        "message": f"Episode was rejected by {source}.",
+                        "metrics": {},
+                        "source": source,
+                    }
+                )
+            merged.setdefault(int(item["episode_index"]), []).extend(findings)
+    return {index: tuple(items) for index, items in merged.items()}, resolved
 
 
 def dataset_payload_manifest(root: str | Path) -> dict[str, Any]:

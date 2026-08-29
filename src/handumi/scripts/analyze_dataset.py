@@ -22,7 +22,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("dataset", help="Local dataset path or Hugging Face repo id.")
     parser.add_argument("--revision", default="main", help="Hub dataset revision.")
-    parser.add_argument("--quality-report", type=Path, default=None)
+    parser.add_argument(
+        "--quality-report",
+        type=Path,
+        action="append",
+        default=None,
+        dest="quality_reports",
+        help=(
+            "Findings report to merge; repeatable. Defaults to every "
+            "meta/handumi_quality.json and meta/handumi_screening_*.json the "
+            "dataset carries, so no dimension is silently left out."
+        ),
+    )
     parser.add_argument("--report", type=Path, default=None)
     parser.add_argument(
         "--markdown",
@@ -50,7 +61,7 @@ def main() -> None:
         report = analyze_dataset(
             selection.root,
             repo_id=selection.repo_id,
-            quality_report=args.quality_report,
+            quality_reports=args.quality_reports,
         )
     except (OSError, TypeError, ValueError, RuntimeError) as exc:
         raise SystemExit(str(exc)) from exc
