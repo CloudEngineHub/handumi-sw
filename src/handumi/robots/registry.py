@@ -410,6 +410,83 @@ def load_robot_config(name: str) -> RobotConfig:
     )
 
 
+def build_pruned_collision_model(
+    *,
+    urdf,
+    robot,
+    home_q: np.ndarray,
+    arms: Mapping[str, Any],
+    gripper_joints: Mapping[str, tuple[str, ...]],
+    margin: float,
+    pairs_mode: str = "all",
+):
+    """Capsulize the URDF and drop pairs that can never signal a real fault.
+
+    Capsulized links overlap their structural neighbours (the fit is
+    deliberately coarse), so pairs already violating ``margin`` at the rest
+    pose are ignored -- the same idea as MoveIt's generated disable list --
+    leaving only genuinely avoidable contacts such as arm-vs-arm.
+
+    Shared by the solver (which uses it for the opt-in collision cost) and by
+    offline auditing, which needs the same pruning for embodiments that never
+    enable that cost.
+    """
+    if pairs_mode not in {"all", "inter-arm"}:
+        raise ValueError("self_collision_pairs must be 'all' or 'inter-arm'.")
+    candidate = pk.collision.RobotCollision.from_urdf(urdf)
+    distances = np.asarray(
+        candidate.compute_self_collision_distance(robot, jnp.asarray(home_q))
+    )
+    idx_i = np.asarray(candidate.active_idx_i)
+    idx_j = np.asarray(candidate.active_idx_j)
+    ignore = {
+        (candidate.link_names[idx_i[k]], candidate.link_names[idx_j[k]])
+        for k in np.flatnonzero(distances < margin)
+    }
+    # Pairs inside one gripper assembly are never meaningful: fingers must be
+    # free to close on each other (that is grasping, not a fault) and the TCP
+    # is a virtual grasp-point link between them.
+    joint_children = {j.name: j.child for j in urdf.robot.joints}
+    for side, arm in arms.items():
+        gripper_names = set(gripper_joints.get(side, ()))
+        assembly = {arm.ee_link}
+        assembly.update(
+            joint_children[name] for name in gripper_names if name in joint_children
+        )
+        # Mimic followers (e.g. the mirrored second finger) belong to the same
+        # assembly even though only the driven joint is declared.
+        assembly.update(
+            j.child
+            for j in urdf.robot.joints
+            if j.mimic is not None and j.mimic.joint in gripper_names
+        )
+        for k in range(len(idx_i)):
+            a = candidate.link_names[idx_i[k]]
+            b = candidate.link_names[idx_j[k]]
+            if a in assembly and b in assembly:
+                ignore.add((a, b))
+    if pairs_mode == "inter-arm":
+        # Keep only left_*-vs-right_* pairs: intra-arm interference is already
+        # prevented by the vendor's joint limits, and each dropped pair removes
+        # a residual (plus its FK jacobian) from every solve.
+        def _side(link_name: str) -> str | None:
+            for side in SIDES:
+                if link_name.startswith(f"{side}_"):
+                    return side
+            return None
+
+        for k in range(len(idx_i)):
+            a = candidate.link_names[idx_i[k]]
+            b = candidate.link_names[idx_j[k]]
+            if _side(a) is None or _side(a) == _side(b):
+                ignore.add((a, b))
+    if not ignore:
+        return candidate
+    return pk.collision.RobotCollision.from_urdf(
+        urdf, user_ignore_pairs=tuple(sorted(ignore))
+    )
+
+
 def load_embodiment(name: str) -> RobotRuntime:
     cfg = load_robot_config(name)
     urdf = yourdfpy.URDF.load(
@@ -440,76 +517,19 @@ def load_embodiment(name: str) -> RobotRuntime:
                 f"{robot.joints.num_actuated_joints}."
             )
 
-    # Build the capsule collision model once per embodiment, and only when the
-    # YAML opts in: robots without collision weights keep the legacy solver
-    # path (and its compiled cache) untouched. Capsulized links overlap their
-    # structural neighbours (the fit is deliberately coarse), so pairs that
-    # already violate the margin at the rest pose are dropped -- the same idea
-    # as MoveIt's generated disable list -- leaving the cost to act only on
-    # genuinely avoidable contacts such as arm-vs-arm.
     robot_collision = None
     if cfg.ik_weights.collision_enabled:
-        pairs_mode = cfg.ik_weights.self_collision_pairs
-        if pairs_mode not in {"all", "inter-arm"}:
-            raise ValueError(
-                "ik_weights.self_collision_pairs must be 'all' or 'inter-arm'."
-            )
-        candidate = pk.collision.RobotCollision.from_urdf(urdf)
-        distances = np.asarray(
-            candidate.compute_self_collision_distance(robot, jnp.asarray(home_q))
-        )
-        margin = cfg.ik_weights.self_collision_margin
-        idx_i = np.asarray(candidate.active_idx_i)
-        idx_j = np.asarray(candidate.active_idx_j)
-        ignore = {
-            (candidate.link_names[idx_i[k]], candidate.link_names[idx_j[k]])
-            for k in np.flatnonzero(distances < margin)
-        }
-        # Pairs inside one gripper assembly are never meaningful: fingers must
-        # be free to close on each other (that is grasping, not a fault) and
-        # the TCP is a virtual grasp-point link between them.
-        joint_children = {j.name: j.child for j in urdf.robot.joints}
-        for side, arm in arms.items():
-            gripper_names = {g.name for g in cfg.arms[side].gripper_joints}
-            assembly = {arm.ee_link}
-            assembly.update(
-                joint_children[name]
-                for name in gripper_names
-                if name in joint_children
-            )
-            # Mimic followers (e.g. the mirrored second finger) belong to the
-            # same assembly even though only the driven joint is declared.
-            assembly.update(
-                j.child
-                for j in urdf.robot.joints
-                if j.mimic is not None and j.mimic.joint in gripper_names
-            )
-            for k in range(len(idx_i)):
-                a = candidate.link_names[idx_i[k]]
-                b = candidate.link_names[idx_j[k]]
-                if a in assembly and b in assembly:
-                    ignore.add((a, b))
-        if pairs_mode == "inter-arm":
-            # Keep only left_*-vs-right_* pairs: intra-arm interference is
-            # already prevented by the vendor's joint limits, and each dropped
-            # pair removes a residual (plus its FK jacobian) from every solve.
-            def _side(link_name: str) -> str | None:
-                for side in SIDES:
-                    if link_name.startswith(f"{side}_"):
-                        return side
-                return None
-
-            for k in range(len(idx_i)):
-                a = candidate.link_names[idx_i[k]]
-                b = candidate.link_names[idx_j[k]]
-                if _side(a) is None or _side(a) == _side(b):
-                    ignore.add((a, b))
-        robot_collision = (
-            pk.collision.RobotCollision.from_urdf(
-                urdf, user_ignore_pairs=tuple(sorted(ignore))
-            )
-            if ignore
-            else candidate
+        robot_collision = build_pruned_collision_model(
+            urdf=urdf,
+            robot=robot,
+            home_q=home_q,
+            arms=arms,
+            gripper_joints={
+                side: tuple(g.name for g in cfg.arms[side].gripper_joints)
+                for side in arms
+            },
+            margin=cfg.ik_weights.self_collision_margin,
+            pairs_mode=cfg.ik_weights.self_collision_pairs,
         )
         if (
             cfg.ik_weights.self_collision_weight > 0.0

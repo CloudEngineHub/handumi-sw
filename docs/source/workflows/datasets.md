@@ -104,7 +104,58 @@ controller mount, calibration hashes, source enablement, and coordinate layout
 are stored in metadata. Raw controller poses remain unchanged so the same
 capture can be checked against another supported robot.
 
-## 4. Convert and Check Target Motion
+## 4. Screen the Dataset Against the Target Robot
+
+Validation and analysis grade the *recording*. Neither knows whether a given
+robot can follow it: an episode with perfect tracking can still leave the arm
+folded into itself, or be the only session recorded with a different wrist
+pose. Screen the dataset before its episodes become joint targets:
+
+```bash
+JAX_PLATFORMS=cpu handumi dataset screen \
+  outputs/datasets/handumi-demo \
+  --robot piper
+```
+
+Every episode runs through the same solver `handumi convert` uses, so the
+numbers are the ones that would be written, not an approximation. Per episode
+the report records TCP position and orientation error, the start-pose residual,
+self-collision clearance, and tabletop clearance, then grades it:
+
+- `retarget_start_pose_unreachable`, `retarget_position_error` — rejections;
+  the robot cannot perform the episode.
+- `retarget_rotation_error`, `retarget_self_collision` — warnings for you to
+  judge. A brief self-intersection during the retraction after the task is very
+  different from one during the grasp.
+- `retarget_rotation_outlier` — orientation tracking inconsistent with the rest
+  of the dataset. The threshold is a multiple of the dataset median, not a
+  fixed ceiling: a second recording session stays well inside any absolute
+  limit while still teaching a policy two behaviors for one task.
+
+Tabletop contact is reported as a metric without a finding. Fingertips reaching
+the surface during a grasp is the demonstration itself, plus the deliberate
+slack of the capsule fit over the finger mesh.
+
+The report lands at `meta/handumi_screening_<robot>.json` and uses the
+`handumi validate` quality-report schema, so it feeds the existing pipeline
+directly:
+
+```bash
+handumi dataset analyze <dataset> --quality-report meta/handumi_screening_piper.json
+handumi dataset curate <dataset> --output <new_root> --exclude 3,4,6,9
+```
+
+`handumi convert` refuses to run when this report is missing, when episodes it
+flagged are still included, or when it is stale. Staleness covers both the
+dataset payload and the robot: the report records a fingerprint of the URDF,
+the embodiment YAML, and the resolved table calibration, because moving the arm
+bases or the table invalidates every joint solution in it while leaving the
+recorded episodes untouched.
+Override with `--allow-flagged-episodes` when you have made the call
+deliberately. Screening is per embodiment: a dataset cleared for one robot says
+nothing about another.
+
+## 5. Convert and Check Target Motion
 
 Conversion creates a target-specific dataset while preserving the raw source.
 `--retarget-mode` defaults to `auto` and is resolved with the exact same rule
@@ -137,14 +188,14 @@ Replay and validate the converted motion before using it with a robot-specific
 integration. See [Add a New Robot Embodiment](../development/new_embodiment.md)
 when adding another simulation model or hardware backend.
 
-## 5. Curate Rejected or Incomplete Data
+## 6. Curate Rejected or Incomplete Data
 
 When a dataset contains rejected or incomplete episodes, create a separate
 curated derivative before conversion or publication. The analysis and curation
 steps are intentionally separate so statistical outliers can be reviewed before
 any data is removed. See [Analyze and Curate Datasets](dataset_curation.md).
 
-## 6. Publish Accepted Data
+## 7. Publish Accepted Data
 
 Upload only after the replay and validation checks pass:
 

@@ -68,6 +68,10 @@ from handumi.dataset.raw import (
     RIGHT_POSE_SLICE,
 )
 from handumi.dataset.reader import dataset_root_from_repo_id, handumi_metadata
+from handumi.dataset.screening import (
+    evaluate_screening_gate,
+    format_gate_guidance,
+)
 from handumi.retargeting.handumi_to_robot import (
     local_frame_adapter,
     local_relative_robot_target_pose7,
@@ -300,6 +304,14 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--help-advanced", action="store_true", help="Show expert IK and calibration options."
+    )
+    parser.add_argument(
+        "--allow-flagged-episodes",
+        action="store_true",
+        help=(
+            "Convert even when the retargeting screening is missing, stale, or "
+            "still flags episodes."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -1200,6 +1212,23 @@ def main() -> None:
         f"Processing: {len(episode_indices)}  "
         f"{episode_indices[:5]}{'…' if len(episode_indices) > 5 else ''}"
     )
+
+    # Retargeting screening gate: never turn episodes a human has not cleared
+    # for this embodiment into joint targets.
+    gate = evaluate_screening_gate(
+        source_root,
+        robot=args.embodiment,
+        episodes=episode_indices,
+    )
+    if gate.blocks:
+        guidance = format_gate_guidance(
+            gate, root=source_root, robot=args.embodiment
+        )
+        if not args.allow_flagged_episodes:
+            raise SystemExit(f"[convert] {guidance}")
+        print(f"[convert] warning: screening gate overridden.\n{gate.detail}")
+    else:
+        print(f"[convert] screening: clear ({gate.report_path})")
 
     # ------------------------------------------------------------------
     # Load task descriptions for each episode
