@@ -1259,6 +1259,16 @@ def main() -> None:
         if not args.allow_flagged_episodes:
             raise SystemExit(f"[convert] {guidance}")
         print(f"[convert] warning: screening gate overridden.\n{gate.detail}")
+    elif gate.status == "review":
+        # Warnings were a reviewer's call during curation, so they are recorded
+        # here rather than blocking; overriding for them would make the override
+        # habitual and cover the checks that must never be waived.
+        print(f"[convert] {gate.detail}")
+        for index in sorted(gate.flagged):
+            codes = ", ".join(
+                str(finding.get("code")) for finding in gate.flagged[index]
+            )
+            print(f"[convert]   episode {index}: {codes}")
     else:
         print(f"[convert] screening: clear ({gate.report_path})")
 

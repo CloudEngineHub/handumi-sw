@@ -192,6 +192,11 @@ dataset payload and the robot: the report records a fingerprint of the URDF,
 the embodiment YAML, and the resolved table calibration, because moving the arm
 bases or the table invalidates every joint solution in it while leaving the
 recorded episodes untouched.
+It refuses on a missing or stale report, and on episodes it rejected that are
+still included. Warnings are reported but do not block: a reviewer already
+settled those during curation, and blocking would make the override habitual
+when that same override switches off the checks that must never be waived.
+
 It also refuses when an episode fails the recording-quality checks, instead of
 skipping it: an output that silently holds fewer episodes than the curated
 input it was given is worse than a conversion that stops and says why.

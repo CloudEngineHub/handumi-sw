@@ -746,13 +746,22 @@ class ScreeningGate:
     """Whether a dataset is cleared for joint conversion on one embodiment."""
 
     report_path: Path
-    status: str  # "clear" | "missing" | "stale" | "flagged"
+    status: str  # "clear" | "review" | "missing" | "stale" | "flagged"
     flagged: dict[int, list[dict[str, Any]]]
     detail: str
 
     @property
     def blocks(self) -> bool:
-        return self.status != "clear"
+        """Refuse only what a reviewer cannot already have settled.
+
+        Warnings do not block. Curation is where a reviewer acts on them, so
+        after removing the rejections a dataset still carries warnings by
+        definition; blocking there would make the override reflexive, and that
+        override also switches off the missing, stale and rejected checks --
+        the ones that catch a report written against different data or a
+        different robot.
+        """
+        return self.status in {"missing", "stale", "flagged"}
 
 
 def evaluate_screening_gate(
@@ -854,13 +863,28 @@ def evaluate_screening_gate(
         and (wanted is None or int(item["episode_index"]) in wanted)
     }
     if flagged:
+        rejected = {
+            index: findings
+            for index, findings in flagged.items()
+            if any(f.get("severity") == "reject" for f in findings)
+        }
+        if rejected:
+            return ScreeningGate(
+                report_path=path,
+                status="flagged",
+                flagged=flagged,
+                detail=(
+                    f"{len(rejected)} episode(s) are unusable on {robot!r} and "
+                    "are still included."
+                ),
+            )
         return ScreeningGate(
             report_path=path,
-            status="flagged",
+            status="review",
             flagged=flagged,
             detail=(
-                f"{len(flagged)} episode(s) still carry screening findings for "
-                f"{robot!r}."
+                f"{len(flagged)} episode(s) carry warnings for {robot!r} that a "
+                "reviewer chose to keep."
             ),
         )
     return ScreeningGate(

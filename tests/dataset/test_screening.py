@@ -217,7 +217,12 @@ def test_gate_blocks_when_the_dataset_changed_after_screening(tmp_path: Path) ->
     assert gate.blocks
 
 
-def test_gate_blocks_on_findings_and_clears_without_them(tmp_path: Path) -> None:
+def test_gate_blocks_rejections_but_not_warnings(tmp_path: Path) -> None:
+    """Warnings are a reviewer's call, already made during curation.
+
+    Blocking on them would make the override habitual, and that same override
+    switches off the missing, stale and rejected checks.
+    """
     root = _write_dataset(tmp_path)
     _write_report(
         root,
@@ -225,10 +230,26 @@ def test_gate_blocks_on_findings_and_clears_without_them(tmp_path: Path) -> None
         flagged={1: [{"code": "retarget_self_collision", "severity": "warning"}]},
     )
     gate = evaluate_screening_gate(root, robot="piper")
-    assert gate.status == "flagged"
+    assert gate.status == "review"
     assert set(gate.flagged) == {1}
-    # Converting only the clean episodes is allowed.
-    assert not evaluate_screening_gate(root, robot="piper", episodes=[0, 2]).blocks
+    assert not gate.blocks
+
+    rejected = _write_dataset(tmp_path / "other")
+    _write_report(
+        rejected,
+        robot="piper",
+        flagged={
+            1: [{"code": "retarget_position_error", "severity": "reject"}],
+            2: [{"code": "retarget_self_collision", "severity": "warning"}],
+        },
+    )
+    gate = evaluate_screening_gate(rejected, robot="piper")
+    assert gate.status == "flagged"
+    assert gate.blocks
+    # Converting only the episodes without a rejection is allowed.
+    assert not evaluate_screening_gate(
+        rejected, robot="piper", episodes=[0, 2]
+    ).blocks
 
 
 def test_gate_blocks_when_the_robot_geometry_changed(tmp_path: Path) -> None:
