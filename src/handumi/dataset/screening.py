@@ -14,6 +14,7 @@ into ``handumi dataset curate --exclude``.
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -73,6 +74,61 @@ def robot_fingerprint(
     return entries
 
 
+def solve_cache_path(root: str | Path, robot: str) -> Path:
+    """Sidecar holding the trajectories screening already solved."""
+    return Path(root) / "meta" / f"handumi_screening_{robot}_solves.npz"
+
+
+# Everything the replay solver reads that can change the joints it produces.
+# A cached trajectory is only reusable when all of it matches, so conversion
+# falls back to solving rather than emitting joints from different settings.
+_SOLVER_ARGS = (
+    "source",
+    "retarget_mode",
+    "compose_source",
+    "translation_scale",
+    "controller_device",
+    "controller_tcp_calibration",
+    "use_dataset_tcp_calibration",
+    "raw_controller_debug",
+    "absolute_orientation",
+    "initial_solve_iterations",
+    "initial_position_tolerance_m",
+    "gripper_max_width_m",
+    "only_manipulation",
+    "start_frame",
+    "max_frames",
+    "stride",
+)
+
+# Cached solves are keyed by these fields plus the robot fingerprint and the
+# dataset manifest, both already recorded in the screening report.
+CACHED_ROLLOUT_FIELDS = (
+    "qpos",
+    "gripper_normalized",
+    "left_pos_error_m",
+    "right_pos_error_m",
+    "left_rot_error_deg",
+    "right_rot_error_deg",
+    "initial_solve_iterations",
+    "retarget_mode",
+    "gripper_source",
+)
+
+
+def solver_signature(args, *, deployment_path: str | Path | None = None) -> str:
+    """Digest the solver settings a cached trajectory was produced under."""
+    payload = {name: str(getattr(args, name, None)) for name in _SOLVER_ARGS}
+    payload["deployment_calibration"] = str(
+        deployment_path
+        if deployment_path is not None
+        else getattr(args, "deployment_calibration", None)
+    )
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
 @dataclass(frozen=True)
 class RetargetScreeningConfig:
     """Thresholds for grading a retargeted episode.
@@ -85,12 +141,12 @@ class RetargetScreeningConfig:
     task. ``rotation_outlier_floor_deg`` keeps that rule quiet on datasets
     whose spread is uniformly small.
 
-    The threshold is a multiple of the median rather than an IQR fence: a
+    The threshold is a multiple of the median rather than an IQR fence. A
     second recording session is not a sprinkle of outliers but a whole cluster,
-    and on real data (10 tblock episodes, 4 of them from such a cluster) it
-    inflated Q3 and the IQR enough that the fence caught nothing. The median
-    stays inside the dominant cluster until contamination passes half the
-    dataset, which is the point where no automatic rule can help anyway.
+    and once such a cluster is a sizeable minority it sits inside Q3, inflating
+    the interquartile range until the fence catches nothing. The median stays
+    inside the dominant cluster until contamination passes half the dataset,
+    which is the point where no automatic rule can help anyway.
     """
 
     max_position_error_m: float = 0.03
@@ -137,6 +193,109 @@ def _pedestal_columns(coll, robot, home_q: np.ndarray, plane) -> set[int]:
     return set(np.flatnonzero(distances < 0.0).tolist())
 
 
+def collision_meshes(runtime) -> dict[str, Any]:
+    """Load each link's collision geometry as a convex hull in its link frame.
+
+    Capsules enclose these meshes generously: a capsule fitted to a long or
+    curved link bulges several centimeters past the geometry, so it can report
+    deep interpenetration between parts that are comfortably apart. Capsule
+    overlap alone therefore cannot decide whether a trajectory is executable,
+    and is used only to select candidate frames for this check.
+
+    Hulls rather than raw meshes because collision geometry is often not
+    watertight, which makes signed distance -- the only way to measure
+    penetration rather than surface distance -- unreliable on it. A hull is
+    watertight by construction and contains its mesh, so it can over-report a
+    contact but never miss one, which is the safe direction for a filter that
+    discards data.
+    """
+    import trimesh
+
+    urdf = runtime.load_urdf(load_meshes=True)
+    pkg_root = Path(runtime.config.pkg_root)
+    meshes: dict[str, Any] = {}
+    for link in urdf.robot.links:
+        candidates = [
+            c
+            for c in (link.collisions or [])
+            if c.geometry is not None and c.geometry.mesh is not None
+        ]
+        if not candidates:
+            continue
+        collision = candidates[0]
+        raw = collision.geometry.mesh.filename
+        relative = (
+            raw.split("://", 1)[1].split("/", 1)[1]
+            if raw.startswith("package://")
+            else raw
+        )
+        try:
+            mesh = trimesh.load(pkg_root / relative, force="mesh")
+        except (OSError, ValueError):
+            continue
+        if not isinstance(mesh, trimesh.Trimesh):
+            continue
+        if collision.origin is not None:
+            mesh = mesh.copy()
+            mesh.apply_transform(np.asarray(collision.origin))
+        meshes[link.name] = mesh.convex_hull
+    return meshes
+
+
+def _link_transforms(runtime, q: np.ndarray) -> dict[str, np.ndarray]:
+    import trimesh
+
+    poses = np.asarray(runtime.robot.forward_kinematics(jnp.asarray(q)))
+    transforms = {}
+    for index, name in enumerate(runtime.robot.links.names):
+        matrix = trimesh.transformations.quaternion_matrix(poses[index][:4])
+        matrix[:3, 3] = poses[index][4:7]
+        transforms[name] = matrix
+    return transforms
+
+
+def _mesh_separation(mesh_a, transform_a, mesh_b, transform_b, *, stride: int = 1) -> float:
+    """Signed separation in meters: positive is clear, negative is penetration.
+
+    ``signed_distance`` is positive inside a watertight mesh, so negating the
+    deepest reading over both directions yields one number that is the surface
+    gap when apart and the penetration depth when overlapping.
+    """
+    import trimesh
+
+    a = mesh_a.copy()
+    a.apply_transform(transform_a)
+    b = mesh_b.copy()
+    b.apply_transform(transform_b)
+    deepest = max(
+        float(trimesh.proximity.signed_distance(a, b.vertices[::stride]).max()),
+        float(trimesh.proximity.signed_distance(b, a.vertices[::stride]).max()),
+    )
+    return -deepest
+
+
+COLLISION_CHUNK_FRAMES = 128
+
+
+def _chunked(fn, qpos: np.ndarray, chunk: int = COLLISION_CHUNK_FRAMES) -> np.ndarray:
+    """Evaluate ``fn`` over frames in fixed-size blocks.
+
+    Episodes have different lengths, so passing a whole episode makes XLA
+    recompile per episode -- measured at ~3 s each against 5 ms once the shape
+    is cached, which dominated the screening run. Padding to a constant block
+    means one compilation for the entire dataset.
+    """
+    count = len(qpos)
+    padding = (-count) % chunk
+    if padding:
+        qpos = np.concatenate([qpos, np.repeat(qpos[-1:], padding, axis=0)])
+    blocks = [
+        np.asarray(fn(jnp.asarray(qpos[start : start + chunk])))
+        for start in range(0, len(qpos), chunk)
+    ]
+    return np.concatenate(blocks, axis=0)[:count]
+
+
 def _collision_metrics(
     qpos: np.ndarray,
     *,
@@ -145,16 +304,72 @@ def _collision_metrics(
     plane,
     pedestal: set[int],
     world_fn,
+    self_fn,
+    meshes: dict[str, Any],
+    narrow_phase_frames: int = 8,
+    vertex_stride: int = 1,
 ) -> dict[str, float | int]:
-    self_distances = np.asarray(
-        coll.compute_self_collision_distance(runtime.robot, jnp.asarray(qpos))
-    )
-    world = np.asarray([world_fn(jnp.asarray(cfg)) for cfg in qpos])
+    """Capsule broad phase, then a convex-hull check on the frames it flags."""
+    self_distances = _chunked(self_fn, qpos)
+    world = _chunked(world_fn, qpos)
     columns = [c for c in range(world.shape[1]) if c not in pedestal]
     world = world[:, columns]
+
+    link_names = list(coll.link_names)
+    idx_i = np.asarray(coll.active_idx_i)
+    idx_j = np.asarray(coll.active_idx_j)
+    confirmed_frames: set[int] = set()
+    mesh_min = float("inf")
+    unverifiable = 0
+    for pair in np.flatnonzero((self_distances < 0.0).any(axis=0)):
+        a, b = link_names[idx_i[pair]], link_names[idx_j[pair]]
+        candidates = np.flatnonzero(self_distances[:, pair] < 0.0)
+        if a not in meshes or b not in meshes:
+            # No collision geometry to confirm against: keep the capsule verdict
+            # rather than silently clearing the pair.
+            confirmed_frames.update(candidates.tolist())
+            unverifiable += 1
+            continue
+        # Deepest capsule overlaps first: if those clear, the pair is clear.
+        ordered = candidates[np.argsort(self_distances[candidates, pair])]
+        probe = ordered[:narrow_phase_frames]
+        separations = {}
+        for frame in probe:
+            transforms = _link_transforms(runtime, qpos[frame])
+            separations[int(frame)] = _mesh_separation(
+                meshes[a], transforms[a], meshes[b], transforms[b], stride=vertex_stride
+            )
+        mesh_min = min(mesh_min, min(separations.values()))
+        touching = [f for f, d in separations.items() if d <= 0.0]
+        if not touching:
+            continue
+        # Real contact exists, so price the whole pair exactly.
+        for frame in ordered:
+            if int(frame) in separations:
+                if separations[int(frame)] <= 0.0:
+                    confirmed_frames.add(int(frame))
+                continue
+            transforms = _link_transforms(runtime, qpos[frame])
+            if (
+                _mesh_separation(
+                    meshes[a],
+                    transforms[a],
+                    meshes[b],
+                    transforms[b],
+                    stride=vertex_stride,
+                )
+                <= 0.0
+            ):
+                confirmed_frames.add(int(frame))
+
     return {
-        "self_collision_min_clearance_m": float(self_distances.min()),
-        "self_collision_frames": int((self_distances.min(axis=1) < 0.0).sum()),
+        "self_collision_min_clearance_m": (
+            float(mesh_min) if np.isfinite(mesh_min) else float(self_distances.min())
+        ),
+        "self_collision_frames": len(confirmed_frames),
+        "self_collision_capsule_min_m": float(self_distances.min()),
+        "self_collision_capsule_frames": int((self_distances.min(axis=1) < 0.0).sum()),
+        "self_collision_unverifiable_pairs": unverifiable,
         "table_min_clearance_m": float(world.min()),
         "table_penetration_frames": int((world.min(axis=1) < 0.0).sum()),
     }
@@ -213,16 +428,35 @@ def screen_dataset(
     plane = pk.collision.HalfSpace.from_point_and_normal(
         jnp.array([0.0, 0.0, 1.0]) * plane_z, jnp.array([0.0, 0.0, 1.0])
     )
+    # vmap over configurations: pyroki's world distance does not accept a
+    # batch axis directly, and calling it per frame paid JAX dispatch 300+
+    # times per episode.
     world_fn = jax.jit(
-        lambda q: coll.compute_world_collision_distance(
-            runtime.robot, q, plane
-        ).reshape(-1)
+        jax.vmap(
+            lambda q: coll.compute_world_collision_distance(
+                runtime.robot, q, plane
+            ).reshape(-1)
+        )
+    )
+    self_fn = jax.jit(
+        lambda q: coll.compute_self_collision_distance(runtime.robot, q)
     )
     pedestal = _pedestal_columns(
         coll, runtime.robot, runtime.config.home_q.astype(np.float32), plane
     )
+    meshes = collision_meshes(runtime)
 
+    deployment_path = str(
+        resolve_deployment_calibration(
+            robot,
+            explicit_path=None,
+            profile=deployment_profile,
+            rig_config=rig_config or DEFAULT_RIG_CONFIG,
+        ).path
+    )
     raw: list[dict[str, Any]] = []
+    solves: dict[str, np.ndarray] = {}
+    signature: str | None = None
     for episode in selected:
         args = _replay_args(
             root=dataset_root,
@@ -251,6 +485,21 @@ def screen_dataset(
                 print(f"  ep {episode:3d}  UNREACHABLE START POSE")
             continue
 
+        if signature is None:
+            # Sign what the solve settled on, not what was asked for: screening
+            # requests "auto" and lets the device come from metadata, while
+            # conversion names both outright. Keying on the request would never
+            # match an identical solve.
+            resolved = copy.copy(args)
+            for field in ("retarget_mode", "controller_device"):
+                value = rollout.get(field)
+                if value is not None and len(value):
+                    setattr(resolved, field, str(value[0]))
+            signature = solver_signature(resolved, deployment_path=deployment_path)
+        for field in CACHED_ROLLOUT_FIELDS:
+            value = rollout.get(field)
+            if value is not None:
+                solves[f"{episode}/{field}"] = np.asarray(value)
         qpos = np.asarray(rollout["qpos"], dtype=np.float32)
         pos = np.concatenate(
             [rollout["left_pos_error_m"], rollout["right_pos_error_m"]]
@@ -258,9 +507,17 @@ def screen_dataset(
         rot = np.concatenate(
             [rollout["left_rot_error_deg"], rollout["right_rot_error_deg"]]
         )
+        per_frame = np.maximum(
+            rollout["left_pos_error_m"], rollout["right_pos_error_m"]
+        )
         metrics: dict[str, float | int] = {
             "position_error_mean_m": float(pos.mean()),
             "position_error_max_m": float(pos.max()),
+            # Sustained miss, robust to the settling spike right after the
+            # start solve: a single frame at 3 cm while the rate limit catches
+            # up is not the same failure as an arm that cannot reach at all.
+            "position_error_p99_m": float(np.percentile(per_frame, 99)),
+            "position_error_frames_over_1cm": int((per_frame > 0.01).sum()),
             "rotation_error_mean_deg": float(rot.mean()),
             "rotation_error_max_deg": float(rot.max()),
             "initial_position_error_m": float(
@@ -276,6 +533,8 @@ def screen_dataset(
                 plane=plane,
                 pedestal=pedestal,
                 world_fn=world_fn,
+                self_fn=self_fn,
+                meshes=meshes,
             )
         )
         raw.append(
@@ -289,6 +548,7 @@ def screen_dataset(
         if progress:
             print(
                 f"  ep {episode:3d}  pos {metrics['position_error_mean_m'] * 100:5.2f}"
+                f"/{metrics['position_error_p99_m'] * 100:5.2f}"
                 f"/{metrics['position_error_max_m'] * 100:5.2f}cm  "
                 f"rot {metrics['rotation_error_mean_deg']:5.1f}"
                 f"/{metrics['rotation_error_max_deg']:5.1f}deg  "
@@ -296,14 +556,6 @@ def screen_dataset(
                 f"({metrics['self_collision_frames']})"
             )
 
-    deployment_path = str(
-        resolve_deployment_calibration(
-            robot,
-            explicit_path=None,
-            profile=deployment_profile,
-            rig_config=rig_config or DEFAULT_RIG_CONFIG,
-        ).path
-    )
     fences = _rotation_fences(raw, cfg)
     reports = [_grade(item, cfg=cfg, fps=fps, fences=fences) for item in raw]
     accepted = sum(report.accepted for report in reports)
@@ -328,6 +580,10 @@ def screen_dataset(
         "rotation_fences_deg": fences,
         "payload_manifest": dataset_payload_manifest(dataset_root),
         "deployment_calibration_path": deployment_path,
+        "solver_signature": signature,
+        "solve_cache": str(solve_cache_path(dataset_root, robot))
+        if solves
+        else None,
         "robot_fingerprint": robot_fingerprint(
             robot, deployment_path=deployment_path
         ),
@@ -339,6 +595,7 @@ def screen_dataset(
             "review_episode_indices": review,
         },
         "episodes": [report.to_dict() for report in reports],
+        "_solves": solves,
     }
 
 
@@ -397,14 +654,37 @@ def _grade(
             metrics=metrics,
         )
 
-    if metrics["position_error_max_m"] > cfg.max_position_error_m:
+    if metrics.get("position_error_p99_m", 0.0) > cfg.max_position_error_m:
         findings.append(
             QualityFinding(
                 code="retarget_position_error",
                 severity="reject",
-                message="Retargeted TCP position error exceeds the ceiling.",
+                message=(
+                    "The robot does not reach the demonstrated trajectory: the "
+                    "position error stays above the ceiling, not just spikes."
+                ),
+                metrics={
+                    "position_error_p99_m": metrics["position_error_p99_m"],
+                    "position_error_frames_over_1cm": metrics.get(
+                        "position_error_frames_over_1cm", 0
+                    ),
+                    "limit_m": cfg.max_position_error_m,
+                },
+            )
+        )
+    elif metrics["position_error_max_m"] > cfg.max_position_error_m:
+        findings.append(
+            QualityFinding(
+                code="retarget_position_spike",
+                severity="warning",
+                message=(
+                    "A brief position excursion above the ceiling, typically the "
+                    "solver settling after the start pose rather than a "
+                    "reachability failure."
+                ),
                 metrics={
                     "position_error_max_m": metrics["position_error_max_m"],
+                    "position_error_p99_m": metrics.get("position_error_p99_m", 0.0),
                     "limit_m": cfg.max_position_error_m,
                 },
             )

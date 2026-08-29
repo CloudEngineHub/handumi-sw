@@ -71,6 +71,8 @@ from handumi.dataset.reader import dataset_root_from_repo_id, handumi_metadata
 from handumi.dataset.screening import (
     evaluate_screening_gate,
     format_gate_guidance,
+    load_cached_solve,
+    solver_signature,
 )
 from handumi.retargeting.handumi_to_robot import (
     local_frame_adapter,
@@ -304,6 +306,14 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--help-advanced", action="store_true", help="Show expert IK and calibration options."
+    )
+    parser.add_argument(
+        "--no-solve-cache",
+        action="store_true",
+        help=(
+            "Re-solve every episode instead of reusing the trajectories "
+            "screening produced under identical solver settings."
+        ),
     )
     parser.add_argument(
         "--allow-flagged-episodes",
@@ -869,6 +879,28 @@ def _solve_with_replay_pipeline(
     replay_args.max_ik_rotation_error_deg = args.max_ik_rotation_error_deg
     replay_args.table_clearance_warning_m = args.table_clearance_warning_m
     replay_args.strict_ik = args.strict_ik
+
+    # Screening already solved every episode with this solver; repeating it here
+    # doubles the IK cost of the pipeline for an identical result. The cached
+    # trajectory is only used when the solver settings match exactly, and the
+    # gate has already refused a stale dataset or robot geometry.
+    if not args.no_solve_cache:
+        selection = getattr(args, "deployment_selection", None)
+        cached = load_cached_solve(
+            args.root,
+            robot=args.embodiment,
+            episode=source_episode_index,
+            signature=solver_signature(
+                replay_args,
+                deployment_path=selection.path if selection is not None else None,
+            ),
+        )
+        if cached is not None:
+            print(
+                f"[convert] reusing the screened solve for episode "
+                f"{source_episode_index}"
+            )
+            return cached
     return solve_replay_episode(replay_args)
 
 

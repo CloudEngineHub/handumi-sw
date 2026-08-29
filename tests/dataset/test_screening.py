@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
+
 from handumi.dataset.analysis import _load_quality_findings, dataset_payload_manifest
 from handumi.dataset.screening import (
     RetargetScreeningConfig,
@@ -18,8 +20,8 @@ from handumi.dataset.screening import (
 
 CFG = RetargetScreeningConfig()
 
-# Measured on tblock/piper: episodes 3, 4, 6 and 9 come from a session with a
-# different wrist pose, the remaining six do not.
+# A dataset whose episodes come from two recording sessions: four of the ten
+# were captured with a different tool orientation, the rest share one.
 BIMODAL_ROTATIONS = {
     3: 17.3, 4: 17.7, 6: 22.1, 9: 15.9,
     20: 3.4, 23: 1.8, 25: 4.3, 29: 2.4, 34: 5.5, 36: 4.1,
@@ -30,6 +32,8 @@ def _metrics(**overrides) -> dict[str, float | int]:
     base = {
         "position_error_mean_m": 0.0002,
         "position_error_max_m": 0.0005,
+        "position_error_p99_m": 0.0004,
+        "position_error_frames_over_1cm": 0,
         "rotation_error_mean_deg": 2.0,
         "rotation_error_max_deg": 8.0,
         "initial_position_error_m": 0.003,
@@ -56,10 +60,45 @@ def _codes(report) -> set[str]:
     return {finding.code for finding in report.findings}
 
 
-def test_position_error_over_the_ceiling_is_a_rejection() -> None:
-    report = _grade(_raw(0, position_error_max_m=0.05), cfg=CFG, fps=30.0, fences={})
+def test_sustained_position_error_is_a_rejection() -> None:
+    """A miss the robot holds is a reachability failure."""
+    report = _grade(
+        _raw(0, position_error_max_m=0.05, position_error_p99_m=0.045),
+        cfg=CFG,
+        fps=30.0,
+        fences={},
+    )
     assert "retarget_position_error" in _codes(report)
     assert not report.accepted
+
+
+def test_a_position_spike_is_only_a_warning() -> None:
+    """Regression: one settling frame must not read as an unreachable episode.
+
+    An episode can peak above the ceiling on the single frame after the start
+    solve, while the joint-delta limit catches up, and then track the whole
+    demonstration an order of magnitude tighter. Grading on the maximum
+    discarded those alongside episodes that miss by the same margin for
+    hundreds of consecutive frames, which is the real reachability failure.
+    """
+    strict = RetargetScreeningConfig(max_position_error_m=0.02)
+    report = _grade(
+        _raw(15, position_error_max_m=0.0299, position_error_p99_m=0.0024),
+        cfg=strict,
+        fps=30.0,
+        fences={},
+    )
+    assert _codes(report) == {"retarget_position_spike"}
+    assert report.accepted
+
+    sustained = _grade(
+        _raw(16, position_error_max_m=0.0306, position_error_p99_m=0.0296),
+        cfg=strict,
+        fps=30.0,
+        fences={},
+    )
+    assert _codes(sustained) == {"retarget_position_error"}
+    assert not sustained.accepted
 
 
 def test_unreachable_start_pose_is_a_rejection() -> None:
@@ -254,6 +293,101 @@ def test_report_feeds_dataset_analyze(tmp_path: Path) -> None:
         },
     )
     findings, resolved = _load_quality_findings(root, quality_report=path)
-    assert resolved == path
+    assert resolved == [path]
     assert findings[2][0]["code"] == "retarget_rotation_outlier"
-    assert findings[2][0]["source"] == "quality_report"
+    assert findings[2][0]["source"] == "screening_piper"
+
+
+def test_analyze_merges_recording_and_retargeting_reports(tmp_path: Path) -> None:
+    """Both dimensions must reach one review; neither may displace the other.
+
+    Reading a single report is how a whole category of defect disappears
+    between screening and curation.
+    """
+    root = _write_dataset(tmp_path)
+    _write_report(
+        root,
+        robot="piper",
+        flagged={
+            1: [
+                {
+                    "code": "retarget_self_collision",
+                    "severity": "warning",
+                    "message": "folds into itself",
+                    "metrics": {},
+                }
+            ]
+        },
+    )
+    (root / "meta" / "handumi_quality.json").write_text(
+        json.dumps(
+            {
+                "episodes": [
+                    {
+                        "episode_index": 2,
+                        "status": "rejected",
+                        "findings": [
+                            {
+                                "code": "sensor_sync_fraction",
+                                "severity": "reject",
+                                "message": "camera desynchronized",
+                                "metrics": {},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings, resolved = _load_quality_findings(root)
+    assert {path.name for path in resolved} == {
+        "handumi_quality.json",
+        "handumi_screening_piper.json",
+    }
+    assert findings[1][0]["source"] == "screening_piper"
+    assert findings[2][0]["source"] == "quality"
+
+
+def test_cached_solve_is_refused_when_solver_settings_differ(tmp_path: Path) -> None:
+    """The cache must key on the settings, not just the dataset and robot.
+
+    Reusing a trajectory solved under a different retarget mode or calibration
+    would emit joints that silently disagree with the ones that were graded.
+    """
+    from argparse import Namespace
+
+    from handumi.dataset.screening import (
+        load_cached_solve,
+        solve_cache_path,
+        solver_signature,
+    )
+
+    root = _write_dataset(tmp_path)
+    settings = Namespace(retarget_mode="absolute-table", translation_scale=1.0)
+    signature = solver_signature(settings, deployment_path="table.yaml")
+    path = _write_report(root, robot="piper")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["solver_signature"] = signature
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    np.savez_compressed(
+        solve_cache_path(root, "piper"),
+        **{"0/qpos": np.zeros((4, 3), dtype=np.float32)},
+    )
+
+    assert load_cached_solve(root, robot="piper", episode=0, signature=signature)
+    # A different retarget mode, and a different table, must both miss.
+    other_mode = solver_signature(
+        Namespace(retarget_mode="local-relative", translation_scale=1.0),
+        deployment_path="table.yaml",
+    )
+    assert (
+        load_cached_solve(root, robot="piper", episode=0, signature=other_mode) is None
+    )
+    other_table = solver_signature(settings, deployment_path="other.yaml")
+    assert (
+        load_cached_solve(root, robot="piper", episode=0, signature=other_table) is None
+    )
+    # An episode the screening never solved is not in the cache.
+    assert load_cached_solve(root, robot="piper", episode=2, signature=signature) is None
