@@ -80,19 +80,16 @@ def _run(step: str, command: list[str]) -> None:
         raise SystemExit(f"[qa] {step} failed with exit code {result.returncode}.")
 
 
-def main() -> None:
-    args = build_parser().parse_args()
-    try:
-        selection = resolve_dataset_selection(args.dataset, revision=args.revision)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
+def review_steps(args, root: str) -> list[tuple[str, list[str]]]:
+    """The reviews a conversion depends on, in the order they must run.
 
-    root = str(selection.root)
-    robots = args.robot or []
+    Screening reads the recording as given, and the analysis merges whatever
+    reports exist, so recording quality runs first and the analysis last.
+    """
     steps: list[tuple[str, list[str]]] = []
     if not args.skip_validate:
         steps.append(("recording quality", ["validate", root]))
-    for robot in robots:
+    for robot in args.robot or []:
         command = [
             "dataset", "screen", root,
             "--robot", robot,
@@ -103,6 +100,19 @@ def main() -> None:
             command += ["--max-position-error-m", str(args.max_position_error_m)]
         steps.append((f"retargeting: {robot}", command))
     steps.append(("merged analysis", ["dataset", "analyze", root]))
+    return steps
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    try:
+        selection = resolve_dataset_selection(args.dataset, revision=args.revision)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    root = str(selection.root)
+    robots = args.robot or []
+    steps = review_steps(args, root)
 
     print(
         "Review plan\n"
