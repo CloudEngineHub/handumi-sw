@@ -89,8 +89,9 @@ dependencies = [
 ```mermaid
 flowchart LR
     A[HandUMI data collection] --> B[Synchronized robot-agnostic dataset]
-    B --> C[Validate]
-    C --> D[Retarget]
+    B --> C[Review: recording + retargeting]
+    C --> K[Curate]
+    K --> D[Retarget]
     D --> E[AgileX PiPER]
     D --> F[OpenArm]
     D --> G[TRLC-DK1]
@@ -101,8 +102,16 @@ flowchart LR
 
 Raw captures remain robot-agnostic. After collecting data with HandUMI, the same
 demonstrations can be retargeted to different bimanual arms with parallel
-grippers. Robot configuration and physical controller-to-TCP calibration are
-fingerprinted in dataset metadata so later conversion remains reproducible.
+grippers. `handumi dataset qa` reviews a recording and how a given robot
+retargets it, curation removes what the review rejects, and conversion then
+executes that decision rather than judging it again.
+
+Robot configuration and physical controller-to-TCP calibration are fingerprinted
+in dataset metadata, so a converted dataset records exactly which geometry and
+calibration produced it. Conversion reuses the trajectories the review solved,
+which is what makes its output reproducible: the solver warm-starts each frame
+from the previous one, so re-solving from scratch lands on a slightly different
+answer for a small fraction of frames.
 
 ## Supported Bimanual Embodiments
 

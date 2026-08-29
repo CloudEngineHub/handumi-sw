@@ -52,6 +52,12 @@ Use `--dry-run` to compute and print the summary without writing the report:
 handumi dataset analyze outputs/hanoi --dry-run
 ```
 
+The analysis merges every findings report the dataset carries: recording
+quality from `handumi validate`, and one retargeting report per embodiment from
+`handumi dataset screen`. Each finding is labelled with the producer that
+raised it. `handumi dataset qa` runs all of them and the analysis in one pass;
+see [Quality Assurance](datasets.md).
+
 ## Review the report
 
 Inspect `candidates_for_review`, the histogram, duration extremes, quality
@@ -75,8 +81,37 @@ handumi dataset curate outputs/hanoi \
   --dry-run
 ```
 
-`--exclude` is mandatory and contains the source indices confirmed by the
-reviewer. The dry run prints the exact plan. Remove `--dry-run` to build the
+`--exclude` carries the source indices a reviewer confirmed. Findings graded
+`reject` need no reviewer -- corrupt state, an episode below the minimum
+duration, an unreachable start pose, sensors down past the warm-up window --
+so `--exclude-rejected` removes those without anyone retyping indices the
+report already computed:
+
+```bash
+handumi dataset curate outputs/hanoi \
+  --output outputs/hanoi_clean \
+  --exclude-rejected \
+  --exclude 6,75
+```
+
+Warnings stay opt-in through `--exclude`, because whether a brief
+self-intersection or an orientation outlier disqualifies an episode depends on
+the task. The curation report records which removals were automatic and which a
+reviewer chose. One of the two flags is required: a curation that excludes
+nothing only duplicates the dataset.
+
+When a dataset has been screened for more than one embodiment, the analysis
+merges all of those reports, so `--exclude-rejected` removes the union: the
+result is usable on every robot screened. To curate for one target instead,
+name the reports the analysis should read:
+
+```bash
+handumi dataset analyze outputs/hanoi \
+  --quality-report outputs/hanoi/meta/handumi_quality.json \
+  --quality-report outputs/hanoi/meta/handumi_screening_piper.json
+```
+
+The dry run prints the exact plan. Remove `--dry-run` to build the
 derivative:
 
 ```bash

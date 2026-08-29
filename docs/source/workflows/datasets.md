@@ -80,8 +80,9 @@ handumi validate \
 
 The report is written to `meta/handumi_quality.json`. Review rejected episodes
 for tracking loss, stale sensors, synchronization errors, frozen poses, motion
-jumps, or invalid duration. Rejected episodes are excluded automatically during
-conversion.
+jumps, or invalid duration. Rejected episodes are removed during curation, not
+during conversion: conversion refuses them so its output cannot disagree with
+the dataset it was given.
 
 ## 3. Inspect Captured Signals
 
