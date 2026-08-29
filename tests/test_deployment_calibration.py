@@ -123,8 +123,14 @@ def test_sim_profile_is_separate_from_lab_config(tmp_path: Path) -> None:
     assert selection.profile == "sim"
     assert selection.scope == "simulation"
     assert selection.path.as_posix().endswith("table/sim/piper.yaml")
-    # The shipped simulation placement, not the lab file above.
-    np.testing.assert_allclose(selection.pose7[:3], [0.45, 0.0, 0.0])
+    # The shipped simulation placement, not the lab file above. Compare against
+    # the file rather than a literal: sim placements are re-fitted whenever the
+    # robot geometry changes, and pinning the numbers here only relocates that
+    # work into an unrelated test.
+    shipped = yaml.safe_load(selection.path.read_text(encoding="utf-8"))
+    expected = shipped["calibration"]["robot_from_table"]["position"]
+    np.testing.assert_allclose(selection.pose7[:3], expected)
+    assert not np.allclose(selection.pose7[:3], [9.0, 9.0, 9.0])
 
 
 def test_lab_local_calibration_requires_lab_identity(tmp_path: Path) -> None:

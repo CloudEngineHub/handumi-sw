@@ -15,10 +15,14 @@
     <color rgba="0.580 0.600 0.620 1" />
   </material>
   <link name="world" />
+  <!-- Bases at +/-0.30 m: 0.60 m apart, matching the physical BiPiper mount
+       and the repo-wide bimanual convention. Keep this in sync with
+       piper.xml, and re-check table placement and collisions after changing
+       it: every IK solution depends on it. -->
   <joint name="world_to_left" type="fixed">
     <parent link="world" />
     <child link="left_dummy_link" />
-    <origin xyz="0.0 0.35 0.0" rpy="0 0 0" />
+    <origin xyz="0.0 0.30 0.0" rpy="0 0 0" />
   </joint>
   <link name="left_dummy_link" />
   <joint name="left_base_to_dummy" type="fixed">
@@ -297,7 +301,7 @@
   <joint name="world_to_right" type="fixed">
     <parent link="world" />
     <child link="right_dummy_link" />
-    <origin xyz="0.0 -0.35 0.0" rpy="0 0 0" />
+    <origin xyz="0.0 -0.30 0.0" rpy="0 0 0" />
   </joint>
   <link name="right_dummy_link" />
   <joint name="right_base_to_dummy" type="fixed">

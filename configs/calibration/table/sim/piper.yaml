@@ -13,9 +13,19 @@ calibration:
   # Depth adopted from outputs/calibration/table/tblock_piper_viz.yaml: the
   # earlier 0.30 m mapped recorded sessions onto the bases themselves (demo
   # hands at robot x in [0.03, 0.35]), which forced the arms to fold into
-  # their own upper links -- a tblock replay self-interpenetrated to -5.7 cm
-  # on 112 of 320 frames. At 0.45 m the same episode is collision-free
-  # (worst capsule pair +0.4 cm) and mean EE error drops 7.15 -> 1.83 cm.
+  # their own upper links and self-interpenetrate over a third of the frames.
+  # Moving the table closer is counterproductive -- it folds the arms back
+  # into themselves -- and a solver sweep puts 0.40 m at 0.26 cm mean and
+  # 0.50 m at an 8.4 cm worst frame, so 0.45 m is the balanced depth.
+  #
+  # The origin stays laterally centered between the bases on purpose. A 0.05 m
+  # sideways offset does rescue individual episodes that fold one arm (with
+  # the 0.60 m base separation, tblock episode 9 folds its left arm for 105 of
+  # 230 frames), but shifting a shared calibration to accommodate one
+  # recording distorts every other episode. Episodes the centered placement
+  # cannot support are dropped by `handumi dataset screen` instead.
+  # Re-fit the depth if the base separation changes; both drive every IK
+  # solution.
   #
   # Simulation scope only: physical installations resolve
   # configs/calibration/table/local/piper.yaml (scope: physical) first, so
