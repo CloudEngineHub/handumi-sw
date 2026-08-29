@@ -54,6 +54,11 @@ sim = [
 cuda = [
     "jax[cuda13]>=0.4.0",
 ]
+# Context-camera inpainting (src/handumi/inpainting). Generation is billed per
+# call, so this stays opt-in rather than part of the base install.
+inpaint = [
+    "google-genai>=2.20",
+]
 
 [project.scripts]
 handumi = "handumi.scripts.cli:main"
@@ -86,6 +91,7 @@ packages = ["src/handumi"]
 "configs/quality.yaml" = "handumi/configs/quality.yaml"
 "configs/rig.example.yaml" = "handumi/configs/rig.example.yaml"
 "configs/robots" = "handumi/configs/robots"
+"configs/inpainting-prompts" = "handumi/configs/inpainting-prompts"
 # Include calibration pieces explicitly: lab-local measurements under
 # configs/calibration/table/local/*.yaml are private and must never ship in a
 # built artifact, so the table directory is not included wholesale.

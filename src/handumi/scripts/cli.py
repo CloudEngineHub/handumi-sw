@@ -36,6 +36,10 @@ COMMANDS = {
         "handumi.scripts.screen_dataset",
         "Grade episodes by how well a robot can retarget them",
     ),
+    ("dataset", "inpaint"): Command(
+        "handumi.scripts.inpaint_context",
+        "Repaint the context camera to show the target robot",
+    ),
     ("dataset", "curate"): Command(
         "handumi.scripts.curate_dataset",
         "Create a validated dataset from an analysis report",
@@ -73,6 +77,10 @@ COMMANDS = {
     ),
     ("calibrate", "spatial"): Command(
         "handumi.scripts.setup.calibrate_spatial", "Calibrate cameras and workspace"
+    ),
+    ("calibrate", "workspace-from-video"): Command(
+        "handumi.scripts.recover_workspace_camera",
+        "Solve the context camera pose from a recording",
     ),
     ("calibrate", "tcp"): Command(
         "handumi.scripts.setup.calibrate_tcp_offset", "Calibrate controller-to-TCP"
