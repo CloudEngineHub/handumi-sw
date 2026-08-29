@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 
 from handumi.robots.registry import load_embodiment
-from handumi.teleop.dls import make_real_teleop_dls_solver
+from handumi.teleop.dls import (
+    DlsConfig,
+    IncrementalDlsSolver,
+    make_real_teleop_dls_solver,
+)
 
 
 @pytest.fixture(scope="module")
@@ -37,22 +41,59 @@ def test_dls_step_is_bounded_and_does_not_move_inactive_arm(piper_dls) -> None:
     assert np.all(actual <= np.asarray(runtime.robot.joints.upper_limits) + 1e-7)
 
 
-def test_dls_repeated_steps_reduce_cartesian_error(piper_dls) -> None:
-    _, solver, home_q = piper_dls
+def _converge(solver, home_q, *, offset_m: float = 0.02, steps: int = 60):
     solver.set_timestep(1.0 / 30.0)
     left_pose, _ = solver.fk_pose7(home_q)
     target = left_pose.copy()
-    target[0] += 0.02
+    target[0] += offset_m
     q = home_q.copy()
-
-    initial_error = float(np.linalg.norm(left_pose[:3] - target[:3]))
-    for _ in range(20):
+    errors = []
+    for _ in range(steps):
         q = solver.ik(q, left_pose=(target[:3], target[3:7]))
-    achieved, _ = solver.fk_pose7(q)
-    final_error = float(np.linalg.norm(achieved[:3] - target[:3]))
+        achieved, _ = solver.fk_pose7(q)
+        errors.append(float(np.linalg.norm(achieved[:3] - target[:3])))
+    return q, errors
 
-    assert final_error < initial_error * 0.1
+
+def test_dls_repeated_steps_reduce_cartesian_error(piper_dls) -> None:
+    """The follower closes most of the gap and then holds a steady offset.
+
+    It does not converge to zero, and should not be expected to: this is a
+    weighted solver whose orientation-hold and rest-posture terms pull against
+    the position task, so it settles at their equilibrium. See the test below,
+    which pins that this offset is the trade-off and not a solver defect.
+    """
+    _, solver, home_q = piper_dls
+    q, errors = _converge(solver, home_q)
+
+    initial_error = 0.02
+    assert errors[19] < initial_error * 0.25  # most of the gap within 20 steps
+    assert errors[-1] < 0.005  # settles within 5 mm
+    assert errors[-1] <= errors[19] + 1e-6  # settles instead of drifting away
     assert np.isfinite(q).all()
+
+
+def test_dls_steady_state_offset_is_the_secondary_objectives(piper_dls) -> None:
+    """Disabling orientation hold and rest posture converges to the target.
+
+    Guards the actual invariant: the damped-least-squares core is exact, and
+    the residual millimeters come from the weights, so a regression that makes
+    the solver itself inexact still fails here.
+    """
+    runtime, reference, home_q = piper_dls
+    solver = IncrementalDlsSolver(
+        runtime.solver_cls(),
+        side_joint_indices=reference.side_joint_indices,
+        side_joint_speed_limits_rad_s=reference.side_joint_speed_limits_rad_s,
+        rest_q=home_q,
+        nominal_rate_hz=30.0,
+        config=DlsConfig(orientation_weight=0.0, rest_gain=0.0),
+    )
+    solver.warmup(home_q)
+    _, errors = _converge(solver, home_q)
+
+    assert errors[-1] < 1e-4
+    assert errors[-1] < 0.05 * errors[19]
 
 
 def test_dls_joint_cap_scales_with_source_frame_time() -> None:
