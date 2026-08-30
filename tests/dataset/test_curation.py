@@ -299,3 +299,21 @@ def test_rejected_episodes_need_no_reviewer_transcription(tmp_path: Path) -> Non
     )
     assert both.excluded_source_episode_indices == (1, 2)
     assert both.human_excluded_source_episode_indices == (2,)
+
+
+def test_frame_rate_reads_the_coded_rate_not_the_header_average() -> None:
+    from handumi.dataset.curation import _frame_rate
+
+    # What concatenating 53834 frames of 30 fps footage actually reports: the
+    # stream is coded at 30/1, while the average derived from the header's
+    # rounded duration lands at 29.99944.
+    assert _frame_rate({"r_frame_rate": "30/1", "avg_frame_rate": "107668/3589"}) == 30.0
+
+
+def test_frame_rate_falls_back_and_refuses_unusable_streams() -> None:
+    from handumi.dataset.curation import _frame_rate
+
+    assert _frame_rate({"r_frame_rate": "0/0", "avg_frame_rate": "30/1"}) == 30.0
+    assert _frame_rate({"avg_frame_rate": "30/1"}) == 30.0
+    with pytest.raises(RuntimeError, match="no usable frame rate"):
+        _frame_rate({"r_frame_rate": "0/0", "avg_frame_rate": "0/0"})

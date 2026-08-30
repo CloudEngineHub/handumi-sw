@@ -671,7 +671,7 @@ def _probe_video(path: Path) -> dict[str, Any]:
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=codec_name,pix_fmt,width,height,avg_frame_rate,nb_frames",
+                "stream=codec_name,pix_fmt,width,height,r_frame_rate,avg_frame_rate,nb_frames",
                 "-of",
                 "json",
                 str(path),
@@ -684,15 +684,40 @@ def _probe_video(path: Path) -> dict[str, Any]:
     if not streams:
         raise RuntimeError(f"Video has no stream: {path}")
     stream = streams[0]
-    numerator, denominator = str(stream["avg_frame_rate"]).split("/", maxsplit=1)
     return {
         "codec": stream["codec_name"],
         "pixel_format": stream["pix_fmt"],
         "width": int(stream["width"]),
         "height": int(stream["height"]),
-        "fps": float(numerator) / float(denominator),
+        "fps": _frame_rate(stream),
         "frames": int(stream["nb_frames"]),
     }
+
+
+def _frame_rate(stream: dict[str, Any]) -> float:
+    """Read the coded frame rate, not the one derived from the header duration.
+
+    ``avg_frame_rate`` is frames divided by the container's own duration, and
+    that duration is stored in the movie header's coarser timescale. Rounding it
+    puts the average a hair off a rate the stream actually holds exactly: a
+    concatenation of 53834 frames whose presentation stamps are all 1/30 apart
+    reports 107668/3589 = 29.99944. Comparing that against the dataset FPS
+    rejects a video that is perfectly regular, so read ``r_frame_rate``, which is
+    the rate the stream is coded at, and keep the average only as a fallback for
+    a stream that does not declare one.
+    """
+    for key in ("r_frame_rate", "avg_frame_rate"):
+        value = str(stream.get(key, "")).strip()
+        if not value or "/" not in value:
+            continue
+        numerator, denominator = value.split("/", maxsplit=1)
+        try:
+            rate = float(numerator) / float(denominator)
+        except (ValueError, ZeroDivisionError):
+            continue
+        if rate > 0:
+            return rate
+    raise RuntimeError(f"Video declares no usable frame rate: {stream}")
 
 
 def _validate_audio(
