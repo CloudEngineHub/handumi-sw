@@ -18,20 +18,26 @@ def test_every_dimension_is_reviewed_once_per_target() -> None:
     names = [name for name, _ in steps]
     assert names == [
         "recording quality",
+        "demonstration direction",
         "retargeting: piper",
         "retargeting: metal",
         "merged analysis",
     ]
-    # Recording quality is embodiment-agnostic and runs once; the analysis is
-    # last because it merges whatever the earlier steps wrote.
+    # Recording quality and direction are embodiment-agnostic and run once each;
+    # the analysis is last because it merges whatever the earlier steps wrote.
     assert names.count("recording quality") == 1
+    assert names.count("demonstration direction") == 1
     assert names[-1] == "merged analysis"
 
 
 def test_screening_is_skipped_without_a_target_robot() -> None:
     """A dataset can be reviewed as a recording before any robot is chosen."""
     steps = review_steps(_args(["ds"]), "ds")
-    assert [name for name, _ in steps] == ["recording quality", "merged analysis"]
+    assert [name for name, _ in steps] == [
+        "recording quality",
+        "demonstration direction",
+        "merged analysis",
+    ]
 
 
 def test_screening_thresholds_reach_the_screen_command() -> None:
@@ -52,3 +58,11 @@ def test_rig_config_is_passed_through(tmp_path: Path) -> None:
     args = _args(["ds", "--robot", "piper", "--rig-config", str(rig)])
     screen = next(cmd for name, cmd in review_steps(args, "ds") if "screen" in cmd)
     assert str(rig) in screen
+
+
+def test_direction_can_be_left_out() -> None:
+    """It needs a workspace camera and a majority of episodes to compare against."""
+    args = _args(["ds", "--robot", "piper", "--skip-direction"])
+    assert "demonstration direction" not in [
+        name for name, _ in review_steps(args, "ds")
+    ]

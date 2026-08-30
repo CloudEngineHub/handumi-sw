@@ -3,9 +3,10 @@
 
 The reviews stay separate commands because they answer separate questions and
 are useful on their own: `handumi validate` grades the recording and is
-embodiment-agnostic, `handumi dataset screen` grades how one robot retargets
-it. This command only sequences them and merges the result, so an operator
-cannot leave a dimension unexamined by forgetting a step.
+embodiment-agnostic, `handumi dataset direction` grades whether an episode
+performs the task or undoes it, `handumi dataset screen` grades how one robot
+retargets it. This command only sequences them and merges the result, so an
+operator cannot leave a dimension unexamined by forgetting a step.
 
 Nothing here removes data. It produces the merged review that a human curates
 from, which keeps the decision in one place.
@@ -60,6 +61,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reuse the existing recording-quality report instead of recomputing.",
     )
     parser.add_argument(
+        "--skip-direction",
+        action="store_true",
+        help="Skip the demonstration-direction check. It needs a workspace "
+        "camera and at least three episodes to have a majority to compare "
+        "against.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the review plan without running it.",
@@ -89,6 +97,8 @@ def review_steps(args, root: str) -> list[tuple[str, list[str]]]:
     steps: list[tuple[str, list[str]]] = []
     if not args.skip_validate:
         steps.append(("recording quality", ["validate", root]))
+    if not args.skip_direction:
+        steps.append(("demonstration direction", ["dataset", "direction", root]))
     for robot in args.robot or []:
         command = [
             "dataset", "screen", root,

@@ -48,6 +48,10 @@ COMMANDS = {
         "handumi.scripts.merge_datasets",
         "Join recording sessions into one dataset",
     ),
+    ("dataset", "direction"): Command(
+        "handumi.scripts.direction_dataset",
+        "Flag episodes that demonstrate the task backwards",
+    ),
     ("replay",): Command(
         "handumi.scripts.replay.replay_in_sim", "Replay a dataset in simulation"
     ),

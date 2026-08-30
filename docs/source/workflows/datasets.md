@@ -124,7 +124,37 @@ jumps, or invalid duration. Rejected episodes are removed during curation, not
 during conversion: conversion refuses them so its output cannot disagree with
 the dataset it was given.
 
-## 3. Inspect Captured Signals
+## 4. Check the Demonstration Direction
+
+A session holds more than demonstrations. Putting the object back between takes
+is itself a recorded episode whenever the recorder was left running, and it
+carries the same task string as the takes around it. Nothing else in the review
+sees this: such an episode is a flawless recording -- sensors healthy, tracking
+valid, timestamps regular -- that retargets as well as any other. The defect is
+in what it teaches, and a policy trained on it learns to undo the task.
+
+```bash
+handumi dataset direction outputs/datasets/handumi-demo
+```
+
+The check is told nothing about the task. Each episode's scene change is the
+difference between how the workspace camera sees the table at its end and at its
+start, and it compares that against the dataset's own median change: an episode
+running the other way scores negative, and zero is the boundary. The comparison
+weights each pixel by how consistently it changes across the dataset, which is
+what keeps the operator from deciding the verdict -- their arm is the largest
+moving thing in frame and moves differently every take, while the object is
+small and changes the same way every time.
+
+The finding is a **warning**, not a rejection. A dataset may hold both
+directions deliberately, and the reference is the majority of this dataset, so
+only a reviewer knows which case it is. Watch the flagged episodes before
+curating.
+
+It needs a workspace camera and at least three episodes, since two cannot
+establish a majority. `--skip-direction` leaves it out of `handumi dataset qa`.
+
+## 5. Inspect Captured Signals
 
 Raw datasets preserve the information needed to validate, recalibrate, or
 retarget a capture:
@@ -193,7 +223,8 @@ JAX_PLATFORMS=cpu handumi dataset qa \
   --robot piper
 ```
 
-That is exactly `validate`, then `screen` once per `--robot`, then `analyze`.
+That is exactly `validate`, then `dataset direction`, then `screen` once per
+`--robot`, then `analyze`.
 `analyze` merges **every** findings report the dataset carries — the recording
 report and one screening report per embodiment — and labels each finding with
 the producer that raised it, so a merged review names the dimension that

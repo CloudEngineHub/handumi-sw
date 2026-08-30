@@ -319,15 +319,16 @@ def load_analysis_report(path: str | Path) -> dict[str, Any]:
 def discover_quality_reports(root: str | Path) -> list[Path]:
     """Find every findings report a dataset carries, in a stable order.
 
-    Each report grades one dimension -- recording quality, retargeting for one
-    embodiment -- and they are independent, so an analysis has to see all of
-    them. Reading only one silently drops whole categories of defect from the
-    review a human then curates from.
+    Each report grades one dimension -- recording quality, the direction the
+    demonstration runs in, retargeting for one embodiment -- and they are
+    independent, so an analysis has to see all of them. Reading only one
+    silently drops whole categories of defect from the review a human then
+    curates from.
     """
     meta = Path(root) / "meta"
     if not meta.is_dir():
         return []
-    found = [meta / "handumi_quality.json"]
+    found = [meta / "handumi_quality.json", meta / "handumi_direction.json"]
     found.extend(sorted(meta.glob("handumi_screening_*.json")))
     return [path for path in found if path.is_file()]
 
