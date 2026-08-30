@@ -6,10 +6,14 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 from handumi.dataset import ensure_metadata, load_raw_episode
+from handumi.dataset.parallel import describe_jobs, map_episodes, resolve_jobs
 from handumi.dataset.quality import (
     EpisodeQualityConfig,
+    EpisodeQualityReport,
+    QualityFinding,
     validate_episode,
     write_quality_report,
 )
@@ -55,11 +59,48 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         help="Exit with status 2 when any episode is rejected.",
     )
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="Processes grading episodes at once. Episodes are independent, so "
+        "this changes wall-clock only; 1 grades them in order.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Resolve and print the validation plan without loading episodes.",
     )
     return parser
+
+
+def _build_validate_state(**kwargs: Any) -> dict[str, Any]:
+    """Per-process state: the thresholds, and how to reach the dataset.
+
+    No model to load and nothing to compile -- validation reads Parquet and
+    grades numpy -- so a worker starts cheaply, which is why this scales better
+    than the retargeting screen does.
+    """
+    return dict(kwargs)
+
+
+def _validate_one_episode(episode: int, state: dict[str, Any]) -> dict[str, Any]:
+    loaded = load_raw_episode(
+        repo_id=str(state["repo_id"]),
+        root=Path(state["root"]),
+        episode=episode,
+        source=str(state["source"]),
+        revision=str(state["revision"]),
+    )
+    config = state["config"]
+    assert isinstance(config, EpisodeQualityConfig)
+    report = validate_episode(
+        loaded.states,
+        fps=loaded.fps,
+        signals=loaded.signals,
+        episode_index=episode,
+        config=config,
+    )
+    return report.to_dict()
 
 
 def main() -> None:
@@ -97,27 +138,49 @@ def main() -> None:
     total = int(info.get("total_episodes", 0))
     indices = _episode_indices(args.episodes, total)
     config = EpisodeQualityConfig.from_yaml(args.quality_config)
-    reports = []
+    workers = resolve_jobs(args.jobs, len(indices))
+    print(f"  {describe_jobs(workers, len(indices))}")
 
-    for position, episode_index in enumerate(indices, start=1):
-        print(f"Episode {position}/{len(indices)} (source {episode_index})")
-        loaded = load_raw_episode(
-            repo_id=args.repo_id,
-            root=root,
-            episode=episode_index,
-            source=args.source,
-            revision=args.revision,
+    done = {"count": 0}
+
+    def _report(episode: int, payload: dict) -> None:
+        done["count"] += 1
+        codes = ", ".join(f["code"] for f in payload["findings"]) or "clean"
+        verdict = "ACCEPT" if payload["status"] == "accepted" else "REJECT"
+        print(f"Episode {done['count']}/{len(indices)} (source {episode})  {verdict}: {codes}")
+
+    payloads = map_episodes(
+        indices,
+        setup=_build_validate_state,
+        setup_kwargs={
+            "repo_id": args.repo_id,
+            "root": root,
+            "source": args.source,
+            "revision": args.revision,
+            "config": config,
+        },
+        task=_validate_one_episode,
+        jobs=workers,
+        on_result=_report,
+    )
+    reports = [
+        EpisodeQualityReport(
+            episode_index=int(payload["episode_index"]),
+            frame_count=int(payload["frame_count"]),
+            duration_s=float(payload["duration_s"]),
+            findings=tuple(
+                QualityFinding(
+                    code=str(item["code"]),
+                    severity=item["severity"],
+                    message=str(item["message"]),
+                    metrics=item.get("metrics", {}),
+                )
+                for item in payload["findings"]
+            ),
+            metrics=payload["metrics"],
         )
-        report = validate_episode(
-            loaded.states,
-            fps=loaded.fps,
-            signals=loaded.signals,
-            episode_index=episode_index,
-            config=config,
-        )
-        reports.append(report)
-        codes = ", ".join(finding.code for finding in report.findings) or "clean"
-        print(f"  {'ACCEPT' if report.accepted else 'REJECT'}: {codes}")
+        for payload in payloads
+    ]
 
     report_path = args.report or root / "meta" / "handumi_quality.json"
     write_quality_report(

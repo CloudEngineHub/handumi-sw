@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--jobs",
         type=int,
         default=None,
-        help="Processes screening solves episodes with; passed through.",
+        help="Processes validation and screening use; passed through to both.",
     )
     parser.add_argument(
         "--deployment-profile",
@@ -102,7 +102,10 @@ def review_steps(args, root: str) -> list[tuple[str, list[str]]]:
     """
     steps: list[tuple[str, list[str]]] = []
     if not args.skip_validate:
-        steps.append(("recording quality", ["validate", root]))
+        command = ["validate", root]
+        if args.jobs is not None:
+            command += ["--jobs", str(args.jobs)]
+        steps.append(("recording quality", command))
     if not args.skip_direction:
         steps.append(("demonstration direction", ["dataset", "direction", root]))
     for robot in args.robot or []:
