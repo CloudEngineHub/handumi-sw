@@ -45,6 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--revision", default="main", help="Hub dataset revision.")
     parser.add_argument("--rig-config", type=Path, default=DEFAULT_RIG_CONFIG)
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="Processes screening solves episodes with; passed through.",
+    )
+    parser.add_argument(
         "--deployment-profile",
         choices=("auto", "local", "sim"),
         default="auto",
@@ -108,6 +114,8 @@ def review_steps(args, root: str) -> list[tuple[str, list[str]]]:
         ]
         if args.max_position_error_m is not None:
             command += ["--max-position-error-m", str(args.max_position_error_m)]
+        if args.jobs is not None:
+            command += ["--jobs", str(args.jobs)]
         steps.append((f"retargeting: {robot}", command))
     steps.append(("merged analysis", ["dataset", "analyze", root]))
     return steps

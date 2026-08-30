@@ -43,6 +43,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--rig-config", type=Path, default=DEFAULT_RIG_CONFIG)
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="Processes solving episodes at once. Episodes are independent, so "
+        "this changes wall-clock only. The default leaves room for the threads "
+        "the solver already uses inside one episode; 1 solves them in order.",
+    )
+    parser.add_argument(
         "--report",
         type=Path,
         default=None,
@@ -109,6 +117,7 @@ def main() -> None:
         episodes=episodes,
         deployment_profile=args.deployment_profile,
         rig_config=args.rig_config,
+        jobs=args.jobs,
         config=config,
     )
     write_screening_report(report_path, payload)

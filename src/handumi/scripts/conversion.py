@@ -309,6 +309,14 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         "--help-advanced", action="store_true", help="Show expert IK and calibration options."
     )
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="Processes solving episodes at once. Episodes are independent, so "
+        "this changes wall-clock only. The default leaves room for the threads "
+        "the solver already uses inside one episode; 1 solves them in order.",
+    )
+    parser.add_argument(
         "--no-solve-cache",
         action="store_true",
         help=(
@@ -853,17 +861,109 @@ def _write_gripper_joints(
 # ---------------------------------------------------------------------------
 
 
-def _solve_with_replay_pipeline(
-    *,
+def _presolve_worker_state(**_: object) -> dict[str, object]:
+    """Nothing shared to build: solve_episode caches the embodiment per process."""
+    return {}
+
+
+def _presolve_one(episode: int, _state: dict[str, object]) -> dict[str, object]:
+    import contextlib
+    import io
+
+    from handumi.scripts.replay.replay_in_sim import solve_episode as _solve
+
+    args = _PRESOLVE_ARGS["args"]
+    replay_args = _replay_args_for_episode(args, episode)
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(captured):
+            rollout = _solve(replay_args)
+    except SystemExit as exc:
+        return {"episode": episode, "error": str(exc)}
+    return {
+        "episode": episode,
+        "rollout": {
+            key: np.asarray(value)
+            for key, value in rollout.items()
+            if isinstance(value, np.ndarray)
+        },
+    }
+
+
+_PRESOLVE_ARGS: dict[str, Any] = {}
+
+
+def _cached_solve_for(
+    args: argparse.Namespace, episode: int
+) -> dict[str, np.ndarray] | None:
+    """The screening solve for this episode, when it is still valid."""
+    if args.no_solve_cache:
+        return None
+    selection = getattr(args, "deployment_selection", None)
+    return load_cached_solve(
+        args.root,
+        robot=args.embodiment,
+        episode=episode,
+        signature=solver_signature(
+            _replay_args_for_episode(args, episode),
+            deployment_path=selection.path if selection is not None else None,
+        ),
+    )
+
+
+def presolve_episodes(
     args: argparse.Namespace,
-    source_episode_index: int,
-) -> dict[str, np.ndarray]:
-    """Run the replay solver so absolute-table conversion has exact qpos parity."""
+    episodes: list[int],
+    *,
+    jobs: int | None,
+) -> dict[int, dict[str, np.ndarray]]:
+    """Solve the episodes the screening cache does not already hold.
+
+    Conversion writes one dataset sequentially, but the IK it needs per episode
+    is independent, so the solving is done up front and the writing stays in
+    order. Episodes already cached by screening are skipped: the cached solve is
+    the one the review graded, and re-solving it would only invite the float32
+    drift the cache exists to avoid.
+    """
+    from handumi.dataset.parallel import describe_jobs, map_episodes, resolve_jobs
+
+    missing = [
+        episode
+        for episode in episodes
+        if _cached_solve_for(args, episode) is None
+    ]
+    if not missing:
+        return {}
+    workers = resolve_jobs(jobs, len(missing))
+    if workers <= 1:
+        return {}
+    print(f"[convert] pre-solving {describe_jobs(workers, len(missing))}")
+    _PRESOLVE_ARGS["args"] = args
+    results = map_episodes(
+        missing,
+        setup=_presolve_worker_state,
+        setup_kwargs={},
+        task=_presolve_one,
+        jobs=workers,
+    )
+    solved: dict[int, dict[str, np.ndarray]] = {}
+    for item in results:
+        if "rollout" in item:
+            solved[int(item["episode"])] = item["rollout"]
+    return solved
+
+
+def _replay_args_for_episode(
+    args: argparse.Namespace, source_episode_index: int
+) -> argparse.Namespace:
+    """The replay solver's arguments for one episode.
+
+    Shared by the in-line solve and the parallel pre-solve so both ask the
+    solver for exactly the same thing; a divergence here would show up as
+    joints that disagree with the screening report that graded them.
+    """
     from handumi.scripts.replay.replay_in_sim import (
         build_parser as build_replay_parser,
-    )
-    from handumi.scripts.replay.replay_in_sim import (
-        solve_episode as solve_replay_episode,
     )
 
     replay_args = build_replay_parser().parse_args([str(args.root)])
@@ -891,7 +991,20 @@ def _solve_with_replay_pipeline(
     replay_args.max_ik_rotation_error_deg = args.max_ik_rotation_error_deg
     replay_args.table_clearance_warning_m = args.table_clearance_warning_m
     replay_args.strict_ik = args.strict_ik
+    return replay_args
 
+
+def _solve_with_replay_pipeline(
+    *,
+    args: argparse.Namespace,
+    source_episode_index: int,
+) -> dict[str, np.ndarray]:
+    """Run the replay solver so absolute-table conversion has exact qpos parity."""
+    from handumi.scripts.replay.replay_in_sim import (
+        solve_episode as solve_replay_episode,
+    )
+
+    replay_args = _replay_args_for_episode(args, source_episode_index)
     # Screening already solved every episode with this solver; repeating it here
     # doubles the IK cost of the pipeline for an identical result. The cached
     # trajectory is only used when the solver settings match exactly, and the
@@ -913,6 +1026,9 @@ def _solve_with_replay_pipeline(
                 f"{source_episode_index}"
             )
             return cached
+    presolved = getattr(args, "presolved", {}).get(source_episode_index)
+    if presolved is not None:
+        return presolved
     return solve_replay_episode(replay_args)
 
 
@@ -1309,6 +1425,10 @@ def main() -> None:
             quality_config = EpisodeQualityConfig.from_yaml(args.quality_config)
         except (OSError, ValueError) as exc:
             parser.error(f"Could not load quality config: {exc}")
+
+    args.presolved = {}
+    if args.retarget_mode == "absolute-table":
+        args.presolved = presolve_episodes(args, list(episode_indices), jobs=args.jobs)
 
     for position, src_idx in enumerate(episode_indices, start=1):
         print(f"\nEpisode {position}/{len(episode_indices)}  (source ep {src_idx})")

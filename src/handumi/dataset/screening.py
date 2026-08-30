@@ -14,7 +14,6 @@ into ``handumi dataset curate --exclude``.
 from __future__ import annotations
 
 import contextlib
-import copy
 import hashlib
 import io
 import json
@@ -29,6 +28,7 @@ import numpy as np
 import pyroki as pk
 
 from handumi.dataset.analysis import dataset_payload_manifest
+from handumi.dataset.parallel import describe_jobs, map_episodes, resolve_jobs
 from handumi.dataset.quality import EpisodeQualityReport, QualityFinding
 
 SCREENING_SCHEMA_VERSION = 1
@@ -375,6 +375,155 @@ def _collision_metrics(
     }
 
 
+def _build_screen_state(
+    *,
+    dataset_root: Path,
+    repo_id: str,
+    revision: str,
+    robot: str,
+    deployment_profile: str,
+    rig_config: Path,
+    self_collision_margin_m: float,
+) -> dict[str, Any]:
+    """Build everything an episode solve reuses: robot model, compiled fns, meshes.
+
+    One call per process. In a worker this is the JIT compilation the pool pays
+    for once and then amortises over that worker's share of the episodes.
+    """
+    from handumi.robots.registry import build_pruned_collision_model, load_embodiment
+
+    runtime = load_embodiment(robot)
+    weights = runtime.config.ik_weights
+    coll = build_pruned_collision_model(
+        urdf=runtime.load_urdf(load_meshes=True),
+        robot=runtime.robot,
+        home_q=runtime.config.home_q.astype(np.float32),
+        arms=runtime.arms,
+        gripper_joints={
+            side: tuple(g.name for g in runtime.config.arms[side].gripper_joints)
+            for side in runtime.arms
+        },
+        margin=self_collision_margin_m,
+    )
+    plane = pk.collision.HalfSpace.from_point_and_normal(
+        jnp.array([0.0, 0.0, 1.0]) * weights.world_collision_plane_z,
+        jnp.array([0.0, 0.0, 1.0]),
+    )
+    # vmap over configurations: pyroki's world distance does not accept a
+    # batch axis directly, and calling it per frame paid JAX dispatch 300+
+    # times per episode.
+    world_fn = jax.jit(
+        jax.vmap(
+            lambda q: coll.compute_world_collision_distance(
+                runtime.robot, q, plane
+            ).reshape(-1)
+        )
+    )
+    self_fn = jax.jit(
+        lambda q: coll.compute_self_collision_distance(runtime.robot, q)
+    )
+    return {
+        "runtime": runtime,
+        "coll": coll,
+        "plane": plane,
+        "world_fn": world_fn,
+        "self_fn": self_fn,
+        "pedestal": _pedestal_columns(
+            coll, runtime.robot, runtime.config.home_q.astype(np.float32), plane
+        ),
+        "meshes": collision_meshes(runtime),
+        "args_template": {
+            "root": dataset_root,
+            "repo_id": repo_id,
+            "revision": revision,
+            "robot": robot,
+            "deployment_profile": deployment_profile,
+            "rig_config": rig_config,
+        },
+    }
+
+
+def _screen_one_episode(episode: int, state: dict[str, Any]) -> dict[str, Any]:
+    """Solve and grade one episode. Runs in the calling process or in a worker.
+
+    Returns plain arrays and floats: a compiled JAX function cannot cross a
+    process boundary, and nothing here needs to.
+    """
+    from handumi.scripts.replay.replay_in_sim import solve_episode
+
+    args = _replay_args(episode=episode, **state["args_template"])
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(captured):
+            rollout = solve_episode(args)
+    except SystemExit as exc:
+        # The solver could not reach the demonstrated start pose at all.
+        return {
+            "episode_index": episode,
+            "unreachable": str(exc),
+            "frame_count": 0,
+            "metrics": {},
+            "solves": {},
+            "resolved": {},
+        }
+
+    # Sign what the solve settled on, not what was asked for: screening
+    # requests "auto" and lets the device come from metadata, while conversion
+    # names both outright. Keying on the request would never match an identical
+    # solve.
+    resolved = {
+        field: str(rollout[field][0])
+        for field in ("retarget_mode", "controller_device")
+        if rollout.get(field) is not None and len(rollout[field])
+    }
+    solves = {
+        field: np.asarray(rollout[field])
+        for field in CACHED_ROLLOUT_FIELDS
+        if rollout.get(field) is not None
+    }
+    qpos = np.asarray(rollout["qpos"], dtype=np.float32)
+    pos = np.concatenate([rollout["left_pos_error_m"], rollout["right_pos_error_m"]])
+    rot = np.concatenate(
+        [rollout["left_rot_error_deg"], rollout["right_rot_error_deg"]]
+    )
+    per_frame = np.maximum(
+        rollout["left_pos_error_m"], rollout["right_pos_error_m"]
+    )
+    metrics: dict[str, float | int] = {
+        "position_error_mean_m": float(pos.mean()),
+        "position_error_max_m": float(pos.max()),
+        # Sustained miss, robust to the settling spike right after the
+        # start solve: a single frame at 3 cm while the rate limit catches
+        # up is not the same failure as an arm that cannot reach at all.
+        "position_error_p99_m": float(np.percentile(per_frame, 99)),
+        "position_error_frames_over_1cm": int((per_frame > 0.01).sum()),
+        "rotation_error_mean_deg": float(rot.mean()),
+        "rotation_error_max_deg": float(rot.max()),
+        "initial_position_error_m": float(rollout["initial_max_position_error_m"][0]),
+        "initial_solve_iterations": int(rollout["initial_solve_iterations"][0]),
+    }
+    metrics.update(
+        _collision_metrics(
+            qpos,
+            runtime=state["runtime"],
+            coll=state["coll"],
+            plane=state["plane"],
+            pedestal=state["pedestal"],
+            world_fn=state["world_fn"],
+            self_fn=state["self_fn"],
+            meshes=state["meshes"],
+        )
+    )
+    return {
+        "episode_index": episode,
+        "unreachable": None,
+        "frame_count": int(len(qpos)),
+        "metrics": metrics,
+        "solves": solves,
+        "resolved": resolved,
+    }
+
+
 def screen_dataset(
     root: str | Path,
     *,
@@ -386,12 +535,16 @@ def screen_dataset(
     rig_config: Path | None = None,
     config: RetargetScreeningConfig | None = None,
     progress: bool = True,
+    jobs: int | None = 1,
 ) -> dict[str, Any]:
-    """Retarget every episode and grade it. Never modifies the dataset."""
+    """Retarget every episode and grade it. Never modifies the dataset.
+
+    ``jobs`` spreads the episodes across processes. The numbers do not depend on
+    it: each worker runs the same per-episode solve, and episodes never share
+    solver state.
+    """
     from handumi.calibration.deployment import resolve_deployment_calibration
     from handumi.config import DEFAULT_RIG_CONFIG
-    from handumi.robots.registry import build_pruned_collision_model, load_embodiment
-    from handumi.scripts.replay.replay_in_sim import solve_episode
 
     cfg = config or RetargetScreeningConfig()
     dataset_root = Path(root).resolve()
@@ -411,41 +564,6 @@ def screen_dataset(
         raise ValueError(f"Episode indices out of range: {sorted(out_of_range)}")
 
     resolved_repo_id = repo_id or f"local/{dataset_root.name}"
-    runtime = load_embodiment(robot)
-    weights = runtime.config.ik_weights
-    coll = build_pruned_collision_model(
-        urdf=runtime.load_urdf(load_meshes=True),
-        robot=runtime.robot,
-        home_q=runtime.config.home_q.astype(np.float32),
-        arms=runtime.arms,
-        gripper_joints={
-            side: tuple(g.name for g in runtime.config.arms[side].gripper_joints)
-            for side in runtime.arms
-        },
-        margin=cfg.self_collision_margin_m,
-    )
-    plane_z = weights.world_collision_plane_z
-    plane = pk.collision.HalfSpace.from_point_and_normal(
-        jnp.array([0.0, 0.0, 1.0]) * plane_z, jnp.array([0.0, 0.0, 1.0])
-    )
-    # vmap over configurations: pyroki's world distance does not accept a
-    # batch axis directly, and calling it per frame paid JAX dispatch 300+
-    # times per episode.
-    world_fn = jax.jit(
-        jax.vmap(
-            lambda q: coll.compute_world_collision_distance(
-                runtime.robot, q, plane
-            ).reshape(-1)
-        )
-    )
-    self_fn = jax.jit(
-        lambda q: coll.compute_self_collision_distance(runtime.robot, q)
-    )
-    pedestal = _pedestal_columns(
-        coll, runtime.robot, runtime.config.home_q.astype(np.float32), plane
-    )
-    meshes = collision_meshes(runtime)
-
     deployment_path = str(
         resolve_deployment_calibration(
             robot,
@@ -454,107 +572,76 @@ def screen_dataset(
             rig_config=rig_config or DEFAULT_RIG_CONFIG,
         ).path
     )
+    workers = resolve_jobs(jobs, len(selected))
+    if progress:
+        print(f"[screen] {describe_jobs(workers, len(selected))}")
+
+    def _report(episode: int, item: dict[str, Any]) -> None:
+        if not progress:
+            return
+        if item["unreachable"] is not None:
+            print(f"  ep {episode:3d}  UNREACHABLE START POSE")
+            return
+        metrics = item["metrics"]
+        print(
+            f"  ep {episode:3d}  pos {metrics['position_error_mean_m'] * 100:5.2f}"
+            f"/{metrics['position_error_p99_m'] * 100:5.2f}"
+            f"/{metrics['position_error_max_m'] * 100:5.2f}cm  "
+            f"rot {metrics['rotation_error_mean_deg']:5.1f}"
+            f"/{metrics['rotation_error_max_deg']:5.1f}deg  "
+            f"self {metrics['self_collision_min_clearance_m'] * 100:5.2f}cm"
+            f"({metrics['self_collision_frames']})"
+        )
+
+    solved = map_episodes(
+        selected,
+        setup=_build_screen_state,
+        setup_kwargs={
+            "dataset_root": dataset_root,
+            "repo_id": resolved_repo_id,
+            "revision": revision,
+            "robot": robot,
+            "deployment_profile": deployment_profile,
+            "rig_config": rig_config or DEFAULT_RIG_CONFIG,
+            "self_collision_margin_m": cfg.self_collision_margin_m,
+        },
+        task=_screen_one_episode,
+        jobs=workers,
+        on_result=_report,
+    )
+
     raw: list[dict[str, Any]] = []
     solves: dict[str, np.ndarray] = {}
     signature: str | None = None
-    for episode in selected:
-        args = _replay_args(
-            root=dataset_root,
-            repo_id=resolved_repo_id,
-            revision=revision,
-            robot=robot,
-            episode=episode,
-            deployment_profile=deployment_profile,
-            rig_config=rig_config or DEFAULT_RIG_CONFIG,
-        )
-        captured = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(captured):
-                rollout = solve_episode(args)
-        except SystemExit as exc:
-            # The solver could not reach the demonstrated start pose at all.
-            raw.append(
-                {
-                    "episode_index": episode,
-                    "unreachable": str(exc),
-                    "frame_count": 0,
-                    "metrics": {},
-                }
-            )
-            if progress:
-                print(f"  ep {episode:3d}  UNREACHABLE START POSE")
-            continue
-
-        if signature is None:
-            # Sign what the solve settled on, not what was asked for: screening
-            # requests "auto" and lets the device come from metadata, while
-            # conversion names both outright. Keying on the request would never
-            # match an identical solve.
-            resolved = copy.copy(args)
-            for field in ("retarget_mode", "controller_device"):
-                value = rollout.get(field)
-                if value is not None and len(value):
-                    setattr(resolved, field, str(value[0]))
-            signature = solver_signature(resolved, deployment_path=deployment_path)
-        for field in CACHED_ROLLOUT_FIELDS:
-            value = rollout.get(field)
-            if value is not None:
-                solves[f"{episode}/{field}"] = np.asarray(value)
-        qpos = np.asarray(rollout["qpos"], dtype=np.float32)
-        pos = np.concatenate(
-            [rollout["left_pos_error_m"], rollout["right_pos_error_m"]]
-        )
-        rot = np.concatenate(
-            [rollout["left_rot_error_deg"], rollout["right_rot_error_deg"]]
-        )
-        per_frame = np.maximum(
-            rollout["left_pos_error_m"], rollout["right_pos_error_m"]
-        )
-        metrics: dict[str, float | int] = {
-            "position_error_mean_m": float(pos.mean()),
-            "position_error_max_m": float(pos.max()),
-            # Sustained miss, robust to the settling spike right after the
-            # start solve: a single frame at 3 cm while the rate limit catches
-            # up is not the same failure as an arm that cannot reach at all.
-            "position_error_p99_m": float(np.percentile(per_frame, 99)),
-            "position_error_frames_over_1cm": int((per_frame > 0.01).sum()),
-            "rotation_error_mean_deg": float(rot.mean()),
-            "rotation_error_max_deg": float(rot.max()),
-            "initial_position_error_m": float(
-                rollout["initial_max_position_error_m"][0]
-            ),
-            "initial_solve_iterations": int(rollout["initial_solve_iterations"][0]),
-        }
-        metrics.update(
-            _collision_metrics(
-                qpos,
-                runtime=runtime,
-                coll=coll,
-                plane=plane,
-                pedestal=pedestal,
-                world_fn=world_fn,
-                self_fn=self_fn,
-                meshes=meshes,
-            )
-        )
+    for item in solved:
+        episode = item["episode_index"]
         raw.append(
             {
                 "episode_index": episode,
-                "unreachable": None,
-                "frame_count": int(len(qpos)),
-                "metrics": metrics,
+                "unreachable": item["unreachable"],
+                "frame_count": item["frame_count"],
+                "metrics": item["metrics"],
             }
         )
-        if progress:
-            print(
-                f"  ep {episode:3d}  pos {metrics['position_error_mean_m'] * 100:5.2f}"
-                f"/{metrics['position_error_p99_m'] * 100:5.2f}"
-                f"/{metrics['position_error_max_m'] * 100:5.2f}cm  "
-                f"rot {metrics['rotation_error_mean_deg']:5.1f}"
-                f"/{metrics['rotation_error_max_deg']:5.1f}deg  "
-                f"self {metrics['self_collision_min_clearance_m'] * 100:5.2f}cm"
-                f"({metrics['self_collision_frames']})"
+        if item["unreachable"] is not None:
+            continue
+        if signature is None and item["resolved"]:
+            resolved_args = _replay_args(
+                root=dataset_root,
+                repo_id=resolved_repo_id,
+                revision=revision,
+                robot=robot,
+                episode=episode,
+                deployment_profile=deployment_profile,
+                rig_config=rig_config or DEFAULT_RIG_CONFIG,
             )
+            for field, value in item["resolved"].items():
+                setattr(resolved_args, field, value)
+            signature = solver_signature(
+                resolved_args, deployment_path=deployment_path
+            )
+        for field, value in item["solves"].items():
+            solves[f"{episode}/{field}"] = value
 
     fences = _rotation_fences(raw, cfg)
     reports = [_grade(item, cfg=cfg, fps=fps, fences=fences) for item in raw]
