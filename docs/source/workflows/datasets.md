@@ -307,9 +307,9 @@ read without opening anything:
 
 | kind | name | example |
 |---|---|---|
-| raw capture | `<task>` | `tblock` |
-| curated derivative | `<task>-clean` | `tblock-clean` |
-| joint angles | `<source>-<robot>-joints` | `tblock-clean-piper-joints` |
+| raw capture | `<task>` | `handumi-demo` |
+| curated derivative | `<task>-clean` | `handumi-demo-clean` |
+| joint angles | `<source>-<robot>-joints` | `handumi-demo-clean-piper-joints` |
 
 Conversion derives the joint name automatically from the source and the
 `--robot` it was given, so the same capture converted for two embodiments

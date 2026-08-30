@@ -37,12 +37,12 @@ def test_joint_dataset_names_state_their_robot_and_kind() -> None:
     from handumi.scripts.conversion import _default_output_repo_id
 
     assert (
-        _default_output_repo_id("local/tblock-clean", "piper")
-        == "local/tblock-clean-piper-joints"
+        _default_output_repo_id("local/handumi-demo-clean", "piper")
+        == "local/handumi-demo-clean-piper-joints"
     )
     assert (
-        _default_output_repo_id("local/tblock-clean", "metal")
-        == "local/tblock-clean-metal-joints"
+        _default_output_repo_id("local/handumi-demo-clean", "metal")
+        == "local/handumi-demo-clean-metal-joints"
     )
     # A bare name keeps its namespace absent rather than inventing one.
-    assert _default_output_repo_id("tblock", "yam") == "tblock-yam-joints"
+    assert _default_output_repo_id("handumi-demo", "yam") == "handumi-demo-yam-joints"

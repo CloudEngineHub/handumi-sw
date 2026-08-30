@@ -114,7 +114,7 @@ Then require it explicitly during a lab check:
 
 ```bash
 JAX_PLATFORMS=cpu uv run handumi replay \
-  outputs/datasets/tblock \
+  outputs/datasets/handumi-demo \
   --robot piper \
   --episode 0 \
   --deployment-profile local
@@ -134,22 +134,23 @@ start check fails. Diagnose this with the printed
 board placement, not the calibration files, is the problem.
 
 For such datasets, write a dataset-specific table YAML that shifts the scene
-back in front of the arms and pass it explicitly. For `tblock` with Piper:
+back in front of the arms and pass it explicitly:
 
 ```bash
 JAX_PLATFORMS=cpu uv run handumi replay \
-  outputs/datasets/tblock \
+  outputs/datasets/handumi-demo \
   --robot piper \
   --episode 0 \
   --retarget-mode absolute-table \
-  --deployment-calibration outputs/calibration/table/tblock_piper_viz.yaml \
+  --deployment-calibration outputs/calibration/table/handumi-demo_piper_viz.yaml \
   --initial-position-tolerance-m 0.05
 ```
 
 This preserves the demonstrated world-space motion for inspection. It is not a
-fidelity claim: for `tblock` episode 0 the median tracking error is `2.4 cm`,
-but the final segment still exceeds `10 cm` because the demonstration leaves
-the BiPiper's bimanual workspace under any rigid placement. Keep such YAMLs
+fidelity claim: on the session this correction was derived from, episode 0 has
+a median tracking error of `2.4 cm` while its final segment still exceeds
+`10 cm`, because the demonstration leaves the BiPiper's bimanual workspace
+under any rigid placement. Keep such YAMLs
 under `outputs/calibration/table/` rather than the canonical `sim/` directory,
 and prevent the root cause during collection by placing the ChArUco board so
 the manipulation happens in front of it (`+Y`, away from the operator).
@@ -161,8 +162,8 @@ is up), so a mostly negative `Y` range is a horizontal offset, not a height
 problem. Read the demo volume from the printed
 `source TCP workspace bounds`, then shift the canonical placement's position
 until that volume sits centered in front of the arms, leaving the quaternion
-untouched. For `tblock`, bounds of `y = [-0.273, 0.045]` (centered near
-`-0.11 m`) turned the canonical `[0.30, 0.0, 0.0]` into
+untouched. In the worked example above, bounds of `y = [-0.273, 0.045]`
+(centered near `-0.11 m`) turned the canonical `[0.30, 0.0, 0.0]` into
 `[0.5422, -0.1106, 0.0446]`: forward by roughly the demos' depth behind the
 origin, and re-centered laterally. The same recorded episodes replay unchanged
 on any robot once that robot's own placement is adjusted the same way.

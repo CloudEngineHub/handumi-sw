@@ -29,7 +29,7 @@ generation is zero.
 ## Run it
 
 ```bash
-handumi dataset inpaint outputs/datasets/tblock \
+handumi dataset inpaint outputs/datasets/handumi-demo \
   --robot piper \
   --episodes 0 \
   --reference assets/piper/piper-photo.jpeg
@@ -80,8 +80,8 @@ colour and whether the operator is gone.
 ## Long episodes
 
 The editing API caps the **duration** it accepts, not the frame count: ten
-seconds per upload. Ten of `tblock`'s forty episodes are longer than that, up to
-15.57 s.
+seconds per upload. In a forty-episode session measured here, ten exceeded it,
+the longest at 15.57 s.
 
 They are not cut short. An episode over the cap is time-compressed for the call
 and expanded again on return, so one call still covers the whole episode and the
@@ -124,8 +124,8 @@ tracks the operator's controller — bright, compact, and with a known table-fra
 position in `observation.state` every frame — and solves PnP against that
 trajectory.
 
-On `tblock` episode 0 it lands 118 inliers from 145 detections with 2.76 px mean
-reprojection error, putting the camera 60 cm above the table. It refuses to
+On one measured episode it lands 118 inliers from 145 detections with 2.76 px
+mean reprojection error, putting the camera 60 cm above the table. It refuses to
 write a pose whose error exceeds `--max-error-px`.
 
 That pose is what makes the retarget offset measurable: how far, in pixels, the
@@ -152,8 +152,8 @@ mechanical — a frame count that disagrees with the action rows, or a scene cut
 and there is no judgement to add. A **warning** is context: an operator still
 faintly visible, scene drift, flicker, or an edit that painted more than usual.
 Warnings are reported and do not block, because the reviewer already has to look
-at the video anyway. The thresholds sit outside the envelope the `tblock` runs
-produced, so they flag outliers rather than normal variation.
+at the video anyway. The thresholds sit outside the envelope the calibration
+runs produced, so they flag outliers rather than normal variation.
 
 ## Choosing references
 
@@ -179,7 +179,7 @@ file is the prompt and is sent verbatim; a file that wants notes alongside it
 can put them above a `---` rule or inside HTML comments, and only the
 instruction below is sent.
 
-What the runs on `tblock` taught, so the next embodiment's prompt does not
+What the first embodiment's runs taught, so the next one's prompt does not
 relearn it:
 
 - **Ask for one arm.** A HandUMI episode is performed by a single arm — in
@@ -203,7 +203,7 @@ The ledger records which prompt produced which video, so a regression can be
 traced back to the wording that caused it.
 
 Write the prompt against the demonstration you actually recorded. A HandUMI
-episode is usually performed by **one** arm — in `tblock` episode 0 the left
+episode is usually performed by **one** arm — in one measured episode the left
 controller moves 0.048 m and never opens its gripper while the right moves
 1.707 m — so asking for two active arms produces a confused edit.
 
