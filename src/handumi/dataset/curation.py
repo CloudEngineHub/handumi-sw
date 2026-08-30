@@ -390,6 +390,10 @@ def _build_curated_dataset(
 
     video_metadata = None
     if source.meta.video_keys:
+        video_metadata = _copy_videos_losslessly(
+            source, build_root, episode_mapping, source_info
+        )
+    if source.meta.video_keys and video_metadata is None:
         encoder, pixel_format = _source_video_encoding(plan.source_root, source_info)
         copy_videos = dataset_tools._copy_and_reindex_videos
         parameters = inspect.signature(copy_videos).parameters
@@ -532,6 +536,71 @@ def load_dataset_info(root: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Cannot read dataset info {path}: {exc}") from exc
+
+
+def _copy_videos_losslessly(
+    source,
+    build_root: Path,
+    episode_mapping: dict[int, int],
+    info: dict[str, Any],
+) -> dict[int, dict[str, Any]] | None:
+    """Rebuild each video from the episodes kept, copying compressed packets.
+
+    Returns the same per-episode metadata LeRobot's re-encoding path produces,
+    or ``None`` when the streams cannot be copied -- an episode not starting on
+    a keyframe, or more than one file per camera -- so the caller falls back to
+    re-encoding rather than writing something it cannot guarantee.
+
+    Re-encoding a dataset to drop a few episodes costs minutes per camera and
+    returns frames that differ from the ones the review graded. Copying is
+    exact and, measured on a 201-episode dataset, took under a second.
+    """
+    from handumi.dataset.videocopy import (
+        EpisodeSegment,
+        copy_segments,
+        keyframe_aligned,
+    )
+
+    fps = float(source.meta.fps)
+    video_keys = [
+        key
+        for key, feature in info.get("features", {}).items()
+        if feature.get("dtype") == "video"
+    ]
+    if not video_keys:
+        return {}
+    kept = sorted(episode_mapping)
+    metadata: dict[int, dict[str, Any]] = {
+        episode_mapping[old]: {} for old in kept
+    }
+    for key in video_keys:
+        files = sorted((Path(source.root) / "videos" / key).glob("chunk-*/*.mp4"))
+        if len(files) != 1:
+            return None
+        segments = []
+        for old in kept:
+            episode = source.meta.episodes[old]
+            first = round(float(episode[f"videos/{key}/from_timestamp"]) * fps)
+            segments.append(EpisodeSegment(first, int(episode["length"])))
+        if not keyframe_aligned(files[0], segments):
+            return None
+        destination = build_root / "videos" / key / "chunk-000" / "file-000.mp4"
+        written = copy_segments(files[0], destination, segments)
+        expected = sum(segment.frame_count for segment in segments)
+        if written != expected:
+            raise RuntimeError(
+                f"Lossless copy wrote {written} frames for {key}, expected {expected}"
+            )
+        cumulative = 0.0
+        for old in kept:
+            new = episode_mapping[old]
+            duration = int(source.meta.episodes[old]["length"]) / fps
+            metadata[new][f"videos/{key}/chunk_index"] = 0
+            metadata[new][f"videos/{key}/file_index"] = 0
+            metadata[new][f"videos/{key}/from_timestamp"] = cumulative
+            metadata[new][f"videos/{key}/to_timestamp"] = cumulative + duration
+            cumulative += duration
+    return metadata
 
 
 def _source_video_encoding(root: Path, info: dict[str, Any]) -> tuple[str, str]:

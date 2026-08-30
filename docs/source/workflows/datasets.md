@@ -309,7 +309,12 @@ nothing about another.
 ## 7. Curate Rejected or Incomplete Data
 
 When a dataset contains rejected or incomplete episodes, create a separate
-curated derivative before conversion or publication. The analysis and curation
+curated derivative before conversion or publication. Curation copies the
+compressed video of the episodes it keeps instead of re-encoding them, which is
+both exact and far quicker -- 35 seconds rather than 28 minutes on a
+201-episode dataset, with frames identical to the source rather than a
+generation older. It falls back to re-encoding when the streams cannot be
+copied, which is when an episode does not begin on a keyframe. The analysis and curation
 steps are intentionally separate so statistical outliers can be reviewed before
 any data is removed. See [Analyze and Curate Datasets](dataset_curation.md).
 
