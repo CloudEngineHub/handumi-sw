@@ -197,7 +197,13 @@ self-collision clearance, and tabletop clearance, then grades it:
   the robot cannot perform the episode.
 - `retarget_rotation_error`, `retarget_self_collision` — warnings for you to
   judge. A brief self-intersection during the retraction after the task is very
-  different from one during the grasp.
+  different from one during the grasp, so the finding reports the **share of the
+  episode** the arm spends intersecting itself, not just a frame count. Below
+  roughly 1% it is a touch at one pose; a double-digit share is a configuration
+  the trajectory holds, which no arm can execute and which no policy should be
+  shown. Read the share, then watch the replay: the count alone cannot tell a
+  387-frame episode with one bad pose from a 90-frame one that is folded through
+  itself the whole way.
 - `retarget_rotation_outlier` — orientation tracking inconsistent with the rest
   of the dataset. The threshold is a multiple of the dataset median, not a
   fixed ceiling: a second recording session stays well inside any absolute

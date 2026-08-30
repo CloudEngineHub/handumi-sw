@@ -719,13 +719,23 @@ def _grade(
             )
         )
     if metrics["self_collision_frames"] >= cfg.self_collision_min_frames:
+        frame_count = max(int(item["frame_count"]), 1)
+        share = 100.0 * metrics["self_collision_frames"] / frame_count
         findings.append(
             QualityFinding(
                 code="retarget_self_collision",
                 severity="warning",
-                message="The retargeted trajectory intersects the robot itself.",
+                # The share, not the count, is what a reviewer decides on: a
+                # touch while retracting and a pose held through the approach
+                # produce the same code and the same message otherwise.
+                message=(
+                    "The retargeted trajectory intersects the robot itself on "
+                    f"{metrics['self_collision_frames']} of {frame_count} frames "
+                    f"({share:.1f}% of the episode)."
+                ),
                 metrics={
                     "self_collision_frames": metrics["self_collision_frames"],
+                    "self_collision_episode_share_pct": round(share, 2),
                     "self_collision_min_clearance_m": metrics[
                         "self_collision_min_clearance_m"
                     ],
