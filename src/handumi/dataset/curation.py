@@ -21,7 +21,7 @@ from handumi.dataset.analysis import dataset_payload_manifest, load_analysis_rep
 CURATION_SCHEMA_VERSION = 1
 CURATION_KIND = "handumi_dataset_curation"
 
-_STANDARD_INFO_KEYS = {
+STANDARD_INFO_KEYS = {
     "codebase_version",
     "robot_type",
     "total_episodes",
@@ -91,7 +91,7 @@ def plan_dataset_curation(
     if output == source or output.is_relative_to(source):
         raise ValueError("Output must be a separate path outside the source dataset")
 
-    info = _load_info(source)
+    info = load_dataset_info(source)
     report = load_analysis_report(analysis)
     total_episodes = int(info.get("total_episodes", 0))
     total_frames = int(info.get("total_frames", 0))
@@ -206,7 +206,7 @@ def curate_dataset(plan: DatasetCurationPlan) -> DatasetCurationResult:
             shutil.rmtree(temp_parent)
 
 
-def _validate_dataset_integrity(
+def validate_dataset_integrity(
     root: str | Path,
     *,
     repo_id: str | None = None,
@@ -214,7 +214,7 @@ def _validate_dataset_integrity(
 ) -> dict[str, Any]:
     """Cross-check LeRobot metadata, Parquet rows, stats, and video streams."""
     dataset_root = Path(root)
-    info = _load_info(dataset_root)
+    info = load_dataset_info(dataset_root)
     total_episodes = int(info.get("total_episodes", 0))
     total_frames = int(info.get("total_frames", 0))
     fps = float(info.get("fps", 0))
@@ -366,7 +366,7 @@ def _build_curated_dataset(
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.datasets.utils import create_lerobot_dataset_card
 
-    source_info = _load_info(plan.source_root)
+    source_info = load_dataset_info(plan.source_root)
     source = LeRobotDataset(
         repo_id=plan.source_repo_id,
         root=plan.source_root,
@@ -428,9 +428,9 @@ def _build_curated_dataset(
         int(item["source_episode_index"]): item for item in analysis["episodes"]
     }
     output_info_path = build_root / "meta" / "info.json"
-    output_info = _load_info(build_root)
+    output_info = load_dataset_info(build_root)
     for key, value in source_info.items():
-        if key not in _STANDARD_INFO_KEYS:
+        if key not in STANDARD_INFO_KEYS:
             output_info[key] = copy.deepcopy(value)
     handumi = output_info.get("handumi")
     if not isinstance(handumi, dict):
@@ -456,7 +456,7 @@ def _build_curated_dataset(
         encoding="utf-8",
     )
 
-    validation = _validate_dataset_integrity(
+    validation = validate_dataset_integrity(
         build_root,
         repo_id=plan.output_repo_id,
         load_with_lerobot=True,
@@ -504,7 +504,7 @@ def _build_curated_dataset(
     card = create_lerobot_dataset_card(
         tags=["HandUMI", "curated"],
         dataset_info=output_info,
-        license=_dataset_license(plan.source_root),
+        license=dataset_license(plan.source_root),
         repo_id=plan.output_repo_id,
         dataset_description=(
             "Curated HandUMI dataset derived locally from "
@@ -514,7 +514,7 @@ def _build_curated_dataset(
         url="https://github.com/murobotics-ai/handumi-sw",
     )
     card.save(build_root / "README.md")
-    _validate_dataset_integrity(
+    validate_dataset_integrity(
         build_root,
         repo_id=plan.output_repo_id,
         load_with_lerobot=True,
@@ -526,7 +526,7 @@ def _build_curated_dataset(
     }
 
 
-def _load_info(root: Path) -> dict[str, Any]:
+def load_dataset_info(root: Path) -> dict[str, Any]:
     path = root / "meta" / "info.json"
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -747,7 +747,7 @@ def _validate_audio(
     return {"enabled": True, "files": len(files)}
 
 
-def _dataset_license(root: Path) -> str:
+def dataset_license(root: Path) -> str:
     readme = root / "README.md"
     if not readme.is_file():
         return "other"

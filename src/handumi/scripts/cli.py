@@ -44,6 +44,10 @@ COMMANDS = {
         "handumi.scripts.curate_dataset",
         "Create a validated dataset from an analysis report",
     ),
+    ("dataset", "merge"): Command(
+        "handumi.scripts.merge_datasets",
+        "Join recording sessions into one dataset",
+    ),
     ("replay",): Command(
         "handumi.scripts.replay.replay_in_sim", "Replay a dataset in simulation"
     ),

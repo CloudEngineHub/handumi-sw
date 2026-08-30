@@ -1,9 +1,49 @@
 # Quality Assurance
 
-Review every recording before publishing or converting it. Start with visual
-replay, then run automated validation and inspect the captured signals.
+Assemble the dataset, review it, then convert or publish. The steps below run
+in that order: join the recording sessions, look at them, measure what is
+measurable, decide the rest, and only then produce joint targets. Every command
+takes the dataset and `--robot <name>`; nothing here is specific to a task or an
+embodiment.
 
-## 1. Replay and Inspect
+## 1. Join Sessions Into One Dataset
+
+A task recorded over several sittings lands as several datasets. Join them
+before reviewing, so one review covers the whole set:
+
+```bash
+handumi dataset merge \
+  outputs/datasets/session-a outputs/datasets/session-b \
+  --output outputs/datasets/session-all \
+  --task "<one wording for the whole set>"
+```
+
+Every episode survives untouched, in the order the sources are given; only the
+episode numbering and the task table change. Sources are read, never written,
+and `--dry-run` prints which output episode range each session claims.
+
+Pass `--task`. Sessions recorded weeks apart carry different wordings for the
+same task, and without it the result holds one task per wording, so a
+language-conditioned policy sees several tasks where there is one.
+
+Sources that disagree on fps, robot type, chunk size, or a feature's dtype,
+shape or video encoding are refused by name before anything is written.
+Metadata they state differently -- a per-session workspace pose, the curation
+record a curated source carries -- is dropped rather than attributed to episodes
+it never described. The comparison is per entry, so the schema keys every source
+shares survive.
+
+`meta/handumi_merge.json` maps every output episode back to its source and
+records each source's payload fingerprint and every dropped metadata path.
+Quality reports do not carry over, because they index source episode numbers:
+review the merged dataset rather than reusing them.
+
+## 2. Replay and Inspect
+
+Every command below takes `DATASET` as either a local dataset root or a Hugging
+Face repository id. A repository id is fetched on first use and cached, so
+`handumi dataset qa your-name/handumi-demo` works with nothing downloaded by
+hand; `--revision` selects a branch, tag or commit.
 
 For local recordings, pass the local root as `DATASET`; no dataset is
 downloaded:
@@ -71,7 +111,7 @@ Offline playback of a dataset on physical arms is not currently exposed.
 `handumi teleop-real` consumes live HandUMI motion and is not a recorded-dataset
 replay command.
 
-## 2. Run Automated Validation
+## 3. Run Automated Validation
 
 ```bash
 handumi validate \
@@ -105,7 +145,7 @@ controller mount, calibration hashes, source enablement, and coordinate layout
 are stored in metadata. Raw controller poses remain unchanged so the same
 capture can be checked against another supported robot.
 
-## 4. Screen the Dataset Against the Target Robot
+## 6. Screen the Dataset Against the Target Robot
 
 Validation and analysis grade the *recording*. Neither knows whether a given
 robot can follow it: an episode with perfect tracking can still leave the arm
@@ -214,7 +254,14 @@ Override with `--allow-flagged-episodes` when you have made the call
 deliberately. Screening is per embodiment: a dataset cleared for one robot says
 nothing about another.
 
-## 5. Convert and Check Target Motion
+## 7. Curate Rejected or Incomplete Data
+
+When a dataset contains rejected or incomplete episodes, create a separate
+curated derivative before conversion or publication. The analysis and curation
+steps are intentionally separate so statistical outliers can be reviewed before
+any data is removed. See [Analyze and Curate Datasets](dataset_curation.md).
+
+## 8. Convert and Check Target Motion
 
 ### Dataset naming
 
@@ -264,14 +311,7 @@ Replay and validate the converted motion before using it with a robot-specific
 integration. See [Add a New Robot Embodiment](../development/new_embodiment.md)
 when adding another simulation model or hardware backend.
 
-## 6. Curate Rejected or Incomplete Data
-
-When a dataset contains rejected or incomplete episodes, create a separate
-curated derivative before conversion or publication. The analysis and curation
-steps are intentionally separate so statistical outliers can be reviewed before
-any data is removed. See [Analyze and Curate Datasets](dataset_curation.md).
-
-## 7. Publish Accepted Data
+## 9. Publish Accepted Data
 
 Upload only after the replay and validation checks pass:
 
