@@ -17,6 +17,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from handumi.dataset.analysis import dataset_payload_manifest, load_analysis_report
+from handumi.dataset.paths import portable_path
 
 CURATION_SCHEMA_VERSION = 1
 CURATION_KIND = "handumi_dataset_curation"
@@ -115,7 +116,12 @@ def plan_dataset_curation(
         )
 
     report_root = report_dataset.get("root")
-    if report_root and Path(str(report_root)).resolve() != source:
+    # Reports record the portable form; older ones recorded an absolute path,
+    # and both have to keep identifying the dataset they were written for.
+    if report_root and str(report_root) not in {
+        portable_path(source),
+        str(source),
+    }:
         raise ValueError(
             f"Analysis report belongs to a different dataset root: {report_root}"
         )
@@ -471,18 +477,18 @@ def _build_curated_dataset(
         "generated_at": datetime.now(UTC).isoformat(),
         "source": {
             "repo_id": plan.source_repo_id,
-            "root": str(plan.source_root),
+            "root": portable_path(plan.source_root),
             "total_episodes": plan.source_total_episodes,
             "total_frames": plan.source_total_frames,
             "payload_manifest": source_manifest,
         },
         "output": {
             "repo_id": plan.output_repo_id,
-            "root": str(plan.output_root),
+            "root": portable_path(plan.output_root),
             "total_episodes": validation["total_episodes"],
             "total_frames": validation["total_frames"],
         },
-        "analysis_report": str(plan.analysis_path),
+        "analysis_report": portable_path(plan.analysis_path),
         "excluded_source_episode_indices": list(plan.excluded_source_episode_indices),
         "removed_episodes": [
             analysis_episodes[index] for index in plan.excluded_source_episode_indices

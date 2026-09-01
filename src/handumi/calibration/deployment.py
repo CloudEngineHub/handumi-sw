@@ -222,9 +222,11 @@ def print_deployment_calibration(
 
 def deployment_calibration_metadata(calibration: DeploymentCalibration) -> dict[str, Any]:
     """Serializable provenance for rollouts and converted datasets."""
+    from handumi.dataset.paths import portable_path
+
     return {
         "robot": calibration.robot,
-        "path": str(calibration.path),
+        "path": portable_path(calibration.path),
         "profile": calibration.profile,
         "scope": calibration.scope,
         "source": calibration.source,

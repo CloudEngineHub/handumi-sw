@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 import pyarrow.parquet as pq
 
+from handumi.dataset.paths import portable_path
+
 ANALYSIS_SCHEMA_VERSION = 2
 ANALYSIS_KIND = "handumi_dataset_analysis"
 IQR_MULTIPLIER = 1.5
@@ -136,7 +138,7 @@ def analyze_dataset(
         "generated_at": datetime.now(UTC).isoformat(),
         "dataset": {
             "repo_id": resolved_repo_id,
-            "root": str(dataset_root.resolve()),
+            "root": portable_path(dataset_root),
             "codebase_version": info.get("codebase_version"),
             "robot_type": info.get("robot_type"),
             "fps": fps,
@@ -152,10 +154,10 @@ def analyze_dataset(
             "automatic_removal": False,
         },
         "quality_reports": [
-            str(path.resolve()) for path in resolved_quality_reports
+            portable_path(path) for path in resolved_quality_reports
         ],
         "quality_report": (
-            str(resolved_quality_reports[0].resolve())
+            portable_path(resolved_quality_reports[0])
             if resolved_quality_reports
             else None
         ),

@@ -29,6 +29,7 @@ import pyroki as pk
 
 from handumi.dataset.analysis import dataset_payload_manifest
 from handumi.dataset.parallel import describe_jobs, map_episodes, resolve_jobs
+from handumi.dataset.paths import portable_path, repo_path
 from handumi.dataset.quality import EpisodeQualityReport, QualityFinding
 
 SCREENING_SCHEMA_VERSION = 1
@@ -661,14 +662,14 @@ def screen_dataset(
         "kind": SCREENING_KIND,
         "generated_at": datetime.now(UTC).isoformat(),
         "dataset": resolved_repo_id,
-        "root": str(dataset_root),
+        "root": portable_path(dataset_root),
         "robot": robot,
         "config": asdict(cfg),
         "rotation_fences_deg": fences,
         "payload_manifest": dataset_payload_manifest(dataset_root),
-        "deployment_calibration_path": deployment_path,
+        "deployment_calibration_path": portable_path(deployment_path),
         "solver_signature": signature,
-        "solve_cache": str(solve_cache_path(dataset_root, robot))
+        "solve_cache": portable_path(solve_cache_path(dataset_root, robot))
         if solves
         else None,
         "robot_fingerprint": robot_fingerprint(
@@ -903,7 +904,7 @@ def evaluate_screening_gate(
         )
     recorded = payload.get("robot_fingerprint")
     current = robot_fingerprint(
-        robot, deployment_path=payload.get("deployment_calibration_path")
+        robot, deployment_path=repo_path(payload.get("deployment_calibration_path"))
     )
     if recorded != current:
         changed = (
@@ -1041,10 +1042,10 @@ def write_screening_report(path: str | Path, payload: dict[str, Any]) -> Path:
     payload = dict(payload)
     solves = payload.pop("_solves", None)
     if solves:
-        cache = payload.get("solve_cache")
+        # Derived from where the report is being written rather than from the
+        # recorded path, which is provenance and may have come from elsewhere.
         np.savez_compressed(
-            Path(cache) if cache else output.with_name(output.stem + "_solves.npz"),
-            **solves,
+            output.with_name(output.stem + "_solves.npz"), **solves
         )
     output.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"

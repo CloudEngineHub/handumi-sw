@@ -28,6 +28,7 @@ from handumi.dataset.curation import (
     load_dataset_info,
     validate_dataset_integrity,
 )
+from handumi.dataset.paths import portable_path
 
 MERGE_SCHEMA_VERSION = 1
 MERGE_KIND = "handumi_dataset_merge"
@@ -270,7 +271,7 @@ def _build_merged_dataset(
         "sources": [
             {
                 "repo_id": source.repo_id,
-                "root": str(source.root),
+                "root": portable_path(source.root),
                 "total_episodes": source.total_episodes,
                 "total_frames": source.total_frames,
                 "tasks": list(source.tasks),
@@ -284,7 +285,7 @@ def _build_merged_dataset(
         ],
         "output": {
             "repo_id": plan.output_repo_id,
-            "root": str(plan.output_root),
+            "root": portable_path(plan.output_root),
             "total_episodes": validation["total_episodes"],
             "total_frames": validation["total_frames"],
             "total_tasks": validation["total_tasks"],
