@@ -58,7 +58,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "HandUMI Hardware",
-            "url": "https://github.com/BrikHMP18/HandUMI",
+            "url": "https://github.com/murobotics-ai/handumi-hw",
             "icon": "fa-solid fa-microchip",
             "type": "fontawesome",
         },

@@ -35,7 +35,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/BrikHMP18/HandUMI"
+Homepage = "https://github.com/murobotics-ai/handumi-hw"
 Repository = "https://github.com/murobotics-ai/handumi-sw"
 Issues = "https://github.com/murobotics-ai/handumi-sw/issues"
 
