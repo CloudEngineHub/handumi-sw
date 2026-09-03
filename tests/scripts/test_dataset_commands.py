@@ -46,3 +46,41 @@ def test_joint_dataset_names_state_their_robot_and_kind() -> None:
     )
     # A bare name keeps its namespace absent rather than inventing one.
     assert _default_output_repo_id("handumi-demo", "yam") == "handumi-demo-yam-joints"
+
+
+def test_output_layout_names_the_plugin_vector() -> None:
+    from handumi.dataset.external_layouts import BI_PIPER_FOLLOWER
+    from handumi.scripts.conversion import _resolve_conversion_output
+    from handumi.scripts.export_dataset import default_output_name
+
+    repo_id, root = _resolve_conversion_output(
+        None, source_repo_id="local/handumi-demo-clean", embodiment="piper",
+        layout_suffix="bi_piper_follower",
+    )
+    assert repo_id == "local/handumi-demo-clean-bi_piper_follower"
+    assert root == Path("outputs/datasets/handumi-demo-clean-bi_piper_follower")
+    # Exporting an existing canonical dataset lands on the same name.
+    assert default_output_name("handumi-demo-clean-piper-joints", BI_PIPER_FOLLOWER) == (
+        "handumi-demo-clean-bi_piper_follower"
+    )
+    assert default_output_name("handumi-demo-clean", BI_PIPER_FOLLOWER) == (
+        "handumi-demo-clean-bi_piper_follower"
+    )
+
+
+def test_output_layout_must_describe_the_chosen_robot() -> None:
+    import pytest
+
+    from handumi.scripts.conversion import _resolve_output_layout, build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(["raw", "--robot", "piper", "--output-layout", "bi_openarm_follower"])
+    with pytest.raises(SystemExit):
+        _resolve_output_layout(parser, args)
+    args = parser.parse_args(["raw", "--robot", "piper", "--output-layout", "bi_piper_follower", "--use-degrees"])
+    with pytest.raises(SystemExit):  # XHUMAN's Piper plugin has no use_degrees
+        _resolve_output_layout(parser, args)
+    args = parser.parse_args(["raw", "--robot", "piper", "--output-layout", "bi_piper_follower"])
+    assert _resolve_output_layout(parser, args).robot_type == "bi_piper_follower"
+    args = parser.parse_args(["raw", "--robot", "piper"])
+    assert _resolve_output_layout(parser, args) is None

@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -146,6 +147,46 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         "--source",
         default="observation.state",
         help=advanced("Raw 16D HandUMI feature column to convert."),
+    )
+    ds.add_argument(
+        "--output-layout",
+        default="canonical",
+        help=(
+            "Joint vector of the written dataset. 'canonical' is HandUMI's "
+            "physical layout (radians + meters). A LeRobot robot_type "
+            "(e.g. bi_piper_follower, bi_openarm_follower) writes that "
+            "plugin's own vector directly, ready for its training and "
+            "deployment stack, without keeping an intermediate dataset."
+        ),
+    )
+    ds.add_argument(
+        "--use-degrees",
+        action="store_true",
+        help=(
+            "With --output-layout: record arm joints in degrees, as LeRobot's "
+            "use_degrees config does for plugins that expose it."
+        ),
+    )
+    ds.add_argument(
+        "--camera-map",
+        default=None,
+        help=advanced(
+            "With --output-layout: comma-separated old=new camera names; "
+            "defaults to the layout's own map."
+        ),
+    )
+    ds.add_argument(
+        "--keep-canonical",
+        action="store_true",
+        help=advanced(
+            "With --output-layout: also keep the canonical dataset under its "
+            "default '<source>-<robot>-joints' name."
+        ),
+    )
+    ds.add_argument(
+        "--replace-output",
+        action="store_true",
+        help=advanced("With --output-layout: replace an existing output directory."),
     )
     ds.add_argument(
         "--episodes",
@@ -376,9 +417,14 @@ def _resolve_conversion_output(
     *,
     source_repo_id: str,
     embodiment: str,
+    layout_suffix: str | None = None,
 ) -> tuple[str, Path]:
     if value is None:
-        repo_id = _default_output_repo_id(source_repo_id, embodiment)
+        if layout_suffix is None:
+            repo_id = _default_output_repo_id(source_repo_id, embodiment)
+        else:
+            # The plugin's robot_type says both which robot and which vector.
+            repo_id = f"{source_repo_id.rstrip('/')}-{layout_suffix}"
         return repo_id, dataset_root_from_repo_id(repo_id)
 
     candidate = Path(value).expanduser()
@@ -399,6 +445,35 @@ def _capture_target_robot(source_info: dict[str, Any]) -> str | None:
     if isinstance(target, dict) and target.get("name"):
         return str(target["name"])
     return None
+
+
+def _resolve_output_layout(parser: argparse.ArgumentParser, args: argparse.Namespace):
+    """The LeRobot layout to write, or None for the canonical vector."""
+    if args.output_layout == "canonical":
+        return None
+    from handumi.dataset.external_layouts import (
+        EXTERNAL_LAYOUTS,
+        external_layout_for_name,
+    )
+
+    try:
+        layout = external_layout_for_name(args.output_layout)
+    except ValueError:
+        known = ", ".join(sorted(EXTERNAL_LAYOUTS))
+        parser.error(f"--output-layout must be 'canonical' or one of: {known}.")
+    if layout.robot != args.embodiment:
+        parser.error(
+            f"--output-layout {layout.robot_type} describes {layout.robot!r}; "
+            f"pass --robot {layout.robot} or choose a layout for {args.embodiment!r}."
+        )
+    if args.use_degrees:
+        from handumi.scripts.export_dataset import apply_use_degrees
+
+        try:
+            layout = apply_use_degrees(layout, True)
+        except SystemExit as exc:
+            parser.error(str(exc))
+    return layout
 
 
 def _resolve_cli_profile(
@@ -1268,6 +1343,13 @@ def _write_converted_dataset_readme(
             "Each side stores YAML-declared arm joints in radians and, when "
             "present, one physical gripper opening in meters."
         )
+    elif isinstance(handumi_info.get("export"), dict):
+        export = handumi_info["export"]
+        representation = (
+            f"The state is the LeRobot {export.get('robot_type')} follower vector "
+            f"({', '.join(export.get('names', [])[:3])}, ...) in that plugin's own "
+            "units, so it trains and deploys through its stack unchanged."
+        )
     else:
         representation = "The state uses the selected embodiment joint layout."
     card = create_lerobot_dataset_card(
@@ -1321,11 +1403,24 @@ def main() -> None:
     # ------------------------------------------------------------------
     source_repo_id = args.repo_id
     source_root = selection.root
+    output_layout = _resolve_output_layout(parser, args)
     output_repo_id, output_root = _resolve_conversion_output(
         args.output,
         source_repo_id=source_repo_id,
         embodiment=args.embodiment,
+        layout_suffix=None if output_layout is None else output_layout.robot_type,
     )
+    final_root = output_root
+    if output_layout is not None:
+        if final_root.exists():
+            if not args.replace_output:
+                parser.error(f"{final_root} exists; pass --replace-output to overwrite it.")
+            shutil.rmtree(final_root)
+        # The canonical dataset is still solved and written first: it is the
+        # physical record and what the export transforms at the file level.
+        output_root = final_root.parent / f".{final_root.name}.canonical"
+        if output_root.exists():
+            shutil.rmtree(output_root)
 
     # ------------------------------------------------------------------
     # Ensure source metadata is available, then resolve metadata-driven defaults
@@ -1349,7 +1444,8 @@ def main() -> None:
         f"  Output: {output_root} ({output_repo_id})\n"
         f"  Robot profile: {args.embodiment}\n"
         f"  Retargeting: {args.retarget_mode}\n"
-        f"  Episodes: {args.episodes or 'all'}"
+        f"  Episodes: {args.episodes or 'all'}\n"
+        f"  Output layout: {'canonical (radians + meters)' if output_layout is None else output_layout.robot_type + (' (use_degrees)' if output_layout.use_degrees and output_layout.degrees_option == 'optional' else '')}"
     )
     if args.dry_run:
         return
@@ -1581,13 +1677,6 @@ def main() -> None:
         },
     )
     _write_calibration_catalog(output_root, args)
-    _write_converted_dataset_readme(
-        output_root,
-        repo_id=output_repo_id,
-        source_repo_id=source_repo_id,
-        embodiment=args.embodiment,
-    )
-
     if quality_config is not None:
         from handumi.dataset.quality import write_quality_report
 
@@ -1597,6 +1686,66 @@ def main() -> None:
             config=quality_config,
             dataset=source_repo_id,
         )
+
+    if output_layout is not None:
+        from handumi.scripts.export_dataset import export_dataset, parse_camera_map
+
+        video_keys = [
+            key
+            for key, feature in source_info.get("features", {}).items()
+            if feature.get("dtype") == "video"
+        ]
+        camera_map = parse_camera_map(
+            args.camera_map, layout=output_layout, video_keys=video_keys
+        )
+        keep_root: Path | None = None
+        if args.keep_canonical:
+            keep_repo_id = _default_output_repo_id(source_repo_id, args.embodiment)
+            keep_root = dataset_root_from_repo_id(keep_repo_id)
+            if keep_root.exists() and not args.replace_output:
+                shutil.rmtree(output_root)
+                raise SystemExit(
+                    f"--keep-canonical would replace {keep_root}; pass "
+                    "--replace-output to allow it."
+                )
+        # Strict on purpose: the point of this layout is deployment, and the
+        # plugin's driver freezes the robot on an out-of-range command.
+        try:
+            export_dataset(
+                output_root,
+                final_root,
+                layout=output_layout,
+                camera_map=camera_map,
+                source_repo_id=source_repo_id,
+                strict=True,
+            )
+        except SystemExit:
+            # Leave nothing half-written behind: the export already removed
+            # its own output, and the staging canonical is only a by-product.
+            shutil.rmtree(output_root, ignore_errors=True)
+            raise
+        if keep_root is not None:
+            if keep_root.exists():
+                shutil.rmtree(keep_root)
+            shutil.move(str(output_root), str(keep_root))
+            _write_converted_dataset_readme(
+                keep_root,
+                repo_id=_default_output_repo_id(source_repo_id, args.embodiment),
+                source_repo_id=source_repo_id,
+                embodiment=args.embodiment,
+            )
+            print(f"Kept canonical dataset at {keep_root}")
+        else:
+            shutil.rmtree(output_root)
+        output_root = final_root
+
+    _write_converted_dataset_readme(
+        output_root,
+        repo_id=output_repo_id,
+        source_repo_id=source_repo_id,
+        embodiment=args.embodiment,
+    )
+    print(f"Wrote {output_repo_id} to {output_root}")
 
     # ------------------------------------------------------------------
     # Optional: push to Hub
