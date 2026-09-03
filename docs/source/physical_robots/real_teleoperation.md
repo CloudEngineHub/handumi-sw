@@ -175,9 +175,14 @@ deployable before training on it.
 ```bash
 handumi replay-real outputs/datasets/my-dataset-bi_piper_follower \
   --robot piper --episode 0 --dry-run
-handumi replay-real outputs/datasets/my-dataset-bi_piper_follower \
+handumi replay-real murobotics/my-dataset-bi_piper_follower \
   --robot piper --episode 0 --speed 0.5 --side left
 ```
+
+A Hugging Face repository id is fetched on first use and cached under
+`outputs/datasets/<repo-name>/`, the same local root a path argument would
+use. Episode parquet is pulled when the plan decodes the joints; videos are
+not downloaded.
 
 `--robot` selects the backend exactly as in `teleop-real`; it defaults to the
 robot the dataset was converted for and refuses a dataset converted for

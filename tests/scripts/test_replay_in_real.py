@@ -9,6 +9,7 @@ commanded joints back as feedback.
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from pathlib import Path
 
@@ -304,3 +305,45 @@ def test_parse_args_rejects_unsafe_values(canonical_dataset) -> None:
             _args(canonical_dataset, *extra)
     with pytest.raises(SystemExit, match="cannot drive"):
         rr.build_plan(_args(canonical_dataset, "--robot", "openarmv1"))
+
+
+def test_local_dataset_does_not_fetch_from_the_hub(monkeypatch, canonical_dataset) -> None:
+    monkeypatch.setattr(
+        rr,
+        "ensure_metadata",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("local roots must not fetch")),
+    )
+    args = _args(canonical_dataset)
+    assert args.dataset_root == canonical_dataset
+    assert args.repo_id == f"local/{canonical_dataset.name}"
+
+
+def test_hub_id_downloads_into_the_local_cache(monkeypatch, tmp_path, canonical_dataset) -> None:
+    cache = tmp_path / "outputs" / "datasets"
+    fetched: list[str] = []
+
+    def fake_root(repo_id: str) -> Path:
+        return cache / repo_id.rstrip("/").split("/")[-1]
+
+    def fake_ensure(*, repo_id, root, revision):
+        fetched.append(repo_id)
+        dest = Path(root)
+        shutil.copytree(canonical_dataset, dest, dirs_exist_ok=True)
+        return json.loads((dest / "meta" / "info.json").read_text())
+
+    monkeypatch.setattr("handumi.dataset.selection.dataset_root_from_repo_id", fake_root)
+    monkeypatch.setattr(rr, "ensure_metadata", fake_ensure)
+    args = rr.parse_args(
+        [
+            "murobotics/tblock-all-piper-clean-bi_piper_follower",
+            "--rig-config",
+            str(tmp_path / "missing-rig.yaml"),
+            "--episode",
+            "0",
+        ]
+    )
+    assert fetched == ["murobotics/tblock-all-piper-clean-bi_piper_follower"]
+    assert args.repo_id == "murobotics/tblock-all-piper-clean-bi_piper_follower"
+    assert args.dataset_root == cache / "tblock-all-piper-clean-bi_piper_follower"
+    assert (args.dataset_root / "meta" / "info.json").is_file()
+    assert args.robot == "piper"

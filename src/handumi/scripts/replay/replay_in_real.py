@@ -25,7 +25,7 @@ Examples:
 
     handumi replay-real outputs/datasets/tblock-all-piper-clean-bi_piper_follower \\
         --episode 0 --dry-run
-    handumi replay-real outputs/datasets/tblock-all-piper-clean-bi_piper_follower \\
+    handumi replay-real murobotics/tblock-all-piper-clean-bi_piper_follower \\
         --robot piper --episode 0 --speed 0.5
 """
 
@@ -47,7 +47,7 @@ import numpy as np
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 from handumi.config import DEFAULT_RIG_CONFIG
-from handumi.dataset import handumi_metadata
+from handumi.dataset import ensure_metadata, handumi_metadata
 from handumi.dataset.canonical import (
     canonical_joint_layout,
     expand_canonical_trajectory,
@@ -1408,6 +1408,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(str(exc))
     args.repo_id = selection.repo_id
     args.dataset_root = selection.root
+    if not selection.local:
+        ensure_metadata(
+            repo_id=selection.repo_id,
+            root=selection.root,
+            revision=selection.revision,
+        )
     args.dataset_info = dataset_info(selection.root)
     args.external_layout = resolve_state_layout(args, args.dataset_info)
     args.robot = resolved_robot(args, args.dataset_info)

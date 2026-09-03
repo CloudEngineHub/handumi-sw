@@ -452,7 +452,7 @@ handumi replay-real \
   outputs/datasets/handumi-demo-clean-bi_piper_follower \
   --robot piper --episode 0 1 2 --dry-run   # limits and speed only
 handumi replay-real \
-  outputs/datasets/handumi-demo-clean-bi_piper_follower \
+  your-name/handumi-demo-clean-bi_piper_follower \
   --robot piper --episode 0 1 2 --speed 0.5
 ```
 
