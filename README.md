@@ -106,6 +106,11 @@ grippers. `handumi dataset qa` reviews a recording and how a given robot
 retargets it, curation removes what the review rejects, and conversion then
 executes that decision rather than judging it again.
 
+Before training, `handumi replay-real` streams a converted dataset to the
+physical robot through the same backend `teleop-real` uses and reports how
+closely the arms followed it, so the data that reaches a policy has already
+run on the hardware.
+
 Robot configuration and physical controller-to-TCP calibration are fingerprinted
 in dataset metadata, so a converted dataset records exactly which geometry and
 calibration produced it. Conversion reuses the trajectories the review solved,

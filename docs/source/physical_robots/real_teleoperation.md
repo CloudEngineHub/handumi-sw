@@ -25,6 +25,9 @@ hardware support.
 | Axol | Supported | Not yet supported |
 | Other robots | Add an embodiment | Add a hardware backend |
 
+A robot with real teleoperation support also supports `handumi replay-real`,
+which drives the same backend from a converted dataset.
+
 See [Add a New Robot Embodiment](../development/new_embodiment.md) for the
 common interface used to add future manufacturers and models without changing
 the HandUMI capture workflow.
@@ -160,6 +163,89 @@ Double-squeeze episode gestures continue to use the HandUMI grippers.
 Unlike a robot-free HandUMI capture, this dataset is bound to the robot that
 produced it. To collect demonstrations that can be retargeted to any supported
 embodiment later, record with HandUMI alone.
+
+## Replay a Dataset on the Real Robot
+
+`handumi replay-real` plays a converted joint-level dataset on the physical
+robot with no IK and no tracking device: the stored joints are streamed
+through the same backend, at the recorded rate, through the same interpolated
+100 Hz command stream as `teleop-real`. Use it to prove a dataset is
+deployable before training on it.
+
+```bash
+handumi replay-real outputs/datasets/my-dataset-bi_piper_follower \
+  --robot piper --episode 0 --dry-run
+handumi replay-real outputs/datasets/my-dataset-bi_piper_follower \
+  --robot piper --episode 0 --speed 0.5 --side left
+```
+
+`--robot` selects the backend exactly as in `teleop-real`; it defaults to the
+robot the dataset was converted for and refuses a dataset converted for
+another one. `--rig-config`, `--skip-can-repair` and `--home-pose` mean what
+they mean in `teleop-real`; `--state-layout` and `--use-degrees` mean what
+they mean in `replay-joints` and are normally read from the dataset.
+The dry run decodes the episodes, checks joint limits and joint speed,
+predicts the command stream's own tracking error and prints the table
+placement the dataset was converted for, without opening any CAN connection.
+Frame selection and stream timing are under `--help-advanced`. The hardware
+run:
+
+1. asks for confirmation (`--yes` skips it), homes at the slow homing speed,
+   and ramps into the first frame over `--approach-seconds` (default 3 s);
+2. streams the frames, slowed by `--speed`, while logging measured joints and
+   gripper openings; arms outside `--side` stay parked at home;
+3. returns home slowly, or stays on the last frame with `--no-return-home`.
+
+Ctrl+C or a backend fault holds the arms where they are and disables them; no
+return-home motion is attempted. Each episode prints the tracking lag, the
+joint and TCP error after lag compensation, and a PASS/FAIL verdict against
+`--tolerance-deg` / `--tolerance-mm`; `--strict` makes a FAIL exit non-zero.
+Logs go to `outputs/replay_in_real/<dataset>/episode_*.npz` and `.json`.
+
+### What real replay adds over simulation
+
+`handumi replay-joints` and `replay-real` send the same joint values, so
+limits, gripper mapping, reachability and the TCP path are already proven by
+the simulation replay. The hardware run measures only what simulation cannot:
+
+- **Speed.** HandUMI captures the human's own pace, and conversion keeps it
+  (up to 0.35 rad per frame). `teleop-real` caps joints at 1 rad/s and the
+  operator slows down to match, so converted data is faster than any teleop
+  recording; a demonstration can even exceed the arm's own limit (the tblock
+  Piper set peaks above 180 deg/s in most episodes). The simulation is
+  kinematic and follows anything; the real backend obeys `real.*` in the
+  robot YAML. Piper's command stream plans an acceleration-limited move
+  toward the latest target, and that braking envelope lags a moving target
+  by `v^2 / 2a`: with the teleop value of 720 deg/s^2 that is 7 deg at
+  100 deg/s and 22 deg at 180 deg/s, invisible under the teleop cap but not
+  at demonstration speed. The dry run plays every episode through the same
+  generator and prints the predicted lag and error, so a run that cannot pass
+  is known before any connection opens. Start at `--speed 0.5`; raise
+  `--accel` (2880 took the tblock prediction at half
+  speed from 5 to 10 deg down to 1 to 3 deg) rather than lowering the
+  tolerance. OpenArm's stream is a plain rate limiter and ignores that flag.
+- **Table placement.** The dataset was retargeted for the table pose in its
+  `handumi.deployment_calibration`, and that pose is baked into the stored
+  joints: replay cannot move it, so the plan prints it (the sim profile is
+  centered between the bases at base height, 0.45 m forward for Piper) and
+  flags an unverified or simulation-only profile. The physical bases must
+  match the URDF separation (0.60 m for the bi-Piper) and the table surface
+  must sit at base height, or the fingertip will land at the wrong height.
+  Check the lowest TCP height of an episode in the screening report
+  (`meta/handumi_screening_<robot>.md`, `table` column) before replaying it,
+  and clear the table for the first run. Objects go where the demonstration
+  put them: for a tracking check they are not needed.
+- **No filter.** Teleop smooths IK output with a One Euro filter; replay
+  sends the stored joints unfiltered, interpolated at 100 Hz, because that is
+  what a trained policy will emit and what the simulation showed. The
+  backend's acceleration limit is the only low-pass. Add smoothing only if
+  the arm visibly vibrates.
+- **Verdict.** The joint tolerance compares the measured joints with the
+  command after estimating the tracking lag (stream delay plus motor
+  response; the report prints it). A FAIL caused by a few fast frames at
+  full speed is a fact about the robot's speed limit, not about the data;
+  a FAIL at `--speed 0.5` with the table clear points at the dataset or the
+  installation.
 
 ## See the Cameras in the Headset
 

@@ -298,6 +298,10 @@ JAX_PLATFORMS=cpu handumi replay-joints \
   --episode 0 --headless --verify --strict-verify
 ```
 
+To play the same dataset on the physical robot instead, use
+`handumi replay-real`; see
+[Physical Robot Teleoperation](../physical_robots/real_teleoperation.md).
+
 ## Reading the Diagnostics
 
 Replay prints the source tool identity and calibration hash before solving.

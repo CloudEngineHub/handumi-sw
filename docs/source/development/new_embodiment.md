@@ -228,7 +228,12 @@ check. Register it lazily in `make_real_backend`
 `real.backend`, keep vendor units and SDK code inside that backend, and add
 backend tests. `configs/rig.yaml` should only hold local transport details
 such as CAN ports. Real control uses radians, meters, normalized openings, and
-XYZW pose quaternions.
+XYZW pose quaternions. A registered backend also serves `handumi replay-real`,
+which streams converted datasets through it; declare the backend's joint speed
+limit in the robot YAML (`real.max_joint_speed_deg_s`, or
+`real.control.max_joint_speed_rad_s`) and, if its stream limits acceleration,
+`real.max_joint_acceleration_deg_s2`, so the replay pre-check can predict
+the stream's tracking error.
 
 ## 7. Open the pull request
 
@@ -261,5 +266,6 @@ The PR description should state:
 - [ ] Replay passes with acceptable IK and gripper aperture.
 - [ ] A LeRobot follower layout is declared if the robot has a plugin, and
       `handumi replay-joints` decodes an exported episode.
-- [ ] Real backend and safety tests exist if real teleoperation is claimed.
+- [ ] Real backend and safety tests exist if real teleoperation is claimed,
+      and `handumi replay-real --dry-run` accepts a converted episode.
 - [ ] README/docs are updated and the full test, build, and docs checks pass.

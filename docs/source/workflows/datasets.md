@@ -439,6 +439,34 @@ recording stores measured feedback, with the servo lag and gravity sag of a
 real arm; a HandUMI conversion stores the ideal IK command, because no robot
 was in the loop. The metadata says so in `handumi.export.state_semantics`.
 
+### Validate on the physical robot
+
+The final check before training runs the converted dataset on the real arms.
+`handumi replay-real` streams the stored joints through the robot's hardware
+backend (the one `teleop-real` uses) and compares the measured joints with the
+command. It reads canonical and LeRobot-layout datasets alike, so the vector a
+policy will emit is what gets validated:
+
+```bash
+handumi replay-real \
+  outputs/datasets/handumi-demo-clean-bi_piper_follower \
+  --robot piper --episode 0 1 2 --dry-run   # limits and speed only
+handumi replay-real \
+  outputs/datasets/handumi-demo-clean-bi_piper_follower \
+  --robot piper --episode 0 1 2 --speed 0.5
+```
+
+The dry run checks every frame against the URDF limits and the backend's
+joint speed limit, and predicts the tracking error the command stream itself
+will cause; frames faster than the backend are reported and, past 5 % of an
+episode, refused with a suggested `--speed`. The hardware run homes,
+ramps into the first frame over `--approach-seconds`, plays the episodes and
+returns home. Each episode gets a PASS or FAIL against `--tolerance-deg` and
+`--tolerance-mm` (lag-compensated joint and TCP tracking error), and a log
+under `outputs/replay_in_real/<dataset>/` with the commanded and measured
+joints. See [Physical Robot Teleoperation](../physical_robots/real_teleoperation.md)
+for the safety behavior.
+
 ## 9. Publish Accepted Data
 
 Upload only after the replay and validation checks pass:

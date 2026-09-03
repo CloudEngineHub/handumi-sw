@@ -63,6 +63,10 @@ COMMANDS = {
         "handumi.scripts.replay.replay_in_sim_joints",
         "Replay a converted joint-level dataset",
     ),
+    ("replay-real",): Command(
+        "handumi.scripts.replay.replay_in_real",
+        "Replay a converted joints dataset on the physical robot",
+    ),
     ("convert",): Command("handumi.scripts.conversion", "Convert data to a robot"),
     ("completion",): Command(
         "handumi.scripts.completion", "Enable Bash, Zsh, or Fish completion"
@@ -168,7 +172,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     path, command = match
     rest = values[len(path) :]
-    if path in {("teleop-real",), ("teleop-record",)}:
+    if path in {("teleop-real",), ("teleop-record",), ("replay-real",)}:
         # This IK is a tiny latency-sensitive dense solve. On the supported
         # NVIDIA setup, CPU execution has far lower tail latency than CUDA.
         # Respect an explicit user override for benchmarking/debugging.
