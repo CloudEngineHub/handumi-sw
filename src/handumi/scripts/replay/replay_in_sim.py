@@ -332,6 +332,7 @@ def load_episode_states(
     )
     source_info = ensure_metadata(ref)
     validate_raw_state_metadata(source_info)
+    _reject_joint_level_dataset(source_info)
     dataset = open_dataset(ref, episode=args.episode, download_videos=False)
     fps = float(getattr(dataset, "fps", 30) or 30)
     table = dataset.hf_dataset
@@ -354,6 +355,25 @@ def load_episode_states(
     else:
         normalized = None
     return states, fps, source_info, normalized
+
+
+def _reject_joint_level_dataset(source_info: dict[str, object]) -> None:
+    """Send an already-converted dataset to the command that can play it.
+
+    A converted dataset inherits the capture's raw-layout tags, so the
+    metadata check above passes and the only symptom would be a confusing
+    state-width error further down.
+    """
+    from handumi.dataset.canonical import is_canonical_state_layout
+    from handumi.dataset.external_layouts import detect_external_layout
+
+    if is_canonical_state_layout(source_info) or detect_external_layout(source_info):
+        raise SystemExit(
+            "This dataset already holds joint angles "
+            f"(robot_type={source_info.get('robot_type')!r}). `handumi replay` solves "
+            "IK from the robot-agnostic capture; use `handumi replay-joints` to play a "
+            "converted dataset."
+        )
 
 
 def _column_float32(table: object, key: str) -> np.ndarray:
