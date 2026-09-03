@@ -193,6 +193,31 @@ Check mesh loading, home pose, TCP placement, gripper direction and aperture,
 table height, shared workspace, and reported IK errors. A large error usually
 means a bad TCP, placement, home pose, joint order, or IK limit.
 
+## 5b. Declare the LeRobot follower layout
+
+Conversion writes the canonical vector (radians and meters) for every
+embodiment. To let `handumi convert --output-layout <robot_type>` write the
+vector a LeRobot plugin records for this robot, add one `ExternalJointLayout`
+to `src/handumi/dataset/external_layouts.py`:
+
+- `robot_type`: the LeRobot plugin's name (`bi_myrobot_follower`), which also
+  names the exported dataset.
+- `arm_names` and `gripper_name`: the plugin's motor names, in its order.
+- one `JointEncoding` per arm joint and one for the gripper, mirroring the
+  plugin's `MotorNormMode`: `range_m100_100` with the limits and sign the
+  driver normalizes over, `degrees`, or `range_0_100`. Read them from the
+  plugin's source and cite it in `source`; a dataset never records them.
+- `degrees_option`: `optional` if the plugin exposes `use_degrees`, `always`
+  for a bus that only reports degrees, `never` otherwise.
+- `assumptions`: anything the dataset cannot prove, such as the calibration
+  zero coinciding with the URDF zero.
+
+`check_layout_limits` refuses to export when a ranged encoding's limits differ
+from the URDF's by more than rounding, so a wrong limit fails loudly instead
+of rescaling every joint. Convert a few episodes, replay the result with
+`handumi replay-joints`, and compare the schema against a dataset the plugin
+recorded itself with `handumi dataset export --compare-with`.
+
 ## 6. Add real hardware support only when ready
 
 Replay support does not provide robot control. A hardware PR must implement
@@ -234,5 +259,7 @@ The PR description should state:
 - [ ] Table calibration is present for absolute-table replay.
 - [ ] `verified: true` is used only for a measured physical installation.
 - [ ] Replay passes with acceptable IK and gripper aperture.
+- [ ] A LeRobot follower layout is declared if the robot has a plugin, and
+      `handumi replay-joints` decodes an exported episode.
 - [ ] Real backend and safety tests exist if real teleoperation is claimed.
 - [ ] README/docs are updated and the full test, build, and docs checks pass.

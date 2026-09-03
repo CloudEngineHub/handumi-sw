@@ -329,12 +329,15 @@ read without opening anything:
 |---|---|---|
 | raw capture | `<task>` | `handumi-demo` |
 | curated derivative | `<task>-clean` | `handumi-demo-clean` |
-| joint angles | `<source>-<robot>-joints` | `handumi-demo-clean-piper-joints` |
+| joint angles (canonical) | `<source>-<robot>-joints` | `handumi-demo-clean-piper-joints` |
+| LeRobot follower layout | `<source>-<robot_type>` | `handumi-demo-clean-bi_piper_follower` |
 
-Conversion derives the joint name automatically from the source and the
-`--robot` it was given, so the same capture converted for two embodiments
-produces two names that cannot be confused with each other or with their
-source. `--output` overrides it when a repository is already named.
+Conversion derives the name automatically from the source and the `--robot`
+it was given, so the same capture converted for two embodiments produces two
+names that cannot be confused with each other or with their source. With
+`--output-layout`, the LeRobot `robot_type` names the result instead, because
+it says both which robot and which joint vector the dataset holds. `--output`
+overrides it when a repository is already named.
 
 
 Conversion creates a target-specific dataset while preserving the raw source.
@@ -367,6 +370,74 @@ portable converted dataset and record the resulting deployment metadata.
 Replay and validate the converted motion before using it with a robot-specific
 integration. See [Add a New Robot Embodiment](../development/new_embodiment.md)
 when adding another simulation model or hardware backend.
+
+### Write the LeRobot follower layout directly
+
+The canonical vector above is physical, which is what keeps the data
+comparable across embodiments. A LeRobot training and deployment stack,
+however, expects the vector its own robot plugin records, and LeRobot leaves
+that encoding to each plugin's `MotorNormMode`: a Feetech-based follower
+normalizes joints to `-100..100` over its calibrated range, a Damiao-based
+follower reports degrees, and a CAN driver may apply its own limits and signs.
+`--output-layout <robot_type>` writes that plugin's vector straight from the
+raw capture, with no intermediate dataset to keep:
+
+```bash
+JAX_PLATFORMS=cpu handumi convert \
+  outputs/datasets/handumi-demo-clean \
+  --robot piper \
+  --output-layout bi_piper_follower
+```
+
+The conversion still solves the canonical vector first, in a hidden staging
+directory, then rewrites it at the file level (parquet columns, `info.json`,
+statistics) and links the videos without re-encoding. Add `--keep-canonical`
+to also keep the canonical dataset under its usual name.
+
+| `--output-layout` | HandUMI robot | Arm joints | Gripper | Encoding read from |
+|---|---|---|---|---|
+| `bi_piper_follower` | `piper` | `-100..100` over firmware limits, joints 1, 4 and 6 sign-flipped | `0..100` | XHUMAN `piper_sdk_interface.py` |
+| `bi_openarm_follower` | `openarmv1` | degrees from the calibration zero | degrees, `0` closed to `-60` open | LeRobot `openarm_follower.py` |
+
+Each layout lives in `src/handumi/dataset/external_layouts.py` as one
+`ExternalJointLayout` with a `JointEncoding` per column, citing the plugin it
+was read from, because a dataset only holds the resulting numbers, never the
+limits and signs that produced them. `--use-degrees` mirrors LeRobot's
+`use_degrees` config for plugins that expose it: arm joints switch to degrees,
+the gripper keeps its mode. A plugin without that option refuses the flag, as
+LeRobot itself would.
+
+Two things the export does that a plain unit change would not:
+
+- **It clips the solver's overshoot.** The IK solver's soft joint-limit
+  constraint settles up to about a millidegree past a limit. A driver with a
+  hard accepted range (`bi_piper_follower` rejects anything outside
+  `-100..100` instead of clipping, and the inference engine then freezes the
+  robot) would refuse those commands. Overshoots within
+  `--clip-tolerance-rad` (default `0.002`) are folded back; anything larger is
+  reported, and the conversion aborts because the dataset would not deploy.
+  Every clipped value is counted in `handumi.export.clipping`.
+- **It renames cameras** to what the plugin's recordings use, by default
+  `left_wrist -> left`, `workspace -> top`, `right_wrist -> right` for the
+  Piper layout, so fine-tuning from a checkpoint trained on the plugin's own
+  captures sees the same image keys. `--camera-map old=new,...` changes it.
+
+`handumi dataset export` applies the same rewrite to a canonical dataset that
+already exists, and `--compare-with <reference>` checks the result against a
+dataset the stack is known to train on: features, names, shapes and
+`robot_type` must match; a differing camera resolution is reported but does
+not block, since policies resize their inputs.
+
+```bash
+JAX_PLATFORMS=cpu handumi dataset export \
+  outputs/datasets/handumi-demo-clean-piper-joints \
+  --strict --compare-with outputs/datasets/bi_piper_pick_and_place_fruits_mantra
+```
+
+What the export cannot change is what `observation.state` means. A follower
+recording stores measured feedback, with the servo lag and gravity sag of a
+real arm; a HandUMI conversion stores the ideal IK command, because no robot
+was in the loop. The metadata says so in `handumi.export.state_semantics`.
 
 ## 9. Publish Accepted Data
 

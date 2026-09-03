@@ -253,6 +253,51 @@ links. Recorded gripper openings remain in the rollout metadata, but the mesh
 cannot visibly open or close until an Axol URDF with actuated finger joints is
 available. Axol does not currently provide a real-hardware backend.
 
+## Replay a Joint-Level Dataset
+
+`handumi replay` solves IK from the robot-agnostic capture. `handumi
+replay-joints` starts from a dataset that already holds joints, so no IK runs:
+the viewer shows exactly the values the dataset stores, and forward kinematics
+only reports where those joints put the TCPs. It is the way to look at what a
+policy will actually train on.
+
+```bash
+JAX_PLATFORMS=cpu handumi replay-joints \
+  outputs/datasets/handumi-demo-clean-piper-joints \
+  --episode 0
+```
+
+The command reads the dataset's own encoding. A canonical conversion
+(`handumi.state_layout` of radians and meters) is expanded to URDF joints
+directly; a dataset in a LeRobot follower layout, whether HandUMI exported it
+or the plugin recorded it (`robot_type: bi_piper_follower`,
+`bi_openarm_follower`), is decoded through the same layout definition the
+exporter uses, so the reference capture and the HandUMI export play in the
+same viewer. Pass `--state-layout` when the metadata does not say, and
+`--use-degrees` when a plugin recorded with that option. Without this
+detection a plugin vector has the same 14 columns as the canonical one and
+would render `-99.8` as radians without any error.
+
+`--verify` checks a canonical conversion against its source capture in two
+deliberately different ways:
+
+- **Integrity** is exact. Rebuilding the solved trajectory from the
+  overlapping `observation.state` and `action` views must reproduce the
+  `ik_fidelity.output_state_sha256` conversion recorded, byte for byte.
+- **Solver agreement** re-solves the capture and compares in task space
+  (default tolerance `1 mm`, `0.5 deg`). It is not a bit-exact check because
+  the IK solver is not reproducible run to run: two consecutive solves of the
+  same episode with identical arguments on one machine differ by about
+  `2e-3 rad`. That is why conversion reuses the trajectory replay already
+  solved instead of solving again, and why `qpos_sha256` only ever matches
+  the stored trajectory.
+
+```bash
+JAX_PLATFORMS=cpu handumi replay-joints \
+  outputs/datasets/handumi-demo-clean-piper-joints \
+  --episode 0 --headless --verify --strict-verify
+```
+
 ## Reading the Diagnostics
 
 Replay prints the source tool identity and calibration hash before solving.
