@@ -55,6 +55,10 @@ COMMANDS = {
     ("replay",): Command(
         "handumi.scripts.replay.replay_in_sim", "Replay a dataset in simulation"
     ),
+    ("replay-joints",): Command(
+        "handumi.scripts.replay.replay_in_sim_joints",
+        "Replay a converted joint-level dataset",
+    ),
     ("convert",): Command("handumi.scripts.conversion", "Convert data to a robot"),
     ("completion",): Command(
         "handumi.scripts.completion", "Enable Bash, Zsh, or Fish completion"
