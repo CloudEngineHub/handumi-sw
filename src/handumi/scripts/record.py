@@ -20,7 +20,6 @@ required --output-dir selects the local output directory.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -39,7 +38,6 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 import numpy as np
-import yaml
 
 from handumi.audio import (
     AudioCaptureError,
@@ -2425,20 +2423,9 @@ def _capture_sources_metadata(
 
 
 def _robot_metadata(name: str, config_dir: Path = ROBOT_CONFIG_DIR) -> dict[str, object]:
-    path = config_dir / f"{name}.yaml"
-    if not path.exists():
-        available = ", ".join(sorted(item.stem for item in config_dir.glob("*.yaml")))
-        raise SystemExit(
-            f"Unknown robot {name!r}; expected {path}. Available: {available or 'none'}."
-        )
-    raw = path.read_bytes()
-    config = yaml.safe_load(raw) or {}
-    return {
-        "name": name,
-        "config_path": str(path),
-        "sha256": hashlib.sha256(raw).hexdigest(),
-        "configuration": config,
-    }
+    from handumi.robots.registry import robot_config_metadata
+
+    return robot_config_metadata(name, config_dir)
 
 
 def _recording_tcp_calibration_metadata(

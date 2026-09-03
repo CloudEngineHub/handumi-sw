@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,29 @@ RESOURCE_ROOT = (
 REPO_ROOT = RESOURCE_ROOT  # Backward-compatible name for callers/tests.
 CONFIG_DIR = RESOURCE_ROOT / "configs" / "robots"
 SIDES: tuple[str, str] = ("left", "right")
+
+
+def robot_config_metadata(name: str, config_dir: Path = CONFIG_DIR) -> dict[str, Any]:
+    """Identify one robot profile: name, path, content hash and the parsed YAML.
+
+    Datasets record this so a reader knows exactly which embodiment
+    definition produced them. A capture stores the HandUMI tool's robot; a
+    conversion must store the robot it converted *to*, which is why the
+    helper lives here and not in the recorder.
+    """
+    path = Path(config_dir) / f"{name}.yaml"
+    if not path.exists():
+        available = ", ".join(sorted(item.stem for item in Path(config_dir).glob("*.yaml")))
+        raise SystemExit(
+            f"Unknown robot {name!r}; expected {path}. Available: {available or 'none'}."
+        )
+    raw = path.read_bytes()
+    return {
+        "name": name,
+        "config_path": str(path),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "configuration": yaml.safe_load(raw) or {},
+    }
 
 
 def available_robot_names() -> tuple[str, ...]:
@@ -779,6 +803,7 @@ __all__ = [
     "RobotRuntime",
     "available_robot_names",
     "load_embodiment",
+    "robot_config_metadata",
     "load_robot_config",
     "yourdfpy_handler",
 ]

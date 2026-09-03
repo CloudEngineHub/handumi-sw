@@ -82,7 +82,12 @@ from handumi.retargeting.handumi_to_robot import (
     raw_state_robot_target_pose7,
     retarget_anchors_from_raw_state,
 )
-from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, load_robot_config
+from handumi.robots.registry import (
+    EMBODIMENT_NAMES,
+    load_embodiment,
+    load_robot_config,
+    robot_config_metadata,
+)
 
 load_dotenv()
 
@@ -385,6 +390,15 @@ def _resolve_conversion_output(
     if looks_local:
         return f"local/{candidate.name}", candidate
     return value, dataset_root_from_repo_id(value)
+
+
+def _capture_target_robot(source_info: dict[str, Any]) -> str | None:
+    """Name of the robot profile the capture itself recorded, if any."""
+    handumi = source_info.get("handumi")
+    target = handumi.get("target_robot") if isinstance(handumi, dict) else None
+    if isinstance(target, dict) and target.get("name"):
+        return str(target["name"])
+    return None
 
 
 def _resolve_cli_profile(
@@ -1525,6 +1539,10 @@ def main() -> None:
         joint_names=joint_names,
         fps=dataset_fps,
         handumi_metadata={
+            # The capture's target_robot is the HandUMI tool used to record;
+            # a converted dataset must name the embodiment it was solved for.
+            "target_robot": robot_config_metadata(args.embodiment),
+            "capture_target_robot": _capture_target_robot(source_info),
             "conversion_source": args.source,
             "retarget_mode": args.retarget_mode,
             "compose_source": args.compose_source,

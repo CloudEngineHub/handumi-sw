@@ -14,6 +14,7 @@ from handumi.robots.registry import (
     CONFIG_DIR,
     available_robot_names,
     load_embodiment,
+    robot_config_metadata,
 )
 
 EMBODIMENTS = ("metal",)
@@ -174,3 +175,13 @@ def test_ik_converges_near_home(runtime) -> None:
     l_sol, r_sol = solver.fk_pose7(q)
     assert float(np.linalg.norm(l_sol[:3] - left_target[0])) < 0.002
     assert float(np.linalg.norm(r_sol[:3] - right_target[0])) < 0.002
+
+
+def test_robot_config_metadata_identifies_the_profile_it_names() -> None:
+    piper = robot_config_metadata("piper")
+    openarm = robot_config_metadata("openarmv1")
+    assert piper["name"] == "piper" and piper["configuration"]["kind"] == "piper"
+    assert openarm["name"] == "openarmv1" and openarm["sha256"] != piper["sha256"]
+    assert piper["config_path"].endswith("piper.yaml")
+    with pytest.raises(SystemExit, match="Unknown robot"):
+        robot_config_metadata("not-a-robot")
