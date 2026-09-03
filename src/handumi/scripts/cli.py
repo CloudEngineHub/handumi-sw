@@ -52,6 +52,10 @@ COMMANDS = {
         "handumi.scripts.direction_dataset",
         "Flag episodes that demonstrate the task backwards",
     ),
+    ("dataset", "export"): Command(
+        "handumi.scripts.export_dataset",
+        "Rewrite a joints dataset into an external stack's layout",
+    ),
     ("replay",): Command(
         "handumi.scripts.replay.replay_in_sim", "Replay a dataset in simulation"
     ),
