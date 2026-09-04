@@ -294,7 +294,11 @@
   </joint>
   <link name="left_tcp" />
   <joint name="left_link6_to_tcp" type="fixed">
-    <origin xyz="0 0 0.145" rpy="0 0 0" />
+    <!-- Fingertip plane of the stock Piper gripper: joint7/joint8 sit at 0.1358 m from
+         the link6 flange and the finger meshes (official piper_description) end there.
+         Was 0.145, 9 mm past the fingers, which left the real tips 9 mm short of the
+         demonstrated HandUMI tip. -->
+    <origin xyz="0 0 0.1358" rpy="0 0 0" />
     <parent link="left_link6" />
     <child link="left_tcp" />
   </joint>
@@ -573,7 +577,11 @@
   </joint>
   <link name="right_tcp" />
   <joint name="right_link6_to_tcp" type="fixed">
-    <origin xyz="0 0 0.145" rpy="0 0 0" />
+    <!-- Fingertip plane of the stock Piper gripper: joint7/joint8 sit at 0.1358 m from
+         the link6 flange and the finger meshes (official piper_description) end there.
+         Was 0.145, 9 mm past the fingers, which left the real tips 9 mm short of the
+         demonstrated HandUMI tip. -->
+    <origin xyz="0 0 0.1358" rpy="0 0 0" />
     <parent link="right_link6" />
     <child link="right_tcp" />
   </joint>
