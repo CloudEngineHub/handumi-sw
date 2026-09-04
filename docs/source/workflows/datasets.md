@@ -454,6 +454,9 @@ handumi replay-real \
 handumi replay-real \
   your-name/handumi-demo-clean-bi_piper_follower \
   --robot piper --episode 0 1 2 --speed 0.5
+handumi replay-real \
+  your-name/handumi-demo-clean-bi_piper_follower \
+  --robot piper --episode 0 1 2 --loop      # repeat until Ctrl+C
 ```
 
 The dry run checks every frame against the URDF limits and the backend's

@@ -177,6 +177,8 @@ handumi replay-real outputs/datasets/my-dataset-bi_piper_follower \
   --robot piper --episode 0 --dry-run
 handumi replay-real murobotics/my-dataset-bi_piper_follower \
   --robot piper --episode 0 --speed 0.5 --side left
+handumi replay-real outputs/datasets/my-dataset-bi_piper_follower \
+  --robot piper --episode 0 1 2 --loop
 ```
 
 A Hugging Face repository id is fetched on first use and cached under
@@ -199,9 +201,11 @@ run:
 2. streams the frames, slowed by `--speed`, while logging measured joints and
    gripper openings; arms outside `--side` stay parked at home;
 3. returns home slowly, or stays on the last frame with `--no-return-home`.
+   `--loop` repeats the listed episodes in that order until Ctrl+C instead.
 
 Ctrl+C or a backend fault holds the arms where they are and disables them; no
-return-home motion is attempted. Each episode prints the tracking lag, the
+return-home motion is attempted. With `--loop`, Ctrl+C is the normal stop
+after as many passes as you want. Each episode prints the tracking lag, the
 joint and TCP error after lag compensation, and a PASS/FAIL verdict against
 `--tolerance-deg` / `--tolerance-mm`; `--strict` makes a FAIL exit non-zero.
 Logs go to `outputs/replay_in_real/<dataset>/episode_*.npz` and `.json`.

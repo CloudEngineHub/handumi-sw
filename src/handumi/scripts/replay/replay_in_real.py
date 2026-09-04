@@ -20,6 +20,8 @@ Safety behavior:
 * ``--speed`` slows playback uniformly;
 * Ctrl+C or a backend fault holds the arms where they are and disables them
   without a return-home motion; a completed replay returns home slowly.
+  ``--loop`` repeats the listed episodes until Ctrl+C, which is the intended
+  stop and uses the same hold-in-place shutdown.
 
 Examples:
 
@@ -27,6 +29,8 @@ Examples:
         --episode 0 --dry-run
     handumi replay-real murobotics/tblock-all-piper-clean-bi_piper_follower \\
         --robot piper --episode 0 --speed 0.5
+    handumi replay-real outputs/datasets/tblock-all-piper-clean-bi_piper_follower \\
+        --robot piper --episode 0 1 2 --loop
 """
 
 from __future__ import annotations
@@ -133,6 +137,14 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         help="Episode index(es) to replay, in order. Default: 0.",
     )
     parser.add_argument(
+        "--loop",
+        action="store_true",
+        help=(
+            "Replay the listed episodes in that order, repeating until Ctrl+C. "
+            "Each pass overwrites that episode's tracking log."
+        ),
+    )
+    parser.add_argument(
         "--robot",
         choices=EMBODIMENT_NAMES,
         default=None,
@@ -154,7 +166,8 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         default=3.0,
         help=(
             "Seconds to ramp from home into the first frame, and between "
-            "episodes. Checked against the backend joint speed limit."
+            "episodes (including the wrap-around when --loop is set). "
+            "Checked against the backend joint speed limit."
         ),
     )
     parser.add_argument(
@@ -318,6 +331,7 @@ class ReplayPlan:
     joint_acceleration_limit_deg_s2: float | None
     required_speed_deg_s: float
     approach_speed_deg_s: float
+    loop: bool = False
     predictions: tuple[TrackingPrediction, ...] = ()
     notes: tuple[str, ...] = field(default_factory=tuple)
 
@@ -668,10 +682,13 @@ def build_plan(args: argparse.Namespace) -> ReplayPlan:
         for e in episodes
     ]
     required = max(demand.peak_deg_s for demand in demands)
-    # Home -> first frame, and last frame -> next first frame, both eased over
-    # the same duration; smoothstep peaks at 1.5x the mean speed.
+    # Home -> first frame, last frame -> next first frame, and with --loop the
+    # wrap from the last episode back to the first; all eased over the same
+    # duration. Smoothstep peaks at 1.5x the mean speed.
     hops = [(home_q, episodes[0].qpos[0])]
     hops += [(a.qpos[-1], b.qpos[0]) for a, b in zip(episodes, episodes[1:], strict=False)]
+    if args.loop:
+        hops.append((episodes[-1].qpos[-1], episodes[0].qpos[0]))
     approach = 0.0
     if args.approach_seconds > 0.0:
         approach = max(
@@ -756,6 +773,7 @@ def build_plan(args: argparse.Namespace) -> ReplayPlan:
         joint_acceleration_limit_deg_s2=acceleration,
         required_speed_deg_s=required,
         approach_speed_deg_s=approach,
+        loop=bool(args.loop),
         predictions=predictions,
         notes=tuple(notes),
     )
@@ -816,7 +834,8 @@ def describe_plan(plan: ReplayPlan, args: argparse.Namespace) -> str:
         f"  State layout: {layout}",
         f"  Joint column: {args.source}",
         f"  Episodes: {', '.join(str(e.episode) for e in plan.episodes)} "
-        f"({total_frames} frames, {total_s:.1f}s at speed {plan.speed:g})",
+        f"({total_frames} frames, {total_s:.1f}s at speed {plan.speed:g})"
+        + (" looping until Ctrl+C" if plan.loop else ""),
         f"  Playback rate: {plan.playback_rate_hz:.1f} Hz",
         f"  Joint speed: needs {plan.required_speed_deg_s:.1f} deg/s, "
         f"backend allows {plan.joint_speed_limit_deg_s:.1f} deg/s"
@@ -1168,10 +1187,19 @@ def confirm_motion(plan: ReplayPlan, *, assume_yes: bool) -> None:
         return
     if not sys.stdin.isatty():
         raise SystemExit("Refusing to move the robot without a terminal; pass --yes.")
+    sequence = (
+        f"{len(plan.episodes)} episode(s) with the {'/'.join(plan.sides)} arm(s)"
+    )
+    if plan.loop:
+        motion = (
+            f"The {plan.robot} will home, then replay {sequence} in order, "
+            "repeating until Ctrl+C."
+        )
+    else:
+        motion = f"The {plan.robot} will home, then replay {sequence}."
     answer = input(
-        f"The {plan.robot} will home, then replay "
-        f"{len(plan.episodes)} episode(s) with the {'/'.join(plan.sides)} arm(s). "
-        f"Clear the workspace and hold the emergency stop ready. Type {CONFIRMATION}: "
+        f"{motion} Clear the workspace and hold the emergency stop ready. "
+        f"Type {CONFIRMATION}: "
     ).strip()
     if answer != CONFIRMATION:
         raise SystemExit("Replay cancelled; the robot was not connected.")
@@ -1258,7 +1286,12 @@ class _Playback:
 
 
 def run_plan(plan: ReplayPlan, args: argparse.Namespace) -> list[TrackingReport]:
-    """Home, replay every episode, analyze tracking, and return home."""
+    """Home, replay every episode, analyze tracking, and return home.
+
+    With ``--loop`` the listed episodes repeat in order until Ctrl+C. That
+    interrupt is the intended stop: completed plays are returned, the arms
+    are held where they are, and there is no return-home motion.
+    """
     runtime = plan.runtime
     if (
         args.accel is not None
@@ -1293,6 +1326,7 @@ def run_plan(plan: ReplayPlan, args: argparse.Namespace) -> list[TrackingReport]
     playback: _Playback | None = None
     connected = False
     completed = False
+    interrupted = False
     fault: BaseException | None = None
     try:
         log.info("Preparing %s transports.", plan.robot)
@@ -1310,41 +1344,53 @@ def run_plan(plan: ReplayPlan, args: argparse.Namespace) -> list[TrackingReport]
         )
         previous_q = plan.home_q
         previous_openings = np.zeros(2, dtype=np.float32)
-        for episode in plan.episodes:
-            ramp_q, ramp_openings = approach_segment(
-                previous_q, previous_openings, episode.qpos[0], episode.openings[0],
-                frames=approach_frames,
-            )
-            if len(ramp_q):
+        cycle = 0
+        while True:
+            cycle += 1
+            if plan.loop:
                 log.info(
-                    "Episode %d: %.1fs lead-in into the first frame.",
-                    episode.episode,
-                    len(ramp_q) / rate,
+                    "Pass %d: replaying episodes %s in order. Ctrl+C stops.",
+                    cycle,
+                    ", ".join(str(episode.episode) for episode in plan.episodes),
                 )
-                playback.play(ramp_q, ramp_openings, feedback=None)
-            log.info(
-                "Episode %d: streaming %d frames (%.1fs).",
-                episode.episode,
-                episode.frames,
-                episode.duration_s / plan.speed,
-            )
-            feedback = FeedbackLog()
-            command_time_s = playback.play(episode.qpos, episode.openings, feedback=feedback)
-            playback.settle(settle_s, feedback=feedback)
-            report, arrays = analyze_tracking(
-                plan, episode, command_time_s, feedback,
-                tolerance_deg=args.tolerance_deg, tolerance_mm=args.tolerance_mm,
-            )
-            saved = save_episode(
-                directory, plan, episode, command_time_s, report, arrays, repo_id=args.repo_id
-            )
-            print(format_report(report))
-            print(f"[replay-real] saved: {saved}")
-            reports.append(report)
-            previous_q = episode.qpos[-1]
-            previous_openings = episode.openings[-1]
-        completed = True
+            for episode in plan.episodes:
+                ramp_q, ramp_openings = approach_segment(
+                    previous_q, previous_openings, episode.qpos[0], episode.openings[0],
+                    frames=approach_frames,
+                )
+                if len(ramp_q):
+                    log.info(
+                        "Episode %d: %.1fs lead-in into the first frame.",
+                        episode.episode,
+                        len(ramp_q) / rate,
+                    )
+                    playback.play(ramp_q, ramp_openings, feedback=None)
+                log.info(
+                    "Episode %d: streaming %d frames (%.1fs).",
+                    episode.episode,
+                    episode.frames,
+                    episode.duration_s / plan.speed,
+                )
+                feedback = FeedbackLog()
+                command_time_s = playback.play(episode.qpos, episode.openings, feedback=feedback)
+                playback.settle(settle_s, feedback=feedback)
+                report, arrays = analyze_tracking(
+                    plan, episode, command_time_s, feedback,
+                    tolerance_deg=args.tolerance_deg, tolerance_mm=args.tolerance_mm,
+                )
+                saved = save_episode(
+                    directory, plan, episode, command_time_s, report, arrays, repo_id=args.repo_id
+                )
+                print(format_report(report))
+                print(f"[replay-real] saved: {saved}")
+                reports.append(report)
+                previous_q = episode.qpos[-1]
+                previous_openings = episode.openings[-1]
+            if not plan.loop:
+                completed = True
+                break
     except KeyboardInterrupt:
+        interrupted = True
         log.warning("Interrupted; holding the arms where they are.")
     except Exception as exc:  # noqa: BLE001 - any backend fault ends the run
         fault = exc
@@ -1367,6 +1413,12 @@ def run_plan(plan: ReplayPlan, args: argparse.Namespace) -> list[TrackingReport]
             finally:
                 backend.disconnect()
     if not completed:
+        if plan.loop and interrupted and reports:
+            log.info(
+                "Loop stopped after %d episode play(s); the arms were held and disabled.",
+                len(reports),
+            )
+            return reports
         reason = f": {fault}" if fault is not None else ""
         raise SystemExit(
             f"Replay did not complete{reason}; the arms were held and disabled."
@@ -1429,6 +1481,14 @@ def main() -> None:
         return
     confirm_motion(plan, assume_yes=args.yes)
     reports = run_plan(plan, args)
+    if plan.loop:
+        n = len(plan.episodes)
+        full, extra = divmod(len(reports), n) if n else (0, 0)
+        extra_note = f" and {extra} extra episode(s)" if extra else ""
+        print(
+            f"[replay-real] loop stopped after {full} full pass(es){extra_note} "
+            f"({len(reports)} episode play(s))."
+        )
     failed = [report.episode for report in reports if not report.passed]
     if failed:
         print(
@@ -1437,7 +1497,7 @@ def main() -> None:
         )
         if args.strict:
             raise SystemExit(1)
-    else:
+    elif reports:
         print(
             f"[replay-real] all {len(reports)} episode(s) tracked within "
             f"{args.tolerance_deg:g} deg / {args.tolerance_mm:g} mm."

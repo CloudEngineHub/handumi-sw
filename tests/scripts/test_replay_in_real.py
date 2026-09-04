@@ -283,6 +283,47 @@ def test_run_plan_streams_every_frame_and_reports_tracking(monkeypatch, tmp_path
     assert summary["passed"] is True and summary["episode"] == 0
 
 
+def test_plan_loop_includes_the_wrap_around_lead_in(canonical_dataset) -> None:
+    once = rr.build_plan(_args(canonical_dataset, "--episode", "0", "1"))
+    looping = rr.build_plan(_args(canonical_dataset, "--episode", "0", "1", "--loop"))
+    assert once.loop is False
+    assert looping.loop is True
+    assert looping.approach_speed_deg_s >= once.approach_speed_deg_s
+    text = rr.describe_plan(looping, _args(canonical_dataset, "--episode", "0", "1", "--loop"))
+    assert "looping until Ctrl+C" in text
+    assert "Episodes: 0, 1" in text
+
+
+def test_run_plan_loops_until_keyboard_interrupt(monkeypatch, tmp_path, canonical_dataset) -> None:
+    backend = FakeBackend()
+    monkeypatch.setattr(rr, "make_real_backend", lambda *a, **k: backend)
+    args = _args(
+        canonical_dataset,
+        "--yes",
+        "--episode", "0", "1",
+        "--loop",
+        "--approach-seconds", "1.0",
+        "--output-dir", str(tmp_path / "logs"),
+    )
+    plan = rr.build_plan(args)
+    plays: list[int] = []
+    original_play = rr._Playback.play
+
+    def counting_play(self, qpos, openings, feedback=None):
+        if feedback is not None:
+            plays.append(len(qpos))
+            if len(plays) > 3:
+                raise KeyboardInterrupt
+        return original_play(self, qpos, openings, feedback=feedback)
+
+    monkeypatch.setattr(rr._Playback, "play", counting_play)
+    reports = rr.run_plan(plan, args)
+    assert [report.episode for report in reports] == [0, 1, 0]
+    assert backend.calls[:3] == ["setup", "connect", "home"]
+    assert "hold" in backend.calls and "move_home" not in backend.calls
+    assert backend.calls[-1] == "disconnect"
+
+
 def test_run_plan_holds_and_disables_on_a_backend_fault(monkeypatch, tmp_path, canonical_dataset) -> None:
     backend = FakeBackend(fail_after_health_checks=3)
     monkeypatch.setattr(rr, "make_real_backend", lambda *a, **k: backend)
