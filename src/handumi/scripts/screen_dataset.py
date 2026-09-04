@@ -73,6 +73,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=RetargetScreeningConfig.max_rotation_error_deg,
     )
     parser.add_argument(
+        "--max-base-rotation-deg",
+        type=float,
+        default=None,
+        metavar="DEG",
+        help=(
+            "Reject episodes whose arm base (first joint) swings farther than "
+            "this from home. Off by default; 60 matches what XHUMAN's real "
+            "Piper teleoperation stays under."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the screening plan without solving episodes.",
@@ -108,6 +119,7 @@ def main() -> None:
     config = RetargetScreeningConfig(
         max_position_error_m=args.max_position_error_m,
         max_rotation_error_deg=args.max_rotation_error_deg,
+        max_base_rotation_deg=args.max_base_rotation_deg,
     )
     payload = screen_dataset(
         selection.root,

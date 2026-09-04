@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from handumi.dataset.analysis import _load_quality_findings, dataset_payload_manifest
 from handumi.dataset.screening import (
@@ -42,6 +43,7 @@ def _metrics(**overrides) -> dict[str, float | int]:
         "self_collision_frames": 0,
         "table_min_clearance_m": 0.0,
         "table_penetration_frames": 0,
+        "base_rotation_max_deg": 24.0,
     }
     base.update(overrides)
     return base
@@ -118,6 +120,42 @@ def test_self_collision_is_a_warning_not_a_rejection() -> None:
     )
     assert "retarget_self_collision" in _codes(report)
     assert report.accepted  # warnings never reject on their own
+
+
+def test_base_rotation_is_off_unless_a_limit_is_set() -> None:
+    """The base swing is a mount and task property; the default only records it."""
+    report = _grade(_raw(4, base_rotation_max_deg=96.4), cfg=CFG, fps=30.0, fences={})
+    assert _codes(report) == set()
+    assert report.metrics["base_rotation_max_deg"] == 96.4
+
+
+def test_base_rotation_past_the_limit_is_a_rejection() -> None:
+    """Setting the limit is the reviewer's decision, so exceeding it needs none."""
+    cfg = RetargetScreeningConfig(max_base_rotation_deg=60.0)
+    report = _grade(_raw(4, base_rotation_max_deg=96.4), cfg=cfg, fps=30.0, fences={})
+    assert _codes(report) == {"retarget_base_rotation"}
+    assert not report.accepted
+    finding = report.findings[0]
+    assert finding.metrics["limit_deg"] == 60.0
+    assert _grade(_raw(5, base_rotation_max_deg=57.5), cfg=cfg, fps=30.0, fences={}).accepted
+
+
+def test_base_rotation_metric_measures_the_swing_from_home() -> None:
+    """Measured from home_q, not from zero, so a non-zero rest pose is not a swing."""
+    from types import SimpleNamespace
+
+    from handumi.dataset.screening import base_rotation_max_deg
+
+    runtime = SimpleNamespace(
+        arms={"left": None, "right": None},
+        arm_joint_indices=lambda side: [0, 1, 2] if side == "left" else [3, 4, 5],
+        config=SimpleNamespace(home_q=np.array([0.0, 0, 0, 0.5, 0, 0], dtype=np.float32)),
+    )
+    qpos = np.array(
+        [[0.0, 1.0, 1.0, 0.5, 1.0, 1.0], [np.radians(-30.0), 0, 0, 0.5 + np.radians(45.0), 0, 0]],
+        dtype=np.float32,
+    )
+    assert base_rotation_max_deg(qpos, runtime) == pytest.approx(45.0, abs=1e-3)
 
 
 def test_table_contact_is_recorded_but_never_flagged() -> None:
