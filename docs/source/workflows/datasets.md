@@ -401,8 +401,11 @@ JAX_PLATFORMS=cpu handumi convert \
 
 The conversion still solves the canonical vector first, in a hidden staging
 directory, then rewrites it at the file level (parquet columns, `info.json`,
-statistics) and links the videos without re-encoding. Add `--keep-canonical`
-to also keep the canonical dataset under its usual name.
+statistics) and links the videos without re-encoding. The staging directory is removed
+afterwards, so one command yields one dataset. `--keep-canonical` also keeps
+the canonical dataset under its usual name; it is a debugging aid for reading
+angles in radians, not a step of the pipeline, since `replay-joints` and
+`replay-real` decode the follower layout themselves.
 
 | `--output-layout` | HandUMI robot | Arm joints | Gripper | Encoding read from |
 |---|---|---|---|---|
