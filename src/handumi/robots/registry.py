@@ -124,6 +124,10 @@ class RobotConfig:
     home_q: np.ndarray
     home_poses: dict[str, np.ndarray]
     default_home_pose: str
+    # Nominal working posture the IK posture cost pulls toward (radians, full
+    # actuated vector; NaN = no preference for that joint). Defaults to home_q;
+    # only matters with ik_weights.posture > 0.
+    posture_q: np.ndarray
     ik_weights: KinematicsConfig
     replay_max_joint_delta: float | None
     # Offline replay-only IK weight overrides ("pos"/"ori"/"rest"). Teleop
@@ -314,10 +318,11 @@ def load_robot_config(name: str) -> RobotConfig:
     replay_weights_raw = replay.get("ik_weights") or {}
     if not isinstance(replay_weights_raw, dict):
         raise TypeError("replay.ik_weights must be a mapping.")
-    unknown = set(replay_weights_raw) - {"pos", "ori", "rest"}
+    unknown = set(replay_weights_raw) - {"pos", "ori", "rest", "posture", "limit_margin"}
     if unknown:
         raise ValueError(
-            f"replay.ik_weights only overrides pos/ori/rest, got {sorted(unknown)}."
+            "replay.ik_weights only overrides pos/ori/rest/posture/limit_margin, "
+            f"got {sorted(unknown)}."
         )
     replay_ik_weights = {
         key: float(value) for key, value in replay_weights_raw.items()
@@ -340,6 +345,14 @@ def load_robot_config(name: str) -> RobotConfig:
             f"default_home_pose {default_home_pose!r} is not present in home_poses."
         )
     home_q = home_poses[default_home_pose]
+    # null entries mean "no preference": the posture cost skips that joint
+    # and the start-pose seed takes it from home_q.
+    posture_q = np.asarray(
+        [np.nan if value is None else float(value) for value in (data.get("posture_q") or [])],
+        dtype=np.float32,
+    )
+    if posture_q.size == 0:
+        posture_q = home_q
     arms = _parse_arms(data)
     controller_tcp_calibrations = {
         str(device): _resolve_path(value)
@@ -368,6 +381,7 @@ def load_robot_config(name: str) -> RobotConfig:
         home_q=home_q,
         home_poses=home_poses,
         default_home_pose=default_home_pose,
+        posture_q=posture_q,
         gripper_max_width_m=float(data.get("gripper_max_width_m", 0.08)),
         controller_tcp_calibrations=controller_tcp_calibrations,
         handumi_gripper=(
@@ -383,6 +397,8 @@ def load_robot_config(name: str) -> RobotConfig:
             ori_weight=float(weights.get("ori", 15.0)),
             rest_weight=float(weights.get("rest", 2.0)),
             posture_weight=float(weights.get("posture", 0.0)),
+            limit_margin_weight=float(weights.get("limit_margin", 0.0)),
+            limit_margin_rad=float(weights.get("limit_margin_rad", 0.17453292)),
             manipulability_weight=float(weights.get("manipulability", 0.0)),
             max_joint_delta=(
                 None
@@ -534,6 +550,12 @@ def load_embodiment(name: str) -> RobotRuntime:
             f"{name} home_q has {len(home_q)} values, expected "
             f"{robot.joints.num_actuated_joints}."
         )
+    posture_q = cfg.posture_q if cfg.posture_q.size else home_q
+    if len(posture_q) != robot.joints.num_actuated_joints:
+        raise ValueError(
+            f"{name} posture_q has {len(posture_q)} values, expected "
+            f"{robot.joints.num_actuated_joints}."
+        )
     for pose_name, pose_q in cfg.home_poses.items():
         if len(pose_q) != robot.joints.num_actuated_joints:
             raise ValueError(
@@ -580,6 +602,7 @@ def load_embodiment(name: str) -> RobotRuntime:
                 ee_indices=ee_indices,
                 arm_joint_indices=arm_joint_indices,
                 home_q=home_q,
+                posture_q=posture_q,
                 config=resolved,
                 locked_joint_indices=(
                     locked_joint_indices

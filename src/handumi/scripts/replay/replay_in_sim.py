@@ -54,7 +54,11 @@ from handumi.retargeting.handumi_to_robot import (
     raw_state_robot_target_pose7,
     retarget_anchors_from_raw_state,
 )
-from handumi.robots.kinematics import optimization_score_from_errors, pose_error_arrays
+from handumi.robots.kinematics import (
+    optimization_score_from_errors,
+    pose_error_arrays,
+    posture_seed,
+)
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, load_robot_config
 from handumi.robots.utils import pose_mul
 
@@ -969,6 +973,10 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             config=replace(cfg, max_joint_delta=None),
             locked_joint_indices=locked_joint_indices,
         )
+        # Seed the start-pose solve from the working posture rather than the
+        # folded home: the local solver lands in whichever elbow branch it
+        # starts near, and every later frame warm-starts from this one.
+        q = posture_seed(runtime.config.posture_q, runtime.config.home_q)
         for initial_solve_count in range(1, args.initial_solve_iterations + 1):
             q = initial_solver.ik(
                 q,
