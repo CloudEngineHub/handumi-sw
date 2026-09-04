@@ -327,10 +327,11 @@ assembly. Those files live in `configs/calibration/controller_tcp/` as
 
 ```yaml
 handumi_tool:
-  gripper: ARX5_beta          # the tip physically screwed onto HandUMI
+  gripper: piper_beta         # the tip physically screwed onto HandUMI
   controller_mount: handumi_v1
 controller_tcp_calibrations:
-  meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
+  pico: configs/calibration/controller_tcp/pico_piper_beta.yaml
+  meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml  # Meta rig, ARX5 tip
 ```
 
 Fitting a **new** tip means writing a new file and pointing the robot at it,

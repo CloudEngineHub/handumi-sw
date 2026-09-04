@@ -38,13 +38,27 @@ arms:
 # home_q layout: [left_joint1..7, right_joint1..7] (left first, matching
 # `arms.left`/`arms.right` above and mjcf_joint_prefix_map izq_/der_).
 home_q: [0.0, 0.0, 0.0, 0.0, 0.2617994, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0]
+# Nominal working posture for the IK posture cost (replay.ik_weights.posture)
+# and the seed of the start-pose solve. Median joints of XHUMAN's real Piper
+# teleoperation while the arm works (fruits dataset): shoulder 100 deg, elbow
+# -88 deg, wrist +51 deg -- the "arch" a teleoperator holds. Without it the
+# solver keeps the elbow straight and pitches the wrist to its -70 deg limit
+# (an "L"), and once the wrist saturates it swings the base instead. Base yaw,
+# Only the joints that pick the elbow branch carry a preference: base yaw at
+# 0 (never swing the base), shoulder and elbow at the arch. Forearm roll,
+# wrist pitch, wrist roll and gripper are null so the orientation target keeps
+# the wrist to itself; a wrist preference of any useful weight fought the
+# orientation term (46 deg median error on tblock).
+posture_q: [0.0, 1.7453293, -1.5358897, null, null, null, null, 0.0, 1.7453293, -1.5358897, null, null, null, null]
 gripper_max_width_m: 0.066
 # Physical tool assembly installed on HandUMI while demonstrating Piper tasks:
 # the gripper tip screwed onto the shells, and the controller mount. It is a
 # property of the HandUMI tool, not of the arm the data is retargeted to, so a
 # different tip needs its own pivot calibration even on the same robot.
+# The PICO rig carries the Piper gripper tip (piper_beta); the Meta rig used
+# the ARX5 tip, which is why its calibration file keeps the ARX5_beta name.
 handumi_tool:
-  gripper: ARX5_beta
+  gripper: piper_beta
   controller_mount: handumi_v1
 # Calibration files are controller_tcp/{device}_{tool}.yaml, so any robot
 # demonstrated with this same physical tip points at these files instead of
@@ -52,11 +66,16 @@ handumi_tool:
 # take precedence over this pairing.
 controller_tcp_calibrations:
   meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
-  pico: configs/calibration/controller_tcp/pico_ARX5_beta.yaml
+  pico: configs/calibration/controller_tcp/pico_piper_beta.yaml
 ik_weights:
   pos: 125.0
   ori: 20.0
   rest: 20.0
+  # Tabletop height in the robot world frame. The bases sit on a 3 cm T-slot
+  # rail, so the table is 3 cm below the base plane; matches robot_from_table
+  # in configs/calibration/table/sim/piper.yaml. Screening's table-clearance
+  # metric reads this; the arm-table collision cost stays off (weight 0).
+  world_collision_plane_z: -0.03
   # Legacy LM/offline cap: 2 deg per IK frame at the historical 30 Hz.
   max_joint_delta: 0.03490659
   # Cartesian radius in meters around each home TCP; unrelated to FPS.
@@ -76,6 +95,18 @@ replay:
   ik_weights:
     ori: 4.5
     rest: 4.0
+    # Tie-breaker between IK branches toward posture_q (see above). Kept
+    # well under pos (125) and ori so it never competes with the TCP target:
+    # on tblock 2 halves the frames with the wrist on its stop at no cost in
+    # orientation, 3 already trades 20 deg of orientation for it. Teleop
+    # keeps posture off until it is tried on the physical arm.
+    posture: 2.0
+    # Soft margin before every joint stop (10 deg by default), so the wrist
+    # spends the elbow and shoulder before parking on its -70 deg limit. On
+    # tblock 5 takes the wrist-on-stop frames from 14% to 3% for +3 deg of
+    # median orientation error; 10 buys little more and 20 breaks the start
+    # solve.
+    limit_margin: 5.0
 real:
   backend: piper_can
   command_rate_hz: 100

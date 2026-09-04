@@ -208,10 +208,28 @@ self-collision clearance, and tabletop clearance, then grades it:
   of the dataset. The threshold is a multiple of the dataset median, not a
   fixed ceiling: a second recording session stays well inside any absolute
   limit while still teaching a policy two behaviors for one task.
+- `retarget_base_rotation` — a rejection, opt-in through
+  `--max-base-rotation-deg`. The report always records how far each arm's first
+  joint (the base yaw) swings from home; the limit turns that into a rejection.
+  Position is weighted far above orientation, so when a demonstration brings
+  the tool to the inner edge of the arm's reach with the wrist pitched down,
+  the folded arm runs out of wrist range and the solver keeps the position by
+  swinging the base 60 to 110 degrees and rolling the wrist. The rest cost only
+  anchors to the previous frame, so nothing pulls the base back. On the Piper,
+  `60` sits just above what real teleoperation reaches; episodes that end by
+  parking the tool next to the robot base are the ones that trip it.
 
 Tabletop contact is reported as a metric without a finding. Fingertips reaching
 the surface during a grasp is the demonstration itself, plus the deliberate
 slack of the capsule fit over the finger mesh.
+
+Three more metrics carry no finding but say how the solver and the operators
+are doing: the share of frames with any arm joint within 3 degrees of a stop
+(`limit (%)` in the report), the largest base swing, and per-arm tool travel
+with the resulting idle verdict (`idle`). An idle arm is the hand a
+single-arm demonstration rested somewhere; the robot has to hold that pose
+for the whole episode, so where operators rest the idle hand is a protocol
+matter the report makes visible.
 
 The report lands at `meta/handumi_screening_<robot>.json` and uses the
 `handumi validate` quality-report schema, so it feeds the existing pipeline
@@ -391,8 +409,11 @@ JAX_PLATFORMS=cpu handumi convert \
 
 The conversion still solves the canonical vector first, in a hidden staging
 directory, then rewrites it at the file level (parquet columns, `info.json`,
-statistics) and links the videos without re-encoding. Add `--keep-canonical`
-to also keep the canonical dataset under its usual name.
+statistics) and links the videos without re-encoding. The staging directory is removed
+afterwards, so one command yields one dataset. `--keep-canonical` also keeps
+the canonical dataset under its usual name; it is a debugging aid for reading
+angles in radians, not a step of the pipeline, since `replay-joints` and
+`replay-real` decode the follower layout themselves.
 
 | `--output-layout` | HandUMI robot | Arm joints | Gripper | Encoding read from |
 |---|---|---|---|---|

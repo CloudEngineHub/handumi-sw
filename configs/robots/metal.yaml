@@ -46,13 +46,14 @@ home_q: [0.0, -0.9, 0.6, 0.0, 0.0, 0.0, -0.05, 0.0, -0.9, 0.6, 0.0, 0.0, 0.0, -0
 gripper_max_width_m: 0.1055
 
 # Physical tool assembly used while demonstrating; datasets recorded with the
-# ARX5_beta tip replay on metal without a new pivot calibration.
+# HandUMI tips replay on metal without a new pivot calibration. The PICO rig
+# carries the Piper tip (piper_beta), the Meta rig the ARX5 tip.
 handumi_tool:
-  gripper: ARX5_beta
+  gripper: piper_beta
   controller_mount: handumi_v1
 controller_tcp_calibrations:
   meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
-  pico: configs/calibration/controller_tcp/pico_ARX5_beta.yaml
+  pico: configs/calibration/controller_tcp/pico_piper_beta.yaml
 
 # Initial kinematic profile carried over from yam.yaml; max_reach follows the
 # ~0.6 m Metal reach. Tune against replay IK errors on real datasets.

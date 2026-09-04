@@ -21,6 +21,14 @@ class KinematicsConfig:
     ori_weight: float = 15.0
     rest_weight: float = 2.0
     posture_weight: float = 0.0
+    # Soft margin inside the joint limits. The hard limit constraint lets a
+    # joint sit exactly on its stop at no cost, so a wrist that reaches a
+    # target by folding to its limit stays there; this penalizes the last
+    # ``limit_margin_rad`` before each limit so the solver spends other joints
+    # first. Joints whose range is too small for the margin (gripper fingers)
+    # are exempt.
+    limit_margin_weight: float = 0.0
+    limit_margin_rad: float = 0.17453292
     manipulability_weight: float = 0.0
     max_joint_delta: float | None = None
     max_reach: float | None = None
@@ -67,6 +75,70 @@ def limit_joint_delta(
     return (current + delta).astype(np.float32)
 
 
+def posture_terms(posture_q, posture_weight: float):
+    """Split a posture vector into the rest pose and per-joint weights.
+
+    A NaN entry means "no preference for this joint": its weight is zero and
+    the rest value is irrelevant. This lets a robot bias only the joints that
+    select an IK branch (base yaw, shoulder, elbow) while the wrist stays free
+    to satisfy the orientation target.
+    """
+    posture = np.asarray(posture_q, dtype=np.float32)
+    free = np.isnan(posture)
+    weights = np.where(free, 0.0, float(posture_weight)).astype(np.float32)
+    return jnp.array(np.where(free, 0.0, posture)), jnp.array(weights)
+
+
+def posture_seed(posture_q, fallback_q) -> np.ndarray:
+    """The posture with its free (NaN) joints filled from ``fallback_q``."""
+    posture = np.asarray(posture_q, dtype=np.float32)
+    fallback = np.asarray(fallback_q, dtype=np.float32)
+    return np.where(np.isnan(posture), fallback, posture).astype(np.float32)
+
+
+def _limit_margin_residual(vals, joint_var, lower, upper, weights):
+    q = vals[joint_var]
+    inside = jnp.maximum(0.0, lower - q) + jnp.maximum(0.0, q - upper)
+    return (inside * weights).flatten()
+
+
+_limit_margin_cost = jaxls.Cost.factory(_limit_margin_residual)
+
+
+def limit_margin_terms(robot: pk.Robot, config: KinematicsConfig):
+    """Shrunk limits and per-joint weights for the limit-margin cost.
+
+    Returns ``None`` when the cost is off. A joint whose range cannot hold two
+    margins plus some travel (the mirrored gripper fingers) gets weight 0.
+    """
+    if config.limit_margin_weight <= 0.0:
+        return None
+    lower = np.asarray(robot.joints.lower_limits, dtype=np.float32)
+    upper = np.asarray(robot.joints.upper_limits, dtype=np.float32)
+    margin = float(config.limit_margin_rad)
+    usable = (upper - lower) > 3.0 * margin
+    weights = np.where(usable, config.limit_margin_weight, 0.0).astype(np.float32)
+    return (
+        jnp.array(np.where(usable, lower + margin, lower)),
+        jnp.array(np.where(usable, upper - margin, upper)),
+        jnp.array(weights),
+    )
+
+
+def _posture_cost(JointVar, posture_q, posture_weight):
+    """Weak pull toward a fixed nominal posture.
+
+    The rest cost anchors each solve to the previous frame, which keeps the
+    trajectory smooth but expresses no preference between IK branches: once
+    the solver folds an elbow the wrong way it stays there, and when that
+    saturates the wrist it swings the base instead. This term breaks the tie
+    toward the posture a teleoperator would hold (elbow forward, wrist
+    pitched down), and its weight is kept far below the pose weights so it
+    chooses between equivalent solutions rather than distorting the TCP.
+    """
+    return pk.costs.rest_cost(JointVar(0), rest_pose=posture_q, weight=posture_weight)
+
+
 @jdc.jit
 def _solve(
     robot,
@@ -77,6 +149,13 @@ def _solve(
     pos_weight,
     ori_weight,
     rest_weight,
+    posture_q,
+    posture_weight,
+    margin_lower,
+    margin_upper,
+    margin_weights,
+    include_posture: jdc.Static[bool] = False,
+    include_limit_margin: jdc.Static[bool] = False,
 ):
     JointVar = robot.joint_var_cls
     target_pose = jaxlie.SE3.from_rotation_and_translation(
@@ -99,6 +178,12 @@ def _solve(
         ),
         pk.costs.limit_constraint(robot, JointVar(0)),
     ]
+    if include_posture:
+        costs.append(_posture_cost(JointVar, posture_q, posture_weight))
+    if include_limit_margin:
+        costs.append(
+            _limit_margin_cost(JointVar(0), margin_lower, margin_upper, margin_weights)
+        )
     sol = (
         jaxls.LeastSquaresProblem(costs=costs, variables=[JointVar(0)])
         .analyze()
@@ -127,7 +212,14 @@ def _solve_collision(
     world_collision_weight,
     world_collision_margin,
     world_plane_z,
+    posture_q,
+    posture_weight,
+    margin_lower,
+    margin_upper,
+    margin_weights,
     include_self: jdc.Static[bool] = True,
+    include_posture: jdc.Static[bool] = False,
+    include_limit_margin: jdc.Static[bool] = False,
 ):
     """The legacy ``_solve`` costs plus capsule collision penalties.
 
@@ -163,6 +255,12 @@ def _solve_collision(
         ),
         pk.costs.limit_constraint(robot, JointVar(0)),
     ]
+    if include_posture:
+        costs.append(_posture_cost(JointVar, posture_q, posture_weight))
+    if include_limit_margin:
+        costs.append(
+            _limit_margin_cost(JointVar(0), margin_lower, margin_upper, margin_weights)
+        )
     if include_self:
         costs.append(
             pk.costs.self_collision_cost(
@@ -207,11 +305,26 @@ def solve_bimanual(
     robot_collision=None,
     config: KinematicsConfig | None = None,
     collision_mode: str = "full",
+    posture_q=None,
+    posture_weight: float = 0.0,
+    limit_margin=None,
 ) -> np.ndarray:
-    """Solve two end-effector targets and return the full actuated config."""
+    """Solve two end-effector targets and return the full actuated config.
+
+    ``limit_margin`` is the tuple from :func:`limit_margin_terms` or ``None``.
+    """
     nq = robot.joints.num_actuated_joints
     if q_prev is None:
         q_prev = np.zeros(nq, dtype=np.float32)
+    include_posture = posture_weight > 0.0 and posture_q is not None
+    posture, posture_weights = posture_terms(
+        posture_q if posture_q is not None else q_prev, posture_weight
+    )
+    include_limit_margin = limit_margin is not None
+    if limit_margin is None:
+        zeros = jnp.zeros(nq, dtype=jnp.float32)
+        limit_margin = (zeros, zeros, zeros)
+    margin_lower, margin_upper, margin_weights = limit_margin
     if (
         robot_collision is not None
         and config is not None
@@ -233,7 +346,14 @@ def solve_bimanual(
             config.world_collision_weight,
             config.world_collision_margin,
             config.world_collision_plane_z,
+            posture,
+            posture_weights,
+            margin_lower,
+            margin_upper,
+            margin_weights,
             include_self=collision_mode == "full",
+            include_posture=include_posture,
+            include_limit_margin=include_limit_margin,
         )
     else:
         cfg = _solve(
@@ -245,6 +365,13 @@ def solve_bimanual(
             pos_weight,
             ori_weight,
             rest_weight,
+            posture,
+            posture_weights,
+            margin_lower,
+            margin_upper,
+            margin_weights,
+            include_posture=include_posture,
+            include_limit_margin=include_limit_margin,
         )
     return np.array(cfg, dtype=np.float32)
 
@@ -262,10 +389,18 @@ class BimanualKinematicsSolver:
         config: KinematicsConfig,
         locked_joint_indices: tuple[int, ...] = (),
         robot_collision=None,
+        posture_q: np.ndarray | None = None,
     ) -> None:
         self.robot = robot
         self.ee_indices = ee_indices
         self.home_q = np.asarray(home_q, dtype=np.float32)
+        # Nominal working posture for the posture cost; home unless the robot
+        # YAML declares one (home is usually folded, which is the wrong tie
+        # breaker for a working arm).
+        self.posture_q = np.asarray(
+            home_q if posture_q is None else posture_q, dtype=np.float32
+        )
+        self.limit_margin = limit_margin_terms(robot, config)
         self.config = config
         self.robot_collision = robot_collision
         self.locked_joint_indices = tuple(locked_joint_indices)
@@ -322,7 +457,7 @@ class BimanualKinematicsSolver:
         return list(self.robot.joints.actuated_names)
 
     def set_posture_pose(self, q: np.ndarray) -> None:
-        self.home_q = np.asarray(q, dtype=np.float32)
+        self.posture_q = np.asarray(q, dtype=np.float32)
 
     def _collision_mode(self, q_prev: np.ndarray) -> str:
         """Pick the cheapest solve variant that still covers nearby contacts.
@@ -411,6 +546,9 @@ class BimanualKinematicsSolver:
             robot_collision=self.robot_collision,
             config=self.config,
             collision_mode=self._collision_mode(q_prev),
+            posture_q=self.posture_q,
+            posture_weight=self.config.posture_weight,
+            limit_margin=self.limit_margin,
         )
         q_limited = limit_joint_delta(q_prev, q_target, self.config.max_joint_delta)
         return self._with_locked_joints(q_limited)

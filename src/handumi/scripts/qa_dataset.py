@@ -62,6 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Retargeting position ceiling passed through to screening.",
     )
     parser.add_argument(
+        "--max-base-rotation-deg",
+        type=float,
+        default=None,
+        help="Base-joint swing ceiling (deg) passed through to screening.",
+    )
+    parser.add_argument(
         "--skip-validate",
         action="store_true",
         help="Reuse the existing recording-quality report instead of recomputing.",
@@ -117,6 +123,8 @@ def review_steps(args, root: str) -> list[tuple[str, list[str]]]:
         ]
         if args.max_position_error_m is not None:
             command += ["--max-position-error-m", str(args.max_position_error_m)]
+        if args.max_base_rotation_deg is not None:
+            command += ["--max-base-rotation-deg", str(args.max_base_rotation_deg)]
         if args.jobs is not None:
             command += ["--jobs", str(args.jobs)]
         steps.append((f"retargeting: {robot}", command))

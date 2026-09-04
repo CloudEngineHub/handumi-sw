@@ -47,6 +47,15 @@ def test_screening_thresholds_reach_the_screen_command() -> None:
     assert screen[screen.index("--max-position-error-m") + 1] == "0.02"
 
 
+def test_base_rotation_limit_reaches_the_screen_command() -> None:
+    args = _args(["ds", "--robot", "piper", "--max-base-rotation-deg", "60"])
+    screen = next(cmd for name, cmd in review_steps(args, "ds") if "screen" in cmd)
+    assert screen[screen.index("--max-base-rotation-deg") + 1] == "60.0"
+    without = _args(["ds", "--robot", "piper"])
+    screen = next(cmd for name, cmd in review_steps(without, "ds") if "screen" in cmd)
+    assert "--max-base-rotation-deg" not in screen
+
+
 def test_validation_can_reuse_an_existing_report() -> None:
     args = _args(["ds", "--robot", "piper", "--skip-validate"])
     assert "recording quality" not in [name for name, _ in review_steps(args, "ds")]
