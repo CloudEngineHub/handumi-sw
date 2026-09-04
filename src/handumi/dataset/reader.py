@@ -409,6 +409,58 @@ def _resolve_ref(
     )
 
 
+def _features_include_video(info: dict[str, Any]) -> bool:
+    features = info.get("features") or {}
+    if not isinstance(features, dict):
+        return False
+    return any(
+        isinstance(value, dict) and value.get("dtype") == "video"
+        for value in features.values()
+    )
+
+
+def _dataset_snapshot_ready(root: Path) -> bool:
+    """True when a Hub snapshot already has metadata, parquet, and videos."""
+    if not info_path(root).is_file():
+        return False
+    info = load_info(root)
+    if int(info.get("total_episodes", 0)) <= 0:
+        return False
+    data = Path(root) / "data"
+    if not data.is_dir() or not any(data.rglob("*.parquet")):
+        return False
+    if _features_include_video(info):
+        videos = Path(root) / "videos"
+        if not videos.is_dir() or not any(path.is_file() for path in videos.rglob("*")):
+            return False
+    return True
+
+
+def _download_hub_snapshot(
+    resolved: DatasetRef,
+    *,
+    allow_patterns: list[str] | None = None,
+) -> None:
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "huggingface_hub is required to download datasets. "
+            "Install project dependencies with: uv sync"
+        ) from exc
+
+    resolved.root.mkdir(parents=True, exist_ok=True)
+    kwargs: dict[str, Any] = {
+        "repo_id": resolved.repo_id,
+        "repo_type": "dataset",
+        "revision": resolved.revision,
+        "local_dir": resolved.root,
+    }
+    if allow_patterns is not None:
+        kwargs["allow_patterns"] = allow_patterns
+    snapshot_download(**kwargs)
+
+
 def ensure_metadata(
     ref: DatasetRef | None = None,
     *,
@@ -428,26 +480,28 @@ def ensure_metadata(
         info = {}
 
     if needs_download:
-        try:
-            from huggingface_hub import snapshot_download
-        except ImportError as exc:
-            raise RuntimeError(
-                "huggingface_hub is required to download dataset metadata. "
-                "Install project dependencies with: uv sync"
-            ) from exc
-
         print(f"Downloading dataset metadata for {resolved.repo_id} …")
-        resolved.root.mkdir(parents=True, exist_ok=True)
-        snapshot_download(
-            repo_id=resolved.repo_id,
-            repo_type="dataset",
-            revision=resolved.revision,
-            local_dir=resolved.root,
-            allow_patterns=["meta/**"],
-        )
+        _download_hub_snapshot(resolved, allow_patterns=["meta/**"])
         info = load_info(resolved.root)
 
     return info
+
+
+def ensure_dataset(
+    ref: DatasetRef | None = None,
+    *,
+    repo_id: str | None = None,
+    root: str | Path | None = None,
+    revision: str | None = None,
+) -> dict[str, Any]:
+    """Ensure the full Hub dataset tree exists locally (``data/``, ``meta/``, ``videos/``)."""
+    resolved = _resolve_ref(ref, repo_id=repo_id, root=root, revision=revision)
+    if _dataset_snapshot_ready(resolved.root):
+        return load_info(resolved.root)
+
+    print(f"Downloading dataset {resolved.repo_id} …")
+    _download_hub_snapshot(resolved)
+    return load_info(resolved.root)
 
 
 def open_dataset(

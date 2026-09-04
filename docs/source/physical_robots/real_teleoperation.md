@@ -181,8 +181,7 @@ handumi replay-real murobotics/my-dataset-bi_piper_follower \
 
 A Hugging Face repository id is fetched on first use and cached under
 `outputs/datasets/<repo-name>/`, the same local root a path argument would
-use. Episode parquet is pulled when the plan decodes the joints; videos are
-not downloaded.
+use. The full repository tree (`data/`, `meta/`, `videos/`) is downloaded.
 
 `--robot` selects the backend exactly as in `teleop-real`; it defaults to the
 robot the dataset was converted for and refuses a dataset converted for

@@ -47,7 +47,7 @@ import numpy as np
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 from handumi.config import DEFAULT_RIG_CONFIG
-from handumi.dataset import ensure_metadata, handumi_metadata
+from handumi.dataset import ensure_dataset, handumi_metadata
 from handumi.dataset.canonical import (
     canonical_joint_layout,
     expand_canonical_trajectory,
@@ -1409,7 +1409,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args.repo_id = selection.repo_id
     args.dataset_root = selection.root
     if not selection.local:
-        ensure_metadata(
+        ensure_dataset(
             repo_id=selection.repo_id,
             root=selection.root,
             revision=selection.revision,

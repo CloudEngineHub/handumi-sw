@@ -310,7 +310,7 @@ def test_parse_args_rejects_unsafe_values(canonical_dataset) -> None:
 def test_local_dataset_does_not_fetch_from_the_hub(monkeypatch, canonical_dataset) -> None:
     monkeypatch.setattr(
         rr,
-        "ensure_metadata",
+        "ensure_dataset",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("local roots must not fetch")),
     )
     args = _args(canonical_dataset)
@@ -332,7 +332,7 @@ def test_hub_id_downloads_into_the_local_cache(monkeypatch, tmp_path, canonical_
         return json.loads((dest / "meta" / "info.json").read_text())
 
     monkeypatch.setattr("handumi.dataset.selection.dataset_root_from_repo_id", fake_root)
-    monkeypatch.setattr(rr, "ensure_metadata", fake_ensure)
+    monkeypatch.setattr(rr, "ensure_dataset", fake_ensure)
     args = rr.parse_args(
         [
             "murobotics/tblock-all-piper-clean-bi_piper_follower",
