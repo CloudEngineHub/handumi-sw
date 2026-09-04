@@ -32,6 +32,12 @@ calibration:
   # this file never overrides a measured lab placement. The BiPiper still
   # cannot fully reach every tblock episode, so errors stay in the
   # centimeter range; do not use this placement for quantitative validation.
+  #
+  # Height: the arm bases bolt onto a 3 cm T-slot rail laid across the table,
+  # so the tabletop sits 0.03 m below the robot base plane (z=0). Converting
+  # with the table at z=0 placed every demonstration 3 cm too high relative
+  # to the arms; keep this in step with ik_weights.world_collision_plane_z in
+  # configs/robots/piper.yaml.
   robot_from_table:
-    position: [0.45, 0.0, 0.0]
+    position: [0.45, 0.0, -0.03]
     quaternion: [0.0, 0.0, -0.70710678, 0.70710678]
