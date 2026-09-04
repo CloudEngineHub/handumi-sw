@@ -247,38 +247,29 @@ well-conditioned.
 ### Step 1. Capture and fit the left side
 
 ```bash
-LEFT=outputs/tcp_pivot_left
-handumi record --output-dir $LEFT --skip-feetech --no-voice-control \
-  --cameras left_wrist --task "tcp pivot left" \
-  --episodes 1 --episode-time-s 25 --tracking-loss-timeout-s 3 --no-sounds
-
-handumi calibrate tcp pivot --side left --dataset $LEFT
+handumi calibrate tcp pivot --side left --time-s 25
 ```
 
-`--dataset` resolves the recording's parquet and episode, and the fit is
-written to `outputs/calibration/controller_tcp_candidate.yaml`. The tracking
-device comes from `recording.device` in `configs/rig.yaml`; pass `--device` to
-override it.
+This command opens only the VR tracking backend: it does not initialize cameras,
+Feetech grippers, or robot motors. After the left controller is tracked, fix the
+tip in the indentation and press ENTER. The raw controller poses are saved to
+`outputs/tcp_pivot_left/poses.csv`, and the fit is written to
+`outputs/calibration/controller_tcp_candidate.yaml`. The tracking device comes
+from `recording.device` in `configs/rig.yaml`; pass `--device` to override it.
 
-Your hands are busy holding the tool during a pivot capture, so
-`--no-voice-control` keeps the episode on the plain ENTER-then-timer flow
-instead of waiting to be spoken to.
+`--output-dir` can override the capture directory. The older `--dataset`,
+`--parquet`, and `--csv` fitting inputs remain supported.
 
 ### Step 2. Capture and fit the right side
 
 The same two commands with `right` in place of `left`:
 
 ```bash
-RIGHT=outputs/tcp_pivot_right
-handumi record --output-dir $RIGHT --skip-feetech --no-voice-control \
-  --cameras right_wrist --task "tcp pivot right" \
-  --episodes 1 --episode-time-s 25 --tracking-loss-timeout-s 3 --no-sounds
-
-handumi calibrate tcp pivot --side right --dataset $RIGHT
+handumi calibrate tcp pivot --side right --time-s 25
 ```
 
-Both sides write into the same candidate file; nothing is applied to the
-project yet.
+Both sides write into the same candidate file, including their fit metrics;
+nothing is applied to the project yet.
 
 ### Step 3. Check the fit
 
@@ -293,6 +284,13 @@ handumi calibrate tcp inspect
 | Condition | below 500 | The capture lacked rotational variety. Recapture covering more orientations. |
 
 Recapture that side until it passes. Do not promote a fit that does not.
+
+`inspect` also checks bilateral symmetry using the tracking device recorded in
+the two fits. Its per-axis report catches a pair of individually good captures
+that disagree with each other. If that check fails, it recommends recapturing
+the side with the weaker individual metrics first; symmetry cannot identify the
+bad side with certainty, so recapture the other side too if the mismatch
+remains.
 
 Then compare the two sides. The mounts are mirror twins, so two of the
 position components should agree between them and only one flips sign. A
@@ -324,6 +322,25 @@ Update only those two `position` values in the calibration file for this tool
 assembly. Those files live in `configs/calibration/controller_tcp/` as
 `{device}_{tool}.yaml`, and each robot points at its own under
 `controller_tcp_calibrations` in `configs/robots/<robot>.yaml`:
+
+```bash
+handumi calibrate tcp promote --target pico_piper_beta.yaml
+```
+
+Only the filename is accepted; it is always resolved below
+`configs/calibration/controller_tcp/`. Promotion repeats the individual-fit and
+bilateral-symmetry checks, symmetrizes using the device's correct mirror axis,
+and changes only the two positions. If the target exists, confirm the
+`Override it? [Y/n]` prompt. Its existing quaternions and metadata are kept.
+
+For a genuinely new tool file there are no official quaternions to preserve.
+Name an existing calibration made with the same tracking device and controller
+mount as the orientation source:
+
+```bash
+handumi calibrate tcp promote --target pico_new_tip.yaml \
+  --quaternion-source pico_piper_beta.yaml
+```
 
 ```yaml
 handumi_tool:
