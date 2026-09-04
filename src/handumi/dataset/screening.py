@@ -466,6 +466,70 @@ def base_rotation_max_deg(qpos: np.ndarray, runtime) -> float:
     return float(np.degrees(swing.max())) if swing.size else 0.0
 
 
+def joint_limit_frames_pct(
+    qpos: np.ndarray, runtime, *, within_rad: float = 0.0523599
+) -> float:
+    """Share of frames with any arm joint within 3 deg of a joint stop.
+
+    Gripper fingers are excluded: their whole range is a few centimeters and
+    they legitimately sit on a stop when closed.
+    """
+    q = np.asarray(qpos, dtype=np.float32)
+    if q.size == 0:
+        return 0.0
+    lower = np.asarray(runtime.robot.joints.lower_limits, dtype=np.float32)
+    upper = np.asarray(runtime.robot.joints.upper_limits, dtype=np.float32)
+    fingers = {
+        finger.index
+        for fingers in (runtime.finger_joints or {}).values()
+        for finger in fingers
+    }
+    indices = [
+        index
+        for side in runtime.arms
+        for index in runtime.arm_joint_indices(side)
+        if index not in fingers and (upper[index] - lower[index]) > 3.0 * within_rad
+    ]
+    if not indices:
+        return 0.0
+    near = (q[:, indices] - lower[indices] < within_rad) | (
+        upper[indices] - q[:, indices] < within_rad
+    )
+    return float(100.0 * near.any(axis=1).mean())
+
+
+def arm_activity_metrics(rollout: dict[str, Any], runtime) -> dict[str, float | int]:
+    """Per-arm travel and idleness of the demonstration itself.
+
+    Read from the raw tool path, not the solved joints, so the number says
+    what the demonstrator did: a hand that never moved is a single-arm episode
+    whose idle pose the robot still has to hold.
+    """
+    from handumi.dataset.idle_arm import arm_activity, idle_sides
+
+    out: dict[str, float | int] = {}
+    activity = {}
+    openings = rollout.get("gripper_normalized")
+    widths = None
+    if openings is not None and np.ndim(openings) == 2 and np.shape(openings)[1] == 2:
+        widths = np.asarray(openings, dtype=np.float32) * float(
+            runtime.config.gripper_max_width_m
+        )
+    for column, side in enumerate(("left", "right")):
+        poses = rollout.get(f"raw_{side}_pose7_ground_truth")
+        if poses is None or len(poses) == 0:
+            continue
+        activity[side] = arm_activity(
+            np.asarray(poses, dtype=np.float32)[:, :3],
+            None if widths is None else widths[:, column],
+            side=side,
+        )
+        out[f"{side}_travel_m"] = activity[side].travel_m
+        out[f"{side}_idle"] = int(activity[side].idle)
+    out["idle_arm_count"] = len(idle_sides(activity))
+    return out
+
+
 def _screen_one_episode(episode: int, state: dict[str, Any]) -> dict[str, Any]:
     """Solve and grade one episode. Runs in the calling process or in a worker.
 
@@ -525,7 +589,9 @@ def _screen_one_episode(episode: int, state: dict[str, Any]) -> dict[str, Any]:
         "initial_position_error_m": float(rollout["initial_max_position_error_m"][0]),
         "initial_solve_iterations": int(rollout["initial_solve_iterations"][0]),
         "base_rotation_max_deg": base_rotation_max_deg(qpos, state["runtime"]),
+        "joint_limit_frames_pct": joint_limit_frames_pct(qpos, state["runtime"]),
     }
+    metrics.update(arm_activity_metrics(rollout, state["runtime"]))
     metrics.update(
         _collision_metrics(
             qpos,
@@ -1139,6 +1205,13 @@ def _fmt_deg(value: Any) -> str:
     return "-" if value is None else f"{float(value):.1f}"
 
 
+def _idle_label(metrics: dict[str, Any]) -> str:
+    idle = [side for side in ("left", "right") if metrics.get(f"{side}_idle")]
+    if not idle:
+        return "-"
+    return "+".join(idle) if len(idle) > 1 else idle[0]
+
+
 def render_screening_markdown(payload: dict[str, Any]) -> str:
     summary = payload["summary"]
     lines = [
@@ -1158,14 +1231,14 @@ def render_screening_markdown(payload: dict[str, Any]) -> str:
     lines += [
         "",
         "| ep | frames | pos mean/max (cm) | rot mean/max (deg) | self (cm/frames) "
-        "| table (cm/frames) | base (deg) | status |",
-        "|---:|---:|---|---|---|---|---:|---|",
+        "| table (cm/frames) | base (deg) | limit (%) | idle | status |",
+        "|---:|---:|---|---|---|---|---:|---:|---|---|",
     ]
     for episode in payload["episodes"]:
         m = episode.get("metrics") or {}
         if not m:
             lines.append(
-                f"| {episode['episode_index']} | - | - | - | - | - | - | "
+                f"| {episode['episode_index']} | - | - | - | - | - | - | - | - | "
                 f"**{episode['status']}** |"
             )
             continue
@@ -1180,6 +1253,8 @@ def render_screening_markdown(payload: dict[str, Any]) -> str:
             f"| {m['table_min_clearance_m'] * 100:.2f} / "
             f"{m['table_penetration_frames']} "
             f"| {_fmt_deg(m.get('base_rotation_max_deg'))} "
+            f"| {_fmt_deg(m.get('joint_limit_frames_pct'))} "
+            f"| {_idle_label(m)} "
             f"| {episode['status']} |"
         )
     findings = [

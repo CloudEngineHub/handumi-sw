@@ -223,6 +223,14 @@ Tabletop contact is reported as a metric without a finding. Fingertips reaching
 the surface during a grasp is the demonstration itself, plus the deliberate
 slack of the capsule fit over the finger mesh.
 
+Three more metrics carry no finding but say how the solver and the operators
+are doing: the share of frames with any arm joint within 3 degrees of a stop
+(`limit (%)` in the report), the largest base swing, and per-arm tool travel
+with the resulting idle verdict (`idle`). An idle arm is the hand a
+single-arm demonstration rested somewhere; the robot has to hold that pose
+for the whole episode, so where operators rest the idle hand is a protocol
+matter the report makes visible.
+
 The report lands at `meta/handumi_screening_<robot>.json` and uses the
 `handumi validate` quality-report schema, so it feeds the existing pipeline
 directly.
