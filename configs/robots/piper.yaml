@@ -55,8 +55,10 @@ gripper_max_width_m: 0.066
 # the gripper tip screwed onto the shells, and the controller mount. It is a
 # property of the HandUMI tool, not of the arm the data is retargeted to, so a
 # different tip needs its own pivot calibration even on the same robot.
+# The PICO rig carries the Piper gripper tip (piper_beta); the Meta rig used
+# the ARX5 tip, which is why its calibration file keeps the ARX5_beta name.
 handumi_tool:
-  gripper: ARX5_beta
+  gripper: piper_beta
   controller_mount: handumi_v1
 # Calibration files are controller_tcp/{device}_{tool}.yaml, so any robot
 # demonstrated with this same physical tip points at these files instead of
@@ -64,7 +66,7 @@ handumi_tool:
 # take precedence over this pairing.
 controller_tcp_calibrations:
   meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
-  pico: configs/calibration/controller_tcp/pico_ARX5_beta.yaml
+  pico: configs/calibration/controller_tcp/pico_piper_beta.yaml
 ik_weights:
   pos: 125.0
   ori: 20.0

@@ -1,12 +1,14 @@
-# SUPERSEDED for the ARX5_beta/handumi_v1 assembly by
-# controller_tcp/pico_ARX5_beta.yaml (piper points there now); this file's
+# SUPERSEDED for the piper_beta/handumi_v1 assembly (PICO rig with the Piper
+# gripper tip, formerly mislabeled ARX5_beta) by
+# controller_tcp/pico_piper_beta.yaml (piper points there now); this file's
 # numbers were in fact measured with that assembly (see git history), the
-# original "unidentified" label below was wrong about that.
+# original "unidentified" label below was wrong about that. Captures made
+# before the switch carry this file as their snapshot and keep using it.
 #
 # openarmv1.yaml still points its `pico` key at this file, which remains
 # wrong: openarmv1's tool is openarm_parallel_v1, a different tip, so it needs
 # its own controller_tcp/pico_openarm_parallel_v1.yaml pivot measurement
-# rather than reusing this ARX5_beta one. Recalibrate for that assembly and
+# rather than reusing this piper_beta one. Recalibrate for that assembly and
 # repoint openarmv1.yaml before trusting numbers retargeted to openarmv1.
 calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion

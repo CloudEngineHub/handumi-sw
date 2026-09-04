@@ -38,7 +38,7 @@ def test_piper_pico_selects_assembly_specific_calibration() -> None:
     assert not [check for check in checks if check.status == "FAIL"]
     selection = next(check for check in checks if check.name == "TCP selection")
     assert selection.detail.endswith(
-        "configs/calibration/controller_tcp/pico_ARX5_beta.yaml"
+        "configs/calibration/controller_tcp/pico_piper_beta.yaml"
     )
 
 

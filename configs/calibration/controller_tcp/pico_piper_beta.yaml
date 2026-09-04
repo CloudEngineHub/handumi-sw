@@ -1,3 +1,8 @@
+# Controller->TCP calibration of the PICO HandUMI rig fitted with the Piper
+# gripper tip (tool id piper_beta). Until 2026-09-04 this file was named
+# pico_ARX5_beta.yaml: the tip was mislabeled after the ARX5 tip used on the
+# Meta rig (meta_ARX5_beta.yaml). The numbers are unchanged; every capture
+# recorded with the PICO rig used this Piper tip.
 calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
   controller_to_gripper_tcp:
@@ -26,10 +31,10 @@ calibration:
     method: right/left pivot windows (setup.md Step 1-4) for position, orientation
       hold episodes for the quaternions. Pivot solves translation only, so the
       quaternions were kept unchanged from the prior pico.yaml measurement of the
-      same ARX5_beta/handumi_v1 assembly and only the position was refit and
+      same piper_beta/handumi_v1 assembly and only the position was refit and
       symmetrized.
     handumi_tool:
-      gripper: ARX5_beta
+      gripper: piper_beta
       controller_mount: handumi_v1
     axis_convention_note: For the PICO device the mirrored (left/right sign-flip)
       axis is controller-frame X, not Y as the generic setup.md formula assumes
@@ -38,7 +43,7 @@ calibration:
       x=(left.x-right.x)/2 (antisymmetric), y=(left.y+right.y)/2,
       z=(left.z+right.z)/2 (both symmetric), left=[x,y,z], right=[-x,y,z]. This
       matches the sign pattern already present in the legacy pico.yaml this file
-      replaces for the ARX5_beta assembly.
+      replaces for the piper_beta assembly.
     acceptance_status: DID NOT MEET setup.md Step 3 thresholds (RMS<0.50cm,
       max<1.00cm) -- promoted anyway at the operator's request; recapture with a
       firmer tip indentation if better accuracy is needed.
