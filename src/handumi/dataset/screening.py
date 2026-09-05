@@ -176,6 +176,7 @@ def _replay_args(
     episode: int,
     deployment_profile: str,
     rig_config: Path,
+    controller_tcp_calibration: Path | None = None,
 ):
     from handumi.scripts.replay.replay_in_sim import build_parser
 
@@ -184,6 +185,9 @@ def _replay_args(
     args.dataset_root = root
     args.revision = revision
     args.episode = episode
+    # An explicit controller->TCP file overrides the capture's snapshot, the
+    # same precedence convert applies; it is part of the solver signature.
+    args.controller_tcp_calibration = controller_tcp_calibration
     args.robot = robot
     args.retarget_mode = "auto"
     args.deployment_profile = deployment_profile
@@ -394,6 +398,7 @@ def _build_screen_state(
     deployment_profile: str,
     rig_config: Path,
     self_collision_margin_m: float,
+    controller_tcp_calibration: Path | None = None,
 ) -> dict[str, Any]:
     """Build everything an episode solve reuses: robot model, compiled fns, meshes.
 
@@ -449,6 +454,7 @@ def _build_screen_state(
             "robot": robot,
             "deployment_profile": deployment_profile,
             "rig_config": rig_config,
+            "controller_tcp_calibration": controller_tcp_calibration,
         },
     }
 
@@ -626,8 +632,14 @@ def screen_dataset(
     config: RetargetScreeningConfig | None = None,
     progress: bool = True,
     jobs: int | None = 1,
+    controller_tcp_calibration: Path | None = None,
 ) -> dict[str, Any]:
     """Retarget every episode and grade it. Never modifies the dataset.
+
+    ``controller_tcp_calibration`` replaces the capture's controller->TCP
+    snapshot with an explicit YAML, exactly as ``handumi convert
+    --controller-tcp-calibration`` does, so the graded trajectories are the
+    ones that conversion will reuse.
 
     ``jobs`` spreads the episodes across processes. The numbers do not depend on
     it: each worker runs the same per-episode solve, and episodes never share
@@ -694,6 +706,7 @@ def screen_dataset(
             "deployment_profile": deployment_profile,
             "rig_config": rig_config or DEFAULT_RIG_CONFIG,
             "self_collision_margin_m": cfg.self_collision_margin_m,
+            "controller_tcp_calibration": controller_tcp_calibration,
         },
         task=_screen_one_episode,
         jobs=workers,
@@ -724,6 +737,7 @@ def screen_dataset(
                 episode=episode,
                 deployment_profile=deployment_profile,
                 rig_config=rig_config or DEFAULT_RIG_CONFIG,
+                controller_tcp_calibration=controller_tcp_calibration,
             )
             for field, value in item["resolved"].items():
                 setattr(resolved_args, field, value)
@@ -757,6 +771,11 @@ def screen_dataset(
         "rotation_fences_deg": fences,
         "payload_manifest": dataset_payload_manifest(dataset_root),
         "deployment_calibration_path": portable_path(deployment_path),
+        "controller_tcp_calibration_path": (
+            None
+            if controller_tcp_calibration is None
+            else portable_path(str(controller_tcp_calibration))
+        ),
         "solver_signature": signature,
         "solve_cache": portable_path(solve_cache_path(dataset_root, robot))
         if solves

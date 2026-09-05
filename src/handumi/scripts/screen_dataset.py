@@ -73,6 +73,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=RetargetScreeningConfig.max_rotation_error_deg,
     )
     parser.add_argument(
+        "--controller-tcp-calibration",
+        type=Path,
+        default=None,
+        help=(
+            "Explicit controller->TCP YAML instead of the capture's snapshot; "
+            "pass the same file to `handumi convert` so it reuses these solves."
+        ),
+    )
+    parser.add_argument(
         "--max-base-rotation-deg",
         type=float,
         default=None,
@@ -111,6 +120,7 @@ def main() -> None:
         f"  Dataset: {selection.root}\n"
         f"  Robot: {args.robot}\n"
         f"  Episodes: {'all' if episodes is None else episodes}\n"
+        f"  Controller->TCP: {args.controller_tcp_calibration or 'dataset snapshot / robot default'}\n"
         f"  Report: {report_path}"
     )
     if args.dry_run:
@@ -131,6 +141,7 @@ def main() -> None:
         rig_config=args.rig_config,
         jobs=args.jobs,
         config=config,
+        controller_tcp_calibration=args.controller_tcp_calibration,
     )
     write_screening_report(report_path, payload)
     markdown_path = args.markdown or report_path.with_suffix(".md")
