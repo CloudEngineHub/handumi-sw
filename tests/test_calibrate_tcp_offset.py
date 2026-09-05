@@ -201,3 +201,81 @@ calibration:
     np.testing.assert_allclose(transforms["right"]["position"], [0.04, -0.02, 0.13])
     assert transforms["left"]["quaternion"] == [0.1, 0.2, 0.3, 0.4]
     assert transforms["right"]["quaternion"] == [0.5, 0.6, 0.7, 0.8]
+
+
+def test_promote_force_allows_failed_symmetry_and_symmetrizes(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    candidate = tmp_path / "candidate.yaml"
+    candidate.write_text(
+        """calibration:
+  controller_to_gripper_tcp:
+    left:
+      position: [0.113, -0.175, -0.068]
+      quaternion: [0, 0, 0, 1]
+    right:
+      position: [-0.110, -0.187, -0.043]
+      quaternion: [0, 0, 0, 1]
+  pivot_fits:
+    left:
+      tracking_device: pico
+      rms_error_m: 0.002
+      max_error_m: 0.004
+      condition: 15
+    right:
+      tracking_device: pico
+      rms_error_m: 0.002
+      max_error_m: 0.004
+      condition: 15
+""",
+        encoding="utf-8",
+    )
+    calibration_dir = tmp_path / "controller_tcp"
+    calibration_dir.mkdir()
+    target = calibration_dir / "pico_test.yaml"
+    target.write_text(
+        """calibration:
+  controller_to_gripper_tcp:
+    left:
+      position:
+      - 0
+      - 0
+      - 0
+      quaternion: [0.1, 0.2, 0.3, 0.4]
+    right:
+      position:
+      - 0
+      - 0
+      - 0
+      quaternion: [0.5, 0.6, 0.7, 0.8]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(calibrate_tcp_offset, "DEFAULT_CALIBRATION_DIR", calibration_dir)
+    args = calibrate_tcp_offset.build_parser().parse_args(
+        [
+            "promote",
+            "--target",
+            "pico_test.yaml",
+            "--candidate",
+            str(candidate),
+            "--force",
+            "--yes",
+        ]
+    )
+
+    args.func(args)
+
+    output = capsys.readouterr().out
+    assert "WARNING: forcing promotion despite failed bilateral symmetry" in output
+    transforms = yaml.safe_load(target.read_text(encoding="utf-8"))["calibration"][
+        "controller_to_gripper_tcp"
+    ]
+    np.testing.assert_allclose(
+        transforms["left"]["position"], [0.1115, -0.181, -0.0555]
+    )
+    np.testing.assert_allclose(
+        transforms["right"]["position"], [-0.1115, -0.181, -0.0555]
+    )
+    assert transforms["left"]["quaternion"] == [0.1, 0.2, 0.3, 0.4]
+    assert transforms["right"]["quaternion"] == [0.5, 0.6, 0.7, 0.8]

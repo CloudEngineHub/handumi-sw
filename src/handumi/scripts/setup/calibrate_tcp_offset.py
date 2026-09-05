@@ -576,7 +576,12 @@ def promote_main(args: argparse.Namespace) -> None:
     errors = _symmetry_errors(candidate, device=device)
     if np.any(errors >= SYMMETRY_LIMIT_M):
         _print_symmetry_report(candidate, fits)
-        raise SystemExit("Cannot promote: bilateral symmetry check failed.")
+        if not args.force:
+            raise SystemExit("Cannot promote: bilateral symmetry check failed.")
+        print(
+            "WARNING: forcing promotion despite failed bilateral symmetry; "
+            "positions will be symmetrized."
+        )
 
     target = DEFAULT_CALIBRATION_DIR / args.target
     if not (args.target.name == f"{device}.yaml" or args.target.name.startswith(f"{device}_")):
@@ -754,6 +759,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help="Override an existing target without prompting.",
+    )
+    promote.add_argument(
+        "--force",
+        action="store_true",
+        help="Promote and symmetrize even when bilateral symmetry fails.",
     )
     promote.set_defaults(func=promote_main)
     return parser

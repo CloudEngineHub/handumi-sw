@@ -333,6 +333,11 @@ bilateral-symmetry checks, symmetrizes using the device's correct mirror axis,
 and changes only the two positions. If the target exists, confirm the
 `Override it? [Y/n]` prompt. Its existing quaternions and metadata are kept.
 
+To deliberately accept a failed bilateral-symmetry check, pass `--force`.
+Both individual pivot fits must still pass, and their measured positions are
+symmetrized before promotion. Use this only when that averaging is acceptable
+as a temporary calibration.
+
 For a genuinely new tool file there are no official quaternions to preserve.
 Name an existing calibration made with the same tracking device and controller
 mount as the orientation source:
