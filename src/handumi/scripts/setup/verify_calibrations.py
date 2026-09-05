@@ -48,6 +48,11 @@ DEFAULT_SPATIAL = Path("outputs/calibration/spatial.yaml")
 DEFAULT_SESSION = Path("outputs/calibration/session.yaml")
 DEFAULT_MAX_TIP_DISTANCE_M = 0.35
 DEFAULT_MIRROR_TOLERANCE_M = 0.005
+# Beyond this the two sides cannot be the same tool assembly at all (a sign
+# error, a swapped axis, a file from another rig); below it a mismatch on the
+# non-flipping axes is how each controller seats in its shell and is kept
+# per side rather than averaged away.
+MIRROR_FAIL_M = 0.03
 DEFAULT_MAX_SESSION_RMS_MM = 8.0
 DEFAULT_MAX_TIP_SEPARATION_MM = 15.0
 DEFAULT_MAX_TABLE_Z_MM = 15.0
@@ -337,16 +342,35 @@ def _verify_tcp(
             return None
 
     expected_right = _mirror_expected(calibration.left[:3], device)
-    mirror_error_m = float(np.max(np.abs(calibration.right[:3] - expected_right)))
-    if mirror_error_m > args.mirror_tolerance_m:
+    per_axis_m = np.abs(calibration.right[:3] - expected_right)
+    mirror_error_m = float(np.max(per_axis_m))
+    flip_index = 0 if device == "pico" else 1
+    axis = "xyz"[flip_index]
+    flip_error_m = float(per_axis_m[flip_index])
+    seating_error_m = float(np.max(np.delete(per_axis_m, flip_index)))
+    if mirror_error_m > MIRROR_FAIL_M or flip_error_m > args.mirror_tolerance_m:
+        # The flipping axis is the mirror plane itself: a mismatch there is a
+        # sign or axis error, never seating.
         _add(
             checks,
             "FAIL",
             "TCP mirror",
-            f"{device} translation mirror error {mirror_error_m * 1000:.2f} mm exceeds {args.mirror_tolerance_m * 1000:.2f} mm",
+            f"{device} translation mirror error {mirror_error_m * 1000:.2f} mm "
+            f"({axis} flip error {flip_error_m * 1000:.2f} mm) exceeds "
+            f"{args.mirror_tolerance_m * 1000:.2f} mm on the flip axis or "
+            f"{MIRROR_FAIL_M * 1000:.0f} mm overall",
+        )
+    elif seating_error_m > args.mirror_tolerance_m:
+        _add(
+            checks,
+            "WARN",
+            "TCP mirror",
+            f"{axis} sign flip holds ({flip_error_m * 1000:.2f} mm); the other "
+            f"axes differ by {seating_error_m * 1000:.2f} mm between sides. "
+            "Expected when each controller seats differently in its shell; the "
+            "per-side values are the measurement, do not symmetrize them.",
         )
     else:
-        axis = "x" if device == "pico" else "y"
         _add(
             checks,
             "PASS",

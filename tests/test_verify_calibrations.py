@@ -36,6 +36,11 @@ def test_piper_pico_selects_assembly_specific_calibration() -> None:
 
     assert calibration is not None
     assert not [check for check in checks if check.status == "FAIL"]
+    # The promoted PICO pair keeps per-side positions: the controllers seat
+    # differently in their shells, so the non-flipping axes differ by ~17 mm.
+    # That is reported, never failed.
+    mirror = next(check for check in checks if check.name == "TCP mirror")
+    assert mirror.status == "WARN" and "do not symmetrize" in mirror.detail
     selection = next(check for check in checks if check.name == "TCP selection")
     assert selection.detail.endswith(
         "configs/calibration/controller_tcp/pico_piper_beta.yaml"

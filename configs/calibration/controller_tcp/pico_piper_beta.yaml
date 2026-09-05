@@ -1,16 +1,26 @@
 # Controller->TCP calibration of the PICO HandUMI rig fitted with the Piper
 # gripper tip (tool id piper_beta). Until 2026-09-04 this file was named
 # pico_ARX5_beta.yaml: the tip was mislabeled after the ARX5 tip used on the
-# Meta rig (meta_ARX5_beta.yaml). The numbers are unchanged; every capture
-# recorded with the PICO rig used this Piper tip.
+# Meta rig (meta_ARX5_beta.yaml). Every capture recorded with the PICO rig used
+# this Piper tip.
+#
+# 2026-09-04: positions re-fit per side from live pivot captures
+# (`handumi calibrate tcp pivot --side <side> --time-s 25`, second capture of
+# the day); both sides pass the setup.md thresholds with margin. NOT
+# symmetrized on purpose: the shells are mirror twins, but each controller
+# seats in its shell a few millimetres differently, and three independent
+# captures since August agree on the same ~17 mm left/right difference in z,
+# so it is real for this pair and a mirror average would put ~8 mm of error
+# on each side. Quaternions unchanged from the July orientation hold episodes
+# (pivot fitting does not observe orientation).
 calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
   controller_to_gripper_tcp:
     left:
       position:
-        - 0.10995318
-        - -0.181315303
-        - -0.0589060225
+      - 0.11061
+      - -0.17736
+      - -0.06725
       quaternion:
       - 0.5149461627006531
       - -0.039195578545331955
@@ -18,9 +28,9 @@ calibration:
       - -0.8563258647918701
     right:
       position:
-        - -0.10995318
-        - -0.181315303
-        - -0.0589060225
+      - -0.1093
+      - -0.18527
+      - -0.05056
       quaternion:
       - 0.40989723801612854
       - -0.476044625043869
@@ -28,49 +38,39 @@ calibration:
       - -0.7172929048538208
   metadata:
     source: pico_calibration_tcp
-    method: right/left pivot windows (setup.md Step 1-4) for position, orientation
-      hold episodes for the quaternions. Pivot solves translation only, so the
-      quaternions were kept unchanged from the prior pico.yaml measurement of the
-      same piper_beta/handumi_v1 assembly and only the position was refit and
-      symmetrized.
+    calibrated_on: '2026-09-04'
+    method: live pivot capture per side for position (handumi calibrate tcp pivot --time-s
+      25); orientation hold episodes of 2026-07-09 for the quaternions. Pivot solves translation
+      only.
     handumi_tool:
       gripper: piper_beta
       controller_mount: handumi_v1
-    axis_convention_note: For the PICO device the mirrored (left/right sign-flip)
-      axis is controller-frame X, not Y as the generic setup.md formula assumes
-      (that formula was written against the Meta convention). Y and Z agree in
-      sign between sides for PICO. Symmetrization below used
-      x=(left.x-right.x)/2 (antisymmetric), y=(left.y+right.y)/2,
-      z=(left.z+right.z)/2 (both symmetric), left=[x,y,z], right=[-x,y,z]. This
-      matches the sign pattern already present in the legacy pico.yaml this file
-      replaces for the piper_beta assembly.
-    acceptance_status: DID NOT MEET setup.md Step 3 thresholds (RMS<0.50cm,
-      max<1.00cm) -- promoted anyway at the operator's request; recapture with a
-      firmer tip indentation if better accuracy is needed.
+    symmetrization: 'none: per-side values kept. The controller sits differently in each shell,
+      so left/right offsets are not exact mirrors (z differs by 16.7 mm here, 17.8 mm in the
+      same-day first capture and 16.1 mm in August).'
+    axis_convention_note: For the PICO device the mirrored (left/right sign-flip) axis is
+      controller-frame X; Y and Z carry the same sign on both sides.
+    acceptance_status: PASS setup.md Step 3 thresholds (RMS<0.50cm, max<1.00cm, condition<500)
+      on both sides.
     pivot_windows:
       left:
-        dataset: outputs/tcp_pivot_left
-        samples: 746
-        rms_error_m: 0.0081
-        max_error_m: 0.0170
-        condition: 10.2
-        fixed_tcp_point_world_m:
-        - 0.13117
-        - -0.21476
-        - -0.34043
+        source: outputs/calibration/controller_tcp_candidate.yaml
+        capture: live, 25 s
+        rms_error_m: 0.0016
+        max_error_m: 0.0041
+        condition: 14.8
       right:
-        dataset: outputs/tcp_pivot_right
-        samples: 746
-        rms_error_m: 0.0077
-        max_error_m: 0.0152
-        condition: 9.7
-        fixed_tcp_point_world_m:
-        - 0.33223
-        - -0.21181
-        - -0.3502
+        source: outputs/calibration/controller_tcp_candidate.yaml
+        capture: live, 25 s
+        rms_error_m: 0.0016
+        max_error_m: 0.0033
+        condition: 19.7
+    session_repeatability_note: 'The first capture of the same day gave left z=-0.06112, right
+      z=-0.04337: both sides shifted 6-7 mm together between sessions, so absolute z is repeatable
+      to about that much; keep the tip in the same indentation with the same pressure.'
     orientation_episodes:
-      note: Unchanged from the prior pico.yaml measurement of this same assembly;
-        pivot fitting does not solve orientation.
+      note: Unchanged from the prior pico.yaml measurement of this same assembly; pivot fitting
+        does not solve orientation.
       left:
         episode: 3
         start_frame: 0

@@ -292,31 +292,27 @@ the side with the weaker individual metrics first; symmetry cannot identify the
 bad side with certainty, so recapture the other side too if the mismatch
 remains.
 
-Then compare the two sides. The mounts are mirror twins, so two of the
-position components should agree between them and only one flips sign. A
-mismatch of several millimeters on the components that should agree means one
-of the captures drifted, not that the tool is asymmetric.
+Then compare the two sides. The shells are mirror twins, so one position
+component flips sign between them and the other two carry the same sign.
+Which component flips depends on the tracking device's controller frame, not
+on the mount: `x` for `pico` (`y`/`z` keep their sign), `y` for `meta`
+(`x`/`z` keep theirs). A sign error or a mismatch of more than a few
+millimeters **on the flipping component** means a broken capture: recapture.
 
-Which component flips sign depends on the tracking device's own controller
-frame convention, not on the physical mount: for `meta` it is `y` (`x`/`z`
-agree); for `pico` it is `x` (`y`/`z` agree). Identify it from your own two
-captures before symmetrizing -- don't assume `y` just because the formula
-below is written that way.
+The other two components need not match. Each controller seats in its shell
+a little differently, and a few millimeters of tilt at the mount become a
+centimeter or more at the tip 22 cm away. On the PICO pair three captures
+taken weeks apart agree on a 17 mm left/right difference in `z`; that is the
+measurement, and averaging it away would put 8 mm of error on each side. Keep
+the values per side. `handumi calibrate verify` reports such a difference as
+a warning and only fails the flipping axis or a gross mismatch.
 
 ### Step 4. Promote it into the project
 
 Pivot fitting solves translation only, so keep the official quaternions and
-symmetrize just the measured positions. Below, `y` names whichever component
-you identified as the sign-flipping one in Step 3 (`x` for `pico`, `y` for
-`meta`), and `x`/`z` name the two that agree:
-
-```text
-x = (left.x + right.x) / 2
-y = (left.y - right.y) / 2
-z = (left.z + right.z) / 2
-left.position  = [x,  y, z]
-right.position = [x, -y, z]
-```
+copy just the two measured `position` vectors, one per side, into the
+calibration file for this tool assembly. Record the pivot statistics and the
+date under `metadata` so the next reader knows what the numbers are worth.
 
 Update only those two `position` values in the calibration file for this tool
 assembly. Those files live in `configs/calibration/controller_tcp/` as
