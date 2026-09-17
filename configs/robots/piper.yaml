@@ -75,7 +75,7 @@ ik_weights:
   # rail, so the table is 3 cm below the base plane; matches robot_from_table
   # in configs/calibration/table/sim/piper.yaml. Screening's table-clearance
   # metric reads this; the arm-table collision cost stays off (weight 0).
-  world_collision_plane_z: -0.03
+  world_collision_plane_z: -0.035
   # Legacy LM/offline cap: 2 deg per IK frame at the historical 30 Hz.
   max_joint_delta: 0.03490659
   # Cartesian radius in meters around each home TCP; unrelated to FPS.

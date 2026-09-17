@@ -34,10 +34,15 @@ calibration:
   # centimeter range; do not use this placement for quantitative validation.
   #
   # Height: the arm bases bolt onto a 3 cm T-slot rail laid across the table,
-  # so the tabletop sits 0.03 m below the robot base plane (z=0). Converting
-  # with the table at z=0 placed every demonstration 3 cm too high relative
-  # to the arms; keep this in step with ik_weights.world_collision_plane_z in
-  # configs/robots/piper.yaml.
+  # so the tabletop sits 0.03 m below the robot base plane (z=0; the Piper's
+  # own 4 mm mounting plate is part of the base_link mesh). Converting with
+  # the table at z=0 placed every demonstration 3 cm too high relative to
+  # the arms. The extra 0.005 m is a provisional correction adopted on
+  # 2026-09-05 after the real fingertips still stopped short of the table;
+  # its physical origin is not established (the recorded table frames carry
+  # 3-10 mm of fit error and the first tblock session sits ~1.2 cm higher
+  # than the others). Keep this in step with ik_weights.world_collision_plane_z
+  # in configs/robots/piper.yaml.
   robot_from_table:
-    position: [0.45, 0.0, -0.03]
+    position: [0.45, 0.0, -0.035]
     quaternion: [0.0, 0.0, -0.70710678, 0.70710678]
