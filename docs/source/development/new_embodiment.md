@@ -3,8 +3,8 @@
 HandUMI recordings are robot agnostic. An *embodiment* adapts those recordings
 to a robot for simulation, replay, or real teleoperation.
 
-This guide covers fixed-base bimanual robots with one TCP and one parallel
-gripper per side. Start by choosing the scope of the contribution:
+This guide covers fixed-base robots with one or two arms, with one TCP and
+one parallel gripper per active side. Start by choosing the scope of the contribution:
 
 | Scope | Required |
 | --- | --- |
@@ -48,6 +48,14 @@ If the vendor supplies two single-arm URDFs, build one combined bimanual URDF:
 The robot name and joint names are declared in YAML, so no central registry is
 needed for simulation. Add `assets/<robot>` to the wheel force-include section
 of `pyproject.toml` when the assets must ship with the package.
+
+For one arm, include only that physical arm and declare only `arms.right`
+or `arms.left`. Do not duplicate it or add dummy joints. Recording and
+simulated teleoperation default to those declared sides; canonical conversion
+writes only their joints and widths. See `assets/franka_emika_panda` and
+`configs/robots/franka_emika_panda.yaml` for the right-only case. The legacy pose-pair API
+uses the fixed root as a placeholder for the absent side; IK excludes it and
+replay does not grade or display it.
 
 ## 2. Add the robot YAML
 
@@ -121,8 +129,8 @@ a vendor single-arm URDF, including the driven/mimic finger pattern.
 
 Add a focused test in `tests/robots/test_registry.py` that checks:
 
-- left/right arm joint order and indices;
-- home pose length and a symmetric FK sanity check;
+- declared arm joint order and indices;
+- home pose length and FK sanity (symmetry for paired arms, vendor parity for one arm);
 - gripper closed/open mapping, if present;
 - `load_urdf(load_meshes=True)` resolves every visual mesh.
 

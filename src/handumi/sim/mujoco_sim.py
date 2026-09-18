@@ -52,7 +52,9 @@ def _build_model(
     # never with each other. (floor: contype=1; scene keeps defaults 1/1;
     # robot: contype=2, conaffinity=1 -> robot-robot 0, robot-world 1.)
     for geom in robot_spec.geoms:
-        if geom.name != "floor":
+        # Menagerie separates detailed visual meshes (0/0) from collision
+        # geoms. Never turn those visual meshes into extra contact surfaces.
+        if geom.name != "floor" and (geom.contype or geom.conaffinity):
             geom.contype = 2
             geom.conaffinity = 1
     scene_body_names: list[str] = []

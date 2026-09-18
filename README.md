@@ -138,10 +138,15 @@ to contribute an integration. If you want support for a specific bimanual arm,
 
 ## Supported Scope
 
+**Single-arm Panda:** use `--robot franka_emika_panda` to record with only the right
+HandUMI, then review, convert and replay on the Franka Emika Panda model from
+Google DeepMind MuJoCo Menagerie. See the [Panda workflow](docs/source/workflows/franka_emika_panda.md).
+Physical Franka control is not implemented.
+
 - Tracking: PICO through XRoboToolkit and Meta Quest through
   [HandUMI Quest App](https://github.com/murobotics-ai/handumi-quest-app).
 - Robot models and simulation: AgileX PiPER, OpenArm, TRLC-DK1, Axol, I2RT
-  YAM, and MakerMods Metal.
+  YAM, MakerMods Metal, and single-arm Franka Panda.
 - Real-robot teleoperation: AgileX PiPER and OpenArm through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
 - Episode control: hands-free by voice ("start recording", "stop recording",

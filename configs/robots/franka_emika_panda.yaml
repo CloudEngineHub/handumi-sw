@@ -1,0 +1,38 @@
+kind: franka_emika_panda
+urdf: assets/franka_emika_panda/panda.urdf
+pkg_root: assets/franka_emika_panda
+mjcf: assets/franka_emika_panda/panda_handumi.xml
+mjcf_joint_prefix_map:
+  right_: ""
+
+# One physical arm, driven only by the right HandUMI. The second finger
+# mimics the first in the URDF; canonical datasets have 7 angles + 1 width.
+arms:
+  right:
+    ee_link: right_tcp
+    joint_names: [right_joint1, right_joint2, right_joint3, right_joint4, right_joint5, right_joint6, right_joint7, right_finger_joint1]
+    gripper_joints:
+      - {name: right_finger_joint1, closed: 0.0, open: 0.04}
+
+# Menagerie home, with one independent finger joint rather than two.
+home_q: [0.0, 0.0, 0.0, -1.57079, 0.0, 1.57079, -0.7853, 0.04]
+gripper_max_width_m: 0.08
+
+# These belong to the wearable assembly, not to the target robot. Reuse
+# only for this assembly; override the calibration for a different mount/tip.
+handumi_tool:
+  gripper: piper_beta
+  controller_mount: handumi_v1
+controller_tcp_calibrations:
+  meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
+  pico: configs/calibration/controller_tcp/pico_piper_beta.yaml
+
+ik_weights:
+  pos: 100.0
+  ori: 15.0
+  rest: 1.0
+  max_joint_delta: 0.12
+  max_reach: 0.8
+replay:
+  max_joint_delta: 0.20
+  gripper_retarget: physical-width

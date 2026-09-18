@@ -8,14 +8,18 @@ remain available for later retargeting to any supported embodiment.
 
 Confirm that:
 
-- Both gripper widths respond correctly from closed to fully open.
-- Both controllers report valid tracking.
+- Each active gripper width responds correctly from closed to fully open.
+- Each active controller reports valid tracking.
 - Camera intrinsics and controller-camera mounts still match the hardware.
 - The current session/table calibration was created for the same `--device`
   and has been visualized in Rerun.
 - The Controller-to-TCP calibration matches the installed HandUMI tool.
 
 See [Setup and Calibration](setup.md) if any check fails.
+
+For a single Panda controlled with the right HandUMI, use `--robot franka_emika_panda`.
+The recorder selects right tracking/encoder input automatically. See
+[the Panda workflow](workflows/franka_emika_panda.md) for configuration and conversion.
 
 Start with a short pilot:
 

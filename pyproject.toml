@@ -84,6 +84,7 @@ packages = ["src/handumi"]
 "assets/metal" = "handumi/assets/metal"
 "assets/openarm" = "handumi/assets/openarm"
 "assets/piper" = "handumi/assets/piper"
+"assets/franka_emika_panda" = "handumi/assets/franka_emika_panda"
 "assets/r1lite" = "handumi/assets/r1lite"
 "assets/scenes" = "handumi/assets/scenes"
 "assets/trlc-dk1" = "handumi/assets/trlc-dk1"
