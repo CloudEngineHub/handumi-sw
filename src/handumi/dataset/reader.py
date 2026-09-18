@@ -270,6 +270,13 @@ def _restore_enabled_signals(
     metadata: dict[str, Any],
     frame_count: int,
 ) -> None:
+    from handumi.config import dataset_active_sides
+
+    active_sides = dataset_active_sides(metadata)
+    for side in ("left", "right"):
+        signals[f"observation.tracking.{side}_enabled"] = np.full(
+            frame_count, int(side in active_sides), dtype=np.int64
+        )
     sources = metadata.get("sources")
     if not isinstance(sources, dict):
         raise TypeError("Current HandUMI layout requires handumi.sources metadata.")

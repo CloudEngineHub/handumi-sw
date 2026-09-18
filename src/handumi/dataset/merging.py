@@ -337,6 +337,10 @@ def _require_compatible(
     reference_root: Path | None,
     candidate_root: Path,
 ) -> None:
+    from handumi.config import dataset_active_sides
+
+    if dataset_active_sides(reference.get("handumi", {})) != dataset_active_sides(candidate.get("handumi", {})):
+        raise ValueError("Cannot merge recordings with different handumi.active_sides.")
     for key in _COMPATIBILITY_KEYS:
         if reference.get(key) != candidate.get(key):
             raise ValueError(

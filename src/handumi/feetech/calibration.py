@@ -88,13 +88,16 @@ def default_config() -> FeetechConfig:
     )
 
 
-def assert_calibrated(config: FeetechConfig, *, source: Path | None = None) -> None:
+def assert_calibrated(
+    config: FeetechConfig, *, source: Path | None = None,
+    active_sides: tuple[str, ...] = ("left", "right"),
+) -> None:
     """Fail fast with an actionable message if either gripper is uncalibrated.
 
     Call this at startup (before the record/monitor loop) so an uncalibrated rig
     is reported clearly instead of crashing mid-run inside width computation.
     """
-    missing = [side for side in ("left", "right") if not getattr(config, side).is_complete]
+    missing = [side for side in active_sides if not getattr(config, side).is_complete]
     if not missing:
         return
     where = f" in {source}" if source else ""

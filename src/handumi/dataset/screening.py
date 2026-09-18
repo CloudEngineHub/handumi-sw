@@ -522,6 +522,8 @@ def arm_activity_metrics(rollout: dict[str, Any], runtime) -> dict[str, float | 
             runtime.config.gripper_max_width_m
         )
     for column, side in enumerate(("left", "right")):
+        if side not in runtime.arms:
+            continue
         poses = rollout.get(f"raw_{side}_pose7_ground_truth")
         if poses is None or len(poses) == 0:
             continue
@@ -575,13 +577,10 @@ def _screen_one_episode(episode: int, state: dict[str, Any]) -> dict[str, Any]:
         if rollout.get(field) is not None
     }
     qpos = np.asarray(rollout["qpos"], dtype=np.float32)
-    pos = np.concatenate([rollout["left_pos_error_m"], rollout["right_pos_error_m"]])
-    rot = np.concatenate(
-        [rollout["left_rot_error_deg"], rollout["right_rot_error_deg"]]
-    )
-    per_frame = np.maximum(
-        rollout["left_pos_error_m"], rollout["right_pos_error_m"]
-    )
+    sides = tuple(state["runtime"].arms)
+    pos = np.concatenate([rollout[f"{side}_pos_error_m"] for side in sides])
+    rot = np.concatenate([rollout[f"{side}_rot_error_deg"] for side in sides])
+    per_frame = np.maximum.reduce([rollout[f"{side}_pos_error_m"] for side in sides])
     metrics: dict[str, float | int] = {
         "position_error_mean_m": float(pos.mean()),
         "position_error_max_m": float(pos.max()),

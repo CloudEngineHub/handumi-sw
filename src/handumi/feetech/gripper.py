@@ -250,19 +250,23 @@ class _EncoderUnwrapper:
 
 
 class FeetechGripperPair:
-    def __init__(self, config: FeetechConfig) -> None:
+    def __init__(
+        self, config: FeetechConfig, *, active_sides: tuple[str, ...] = ("left", "right")
+    ) -> None:
+        from handumi.config import dataset_active_sides
+
         self.config = config
-        left_port = _side_port(config, config.left)
-        right_port = _side_port(config, config.right)
+        self.active_sides = dataset_active_sides({"active_sides": active_sides})
+        self._ports = {side: _side_port(config, getattr(config, side)) for side in self.active_sides}
         self._buses: dict[str, FeetechBus] = {}
-        for port in {left_port, right_port}:
+        for port in set(self._ports.values()):
             self._buses[port] = FeetechBus(
                 port=port,
                 baudrate=config.baudrate,
                 protocol_version=config.protocol_version,
             )
-        self._left_port = left_port
-        self._right_port = right_port
+        self._left_port = self._ports.get("left")
+        self._right_port = self._ports.get("right")
         self._left_unwrap = _EncoderUnwrapper()
         self._right_unwrap = _EncoderUnwrapper()
 
@@ -314,20 +318,15 @@ class FeetechGripperPair:
     def _read_normalized_widths(
         self, *, retries: int, retry_delay_s: float
     ) -> GripperWidths:
-        left = _read_width(
-            self._buses[self._left_port],
-            self.config.left,
-            self._left_unwrap,
-            retries=retries,
-            retry_delay_s=retry_delay_s,
-        )
-        right = _read_width(
-            self._buses[self._right_port],
-            self.config.right,
-            self._right_unwrap,
-            retries=retries,
-            retry_delay_s=retry_delay_s,
-        )
+        widths = {side: {"width_m": 0.0, "width_mm": 0.0, "normalized": 0.0, "ticks": 0}
+                  for side in ("left", "right")}
+        for side in self.active_sides:
+            widths[side] = _read_width(
+                self._buses[self._ports[side]], getattr(self.config, side),
+                getattr(self, f"_{side}_unwrap"), retries=retries,
+                retry_delay_s=retry_delay_s,
+            )
+        left, right = widths["left"], widths["right"]
         return GripperWidths(
             left=left["width_m"],
             right=right["width_m"],

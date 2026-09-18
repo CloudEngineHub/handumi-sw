@@ -129,7 +129,7 @@ def _parse_sim_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=advanced("Override a named home pose."),
     )
-    p.add_argument("--side", choices=SIDE_CHOICES, default="both")
+    p.add_argument("--side", choices=SIDE_CHOICES, default=None)
     p.add_argument("--port", type=int, default=8003, help=advanced("Viser port."))
     add_teleop_motion_arguments(p, help_transform=advanced)
     p.add_argument(
@@ -481,6 +481,14 @@ def _log_rerun(
 
 def _run_sim() -> None:
     args = _parse_sim_args()
+    from handumi.config import resolve_active_sides
+
+    runtime = load_embodiment(args.robot)
+    try:
+        args.active_sides = resolve_active_sides(args.side, available=runtime.active_sides)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    args.side = "both" if len(args.active_sides) == 2 else args.active_sides[0]
     validate_teleop_motion_args(args)
     if args.auto_start_delay_s <= 0.0:
         raise SystemExit("--auto-start-delay-s must be greater than zero.")
@@ -495,7 +503,7 @@ def _run_sim() -> None:
     cameras: list = []
     cam_names: list[str] = []
     if not args.skip_cameras:
-        camera_names = args.cameras or ["left_wrist", "right_wrist"]
+        camera_names = args.cameras or [f"{side}_wrist" for side in args.active_sides]
         cam_ids = resolve_camera_ids(None, args.rig_config, camera_names=camera_names)
         _validate_unique_camera_ids(camera_names, cam_ids)
         camera_specs, _ = build_camera_specs(
@@ -521,7 +529,6 @@ def _run_sim() -> None:
     grippers = connect_feetech(args)  # honors --skip-feetech internally
 
     sim_log.info("Loading %s IK solver (JAX JIT warmup, ~30s on CPU) ...", args.robot)
-    runtime = load_embodiment(args.robot)
     try:
         home_pose_name, home_q = resolve_home_q(
             runtime, rig_config=args.rig_config, explicit_name=args.home_pose
@@ -609,6 +616,8 @@ def _run_sim() -> None:
                 "/target/right", radius=0.018, color=RIGHT_COLOR
             ),
         }
+        for side, marker in target_markers.items():
+            marker.visible = side in runtime.arms
 
         @server.on_client_connect
         def _set_initial_camera(client: viser.ClientHandle) -> None:

@@ -176,6 +176,12 @@ def validate_episode(
             episode_index, frame_count, duration_s, tuple(findings), metrics
         )
 
+    active_sides = tuple(
+        side for side in ("left", "right")
+        if np.any(signals.get(f"observation.tracking.{side}_enabled", [1]))
+    )
+    if not active_sides:
+        raise ValueError("A capture must have at least one active tracking side.")
     dt = _row_deltas(signals, frame_count, fps)
     _check_tracking_fraction(signals, frame_count, cfg, findings, metrics)
     # Ignore the opening frames while every source fills its buffer.
@@ -187,9 +193,9 @@ def validate_episode(
     _check_sensor_health(signals, frame_count, cfg, findings, metrics, warmup)
     _check_sync_error(signals, frame_count, cfg, findings, metrics, warmup)
     _check_signal_freezes(signals, frame_count, dt, cfg, findings, metrics)
-    _check_kinematics(states, dt, cfg, findings, metrics)
-    _check_pose_freezes(states, dt, cfg, findings, metrics)
-    _check_aperture(states, signals, cfg, findings, metrics)
+    _check_kinematics(states, dt, cfg, findings, metrics, active_sides)
+    _check_pose_freezes(states, dt, cfg, findings, metrics, active_sides)
+    _check_aperture(states, signals, cfg, findings, metrics, active_sides)
 
     return EpisodeQualityReport(
         episode_index=episode_index,
@@ -234,11 +240,14 @@ def _check_tracking_fraction(
     findings: list[QualityFinding],
     metrics: dict[str, float | int | bool],
 ) -> None:
-    left = _signal(signals, "observation.tracking.left_tracked", frame_count)
-    right = _signal(signals, "observation.tracking.right_tracked", frame_count)
-    if left is None or right is None:
-        return
-    bad = (left < 0.5) | (right < 0.5)
+    bad = np.zeros(frame_count, dtype=bool)
+    for side in ("left", "right"):
+        if not np.any(signals.get(f"observation.tracking.{side}_enabled", [1])):
+            continue
+        tracked = _signal(signals, f"observation.tracking.{side}_tracked", frame_count)
+        if tracked is None:
+            return
+        bad |= tracked < 0.5
     fraction = float(np.mean(bad))
     metrics["bad_tracking_fraction"] = fraction
     if fraction > cfg.max_bad_tracking_fraction:
@@ -384,8 +393,11 @@ def _check_kinematics(
     cfg: EpisodeQualityConfig,
     findings: list[QualityFinding],
     metrics: dict[str, float | int | bool],
+    active_sides: tuple[str, ...] = ("left", "right"),
 ) -> None:
     for side, pose_slice in (("left", LEFT_POSE_SLICE), ("right", RIGHT_POSE_SLICE)):
+        if side not in active_sides:
+            continue
         poses = states[:, pose_slice]
         quat_norms = np.linalg.norm(poses[:, 3:7], axis=1)
         if np.any(quat_norms < 0.5):
@@ -435,9 +447,12 @@ def _check_pose_freezes(
     cfg: EpisodeQualityConfig,
     findings: list[QualityFinding],
     metrics: dict[str, float | int | bool],
+    active_sides: tuple[str, ...] = ("left", "right"),
 ) -> None:
     frozen_by_side: dict[str, np.ndarray] = {}
     for side, pose_slice in (("left", LEFT_POSE_SLICE), ("right", RIGHT_POSE_SLICE)):
+        if side not in active_sides:
+            continue
         poses = states[:, pose_slice]
         translation = np.linalg.norm(np.diff(poses[:, :3], axis=0), axis=1)
         rotation = _rotation_steps_deg(poses[:, 3:7])
@@ -464,7 +479,7 @@ def _check_pose_freezes(
             )
 
     both_s = _longest_true_duration(
-        frozen_by_side["left"] & frozen_by_side["right"], dt
+        np.logical_and.reduce(list(frozen_by_side.values())), dt
     )
     metrics["max_pose_freeze_s.both"] = both_s
     if both_s > cfg.max_pose_freeze_s:
@@ -472,7 +487,7 @@ def _check_pose_freezes(
             QualityFinding(
                 "full_pose_freeze",
                 "reject",
-                "Both controller poses remained numerically frozen.",
+                "All active controller poses remained numerically frozen.",
                 {"duration_s": both_s, "maximum_s": cfg.max_pose_freeze_s},
             )
         )
@@ -484,6 +499,7 @@ def _check_aperture(
     cfg: EpisodeQualityConfig,
     findings: list[QualityFinding],
     metrics: dict[str, float | int | bool],
+    active_sides: tuple[str, ...] = ("left", "right"),
 ) -> None:
     enabled = _signal(signals, "observation.feetech.enabled", len(states))
     if enabled is not None and not np.any(enabled >= 0.5):
@@ -492,6 +508,7 @@ def _check_aperture(
         "left": float(np.ptp(states[:, LEFT_GRIPPER_INDEX]) * 1000.0),
         "right": float(np.ptp(states[:, RIGHT_GRIPPER_INDEX]) * 1000.0),
     }
+    ranges_mm = {side: value for side, value in ranges_mm.items() if side in active_sides}
     for side, range_mm in ranges_mm.items():
         metrics[f"aperture_range_mm.{side}"] = range_mm
     if all(value <= cfg.aperture_range_epsilon_mm for value in ranges_mm.values()):
@@ -500,11 +517,8 @@ def _check_aperture(
             QualityFinding(
                 "aperture_freeze",
                 severity,
-                "Both gripper apertures remained constant for the full episode.",
-                {
-                    "left_range_mm": ranges_mm["left"],
-                    "right_range_mm": ranges_mm["right"],
-                },
+                "All active gripper apertures remained constant for the full episode.",
+                {f"{side}_range_mm": value for side, value in ranges_mm.items()},
             )
         )
 

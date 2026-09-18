@@ -32,7 +32,7 @@ import threading
 import time
 import tty
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -64,7 +64,12 @@ from handumi.cameras import (
     read_camera_samples,
     resolve_camera_ids,
 )
-from handumi.config import DEFAULT_RIG_CONFIG, load_optional_rig_section
+from handumi.config import (
+    DEFAULT_RIG_CONFIG,
+    dataset_active_sides,
+    load_optional_rig_section,
+    resolve_active_sides,
+)
 from handumi.dataset.raw import (
     HANDUMI_CAPTURE_SCHEMA,
     HANDUMI_STATE_SEMANTICS,
@@ -761,7 +766,26 @@ def _tuple_shape(feature: dict) -> dict:
     return feature
 
 
-def build_observation(sample: ControllerPairSample, widths: GripperWidths) -> dict:
+def build_observation(
+    sample: ControllerPairSample, widths: GripperWidths,
+    active_sides: tuple[str, ...] = ("left", "right"),
+) -> dict:
+    # Keep the raw 16D schema portable. Absent sensors have neutral poses and
+    # zero widths, with false tracking flags; metadata declares their absence.
+    for side in ("left", "right"):
+        if side in active_sides:
+            continue
+        sample = replace(sample, **{
+            f"{side}_controller_pose": IDENTITY_POSE7.astype(np.float32).copy(),
+            f"{side}_tcp_pose": IDENTITY_POSE7.astype(np.float32).copy(),
+            f"{side}_device_controller_pose": IDENTITY_POSE7.astype(np.float32).copy(),
+            f"{side}_tracked": False,
+            f"{side}_device_tracked": False,
+            f"{side}_pose_valid": False,
+        })
+        widths = replace(widths, **{
+            side: 0.0, f"{side}_mm": 0.0, f"{side}_normalized": 0.0, f"{side}_ticks": 0,
+        })
     left_controller = _pose_from_pose7(sample.left_controller_pose)
     right_controller = _pose_from_pose7(sample.right_controller_pose)
     state = pose_to_state_vector(
@@ -788,8 +812,10 @@ def _pose_from_pose7(pose7: np.ndarray) -> Pose:
     return Pose(pose[:3], pose[3:7])
 
 
-def _tracking_healthy(sample: ControllerPairSample) -> bool:
-    return bool(sample.left_tracked and sample.right_tracked)
+def _tracking_healthy(
+    sample: ControllerPairSample, active_sides: tuple[str, ...] = ("left", "right")
+) -> bool:
+    return all(getattr(sample, f"{side}_tracked") for side in active_sides)
 
 
 def _wait_for_tracking(
@@ -797,13 +823,14 @@ def _wait_for_tracking(
     stop_event: threading.Event,
     *,
     poll_s: float = 0.05,
+    active_sides: tuple[str, ...] = ("left", "right"),
 ) -> bool:
     """Wait until both controller poses are fresh and valid."""
     last_report = float("-inf")
     while not stop_event.is_set():
         sample = tracker.latest()
-        if _tracking_healthy(sample):
-            log.info("Both controllers tracked; recording gate open.")
+        if _tracking_healthy(sample, active_sides):
+            log.info("Required controllers tracked (%s); recording gate open.", "/".join(active_sides))
             return True
 
         now = time.monotonic()
@@ -967,6 +994,7 @@ def record_episode(
     rerun: _RecordingRerun | None = None,
     dashboard: _RecordingDashboard | None = None,
     audio_recorder: PicoAudioRecorder | None = None,
+    active_sides: tuple[str, ...] = ("left", "right"),
 ) -> tuple[int, str, bool]:
     control_interval = 1.0 / fps
     n_frames = 0
@@ -1088,7 +1116,7 @@ def record_episode(
             sample_time_ns > 0
             and abs(sample_time_ns - target_time_ns) <= max_sync_skew_ns
         )
-        if _tracking_healthy(sample) and tracking_sync_ok:
+        if _tracking_healthy(sample, active_sides) and tracking_sync_ok:
             if tracking_lost_since_ns is not None:
                 log.info("Controller tracking recovered before the episode timeout.")
             tracking_lost_since_ns = None
@@ -1179,7 +1207,7 @@ def record_episode(
             dataset.add_frame(
                 {
                     **cam_frames,
-                    **build_observation(sample, widths),
+                    **build_observation(sample, widths, active_sides),
                     **gripper_frame.frame,
                     **audio_frame,
                     **capture_timing_frame(target_time_ns, tracking_now_ns),
@@ -1222,6 +1250,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--help-advanced", action="store_true", help="Show every expert option.")
     p.add_argument("--device", choices=("pico", "meta"), default=None)
+    p.add_argument("--side", choices=("left", "right", "both"), default=None,
+                   help="Sensors to record; defaults to the robot's declared arms.")
     p.add_argument(
         "--cameras",
         type=_camera_list_arg,
@@ -1447,6 +1477,7 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
             "no_video",
             "record_audio",
             "robot",
+            "side",
             "session_calibration",
             "controller_tcp_calibration",
         )
@@ -1505,6 +1536,27 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
                 resume_values.get(name, rig_values.get(name, _RECORDING_DEFAULTS[name])),
             )
 
+    robot_config = _robot_metadata(args.robot)["configuration"]
+    if not isinstance(robot_config, dict):
+        raise SystemExit(f"Invalid robot configuration for {args.robot!r}.")
+    declared_arms = robot_config.get("arms", robot_config.get("ee_links", {}))
+    available = tuple(side for side in ("left", "right") if side in declared_arms)
+    requested_side = getattr(args, "side", None)
+    if requested_side is None:
+        requested_side = resume_values.get("side", rig_values.get("side"))
+    if requested_side is not None and not isinstance(requested_side, str):
+        raise SystemExit("recording.side must be left, right, or both.")
+    try:
+        args.active_sides = resolve_active_sides(requested_side, available=available)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    args.side = "both" if len(args.active_sides) == 2 else args.active_sides[0]
+    if not explicit["cameras"] and not args.resume:
+        args.cameras = [name for name in args.cameras
+                        if not name.endswith("_wrist") or name.removesuffix("_wrist") in args.active_sides]
+    if not args.cameras:
+        raise SystemExit("No cameras selected for the active side. Set --cameras to an available wrist or workspace view.")
+
     if args.session_calibration is None and not args.resume:
         configured_session = rig_values.get("session_calibration")
         if configured_session:
@@ -1523,6 +1575,7 @@ def _recording_values_from_dataset(
     info: dict[str, object], handumi: dict[str, object]
 ) -> dict[str, object]:
     values: dict[str, object] = {
+        "side": "both" if len(dataset_active_sides(handumi)) == 2 else dataset_active_sides(handumi)[0],
         "device": handumi.get("recording_device"),
         "fps": info.get("fps"),
         "cam_fps": handumi.get("camera_fps", info.get("fps")),
@@ -1662,6 +1715,7 @@ def _print_recording_plan(
     print("\nRecording plan")
     print(f"  Dataset:  {args.output_dir} ({mode})")
     print(f"  Device:   {args.device}; robot profile: {args.robot}")
+    print(f"  Sides:    {', '.join(args.active_sides)}")
     print(f"  Cameras:  {camera_label}")
     print(f"  Rows:     {args.fps} fps; {episodes} episode(s)")
     print(f"  Feetech:  {'disabled' if args.skip_feetech else 'enabled'}")
@@ -2039,7 +2093,7 @@ def main() -> None:
             else:
                 raise SystemExit("--start-button other than enter currently requires --device pico.")
 
-            if not _wait_for_tracking(tracker, stop_event):
+            if not _wait_for_tracking(tracker, stop_event, active_sides=args.active_sides):
                 break
             # Finish the cue before capture starts so fast transitions cannot
             # overlap multiple asynchronous TTS processes.
@@ -2082,6 +2136,7 @@ def main() -> None:
                     rerun=rerun,
                     dashboard=dashboard,
                     audio_recorder=audio_recorder,
+                    active_sides=args.active_sides,
                 )
             except Exception as exc:
                 # A hardware disconnect (cable pull, USB drop, ...) or any
@@ -2286,8 +2341,9 @@ def connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:
             left=feetech_config.left,
             right=feetech_config.right,
         )
-    assert_calibrated(feetech_config, source=user_calibration_path())
-    grippers = FeetechGripperPair(feetech_config)
+    sides = getattr(args, "active_sides", None) or resolve_active_sides(getattr(args, "side", None))
+    assert_calibrated(feetech_config, source=user_calibration_path(), active_sides=sides)
+    grippers = FeetechGripperPair(feetech_config, active_sides=sides)
     try:
         grippers.open()
     except FeetechUnavailableError as exc:
@@ -2544,6 +2600,7 @@ def _resume_handumi_metadata(
 
     return {
         "recording_device": args.device,
+        "active_sides": list(getattr(args, "active_sides", ("left", "right"))),
         "audio": stable_value(
             "audio", audio_metadata(bool(getattr(args, "record_audio", False)))
         ),
@@ -2699,6 +2756,8 @@ def _validate_resume_target(
     if not isinstance(actual_handumi, dict):
         mismatches.append("handumi metadata is missing")
         actual_handumi = {}
+    if dataset_active_sides(actual_handumi) != dataset_active_sides(handumi):
+        mismatches.append("handumi.active_sides: cannot change recorded sides when resuming")
     simple_keys = (
         "recording_device",
         "camera_fps",

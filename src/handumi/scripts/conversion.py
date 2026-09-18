@@ -1358,7 +1358,7 @@ def _write_converted_dataset_readme(
         license="other",
         repo_id=repo_id,
         dataset_description=(
-            f"Joint-level bimanual {embodiment} dataset derived from "
+            f"Joint-level {embodiment} dataset derived from "
             f"{source_repo_id}. {representation} observation.state[t] contains "
             "the command at t and action[t] contains the command at t+1."
         ),
@@ -1650,7 +1650,11 @@ def main() -> None:
                 "type": "opening_width",
                 "unit": "m",
                 "max_width_m": float(runtime.config.gripper_max_width_m),
-                "source": "recorded Feetech normalized",
+                "source": (
+                    "recorded HandUMI width in meters"
+                    if runtime.config.replay_gripper_mode == "physical-width"
+                    else "recorded Feetech normalized"
+                ),
             },
             "deployment_calibration": _deployment_calibration_metadata(args),
             "absolute_orientation": args.absolute_orientation,

@@ -443,6 +443,10 @@ class BimanualKinematicsSolver:
         self.right_indices = list(
             arm_joint_indices.get("right") or _side_indices(robot, "right")
         )
+        self.active_sides = tuple(
+            side for side, indices in (("left", self.left_indices), ("right", self.right_indices))
+            if indices
+        )
         self.left_joint_indices = self.left_indices
         self.right_joint_indices = self.right_indices
         self.l_elbow_idx = -1
@@ -512,6 +516,10 @@ class BimanualKinematicsSolver:
         right_elbow_pos: np.ndarray | None = None,
     ) -> np.ndarray:
         del left_elbow_pos, right_elbow_pos
+        if "left" not in self.active_sides:
+            left_pose = None
+        if "right" not in self.active_sides:
+            right_pose = None
         if left_pose is None and right_pose is None:
             return self._with_locked_joints(q_current)
 
@@ -522,7 +530,14 @@ class BimanualKinematicsSolver:
             left_fk, right_fk = self.fk(q_prev)
         tgt_pos = []
         tgt_wxyz = []
-        for pose, fallback in ((left_pose, left_fk), (right_pose, right_fk)):
+        target_indices = []
+        for side, index, pose, fallback in (
+            ("left", self.l_ee_idx, left_pose, left_fk),
+            ("right", self.r_ee_idx, right_pose, right_fk),
+        ):
+            if side not in self.active_sides:
+                continue
+            target_indices.append(index)
             if pose is None:
                 assert fallback is not None
                 tgt_pos.append(np.asarray(fallback.translation(), dtype=np.float32))
@@ -536,7 +551,7 @@ class BimanualKinematicsSolver:
 
         q_target = solve_bimanual(
             self.robot,
-            self.ee_indices,
+            tuple(target_indices),
             np.asarray(tgt_pos, dtype=np.float32),
             np.asarray(tgt_wxyz, dtype=np.float32),
             q_prev=q_prev,

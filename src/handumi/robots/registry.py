@@ -181,14 +181,23 @@ class RobotRuntime:
 
     @property
     def ee_indices(self) -> tuple[int, int]:
-        return tuple(self.arms[side].ee_index for side in SIDES)  # type: ignore[return-value]
+        # The legacy pose-pair interface uses the fixed root as a placeholder
+        # for an absent side. It is never an IK target or an output joint.
+        return (
+            self.arms["left"].ee_index if "left" in self.arms else 0,
+            self.arms["right"].ee_index if "right" in self.arms else 0,
+        )
+
+    @property
+    def active_sides(self) -> tuple[str, ...]:
+        return tuple(side for side in SIDES if side in self.arms)
 
     @property
     def joint_names(self) -> tuple[str, ...]:
         return tuple(self.robot.joints.actuated_names)
 
     def arm_joint_names(self, side: str) -> list[str]:
-        return list(self.arms[side].joint_names)
+        return list(self.arms[side].joint_names) if side in self.arms else []
 
     def home_q(self, name: str | None = None) -> np.ndarray:
         """Return a copy of a named safe starting pose."""
@@ -202,7 +211,7 @@ class RobotRuntime:
             ) from exc
 
     def arm_joint_indices(self, side: str) -> list[int]:
-        return list(self.arms[side].joint_indices)
+        return list(self.arms[side].joint_indices) if side in self.arms else []
 
     def set_finger_positions(
         self, q: np.ndarray, normalized: Mapping[str, float]
@@ -537,8 +546,13 @@ def load_embodiment(name: str) -> RobotRuntime:
     )
     robot = pk.Robot.from_urdf(urdf)
     arms = _resolve_arms(name, cfg, robot)
-    ee_indices = (arms["left"].ee_index, arms["right"].ee_index)
-    arm_joint_indices = {side: list(arms[side].joint_indices) for side in SIDES}
+    ee_indices = (
+        arms["left"].ee_index if "left" in arms else 0,
+        arms["right"].ee_index if "right" in arms else 0,
+    )
+    arm_joint_indices = {
+        side: list(arms[side].joint_indices) if side in arms else [] for side in SIDES
+    }
     locked_joint_indices = _resolve_lock_joint_indices(
         name, cfg.manipulation_lock_joints, robot
     )
@@ -614,7 +628,7 @@ def load_embodiment(name: str) -> RobotRuntime:
                 ),
             )
 
-    command_size = max(len(arms[side].joint_names) for side in SIDES)
+    command_size = max(len(arm.joint_names) for arm in arms.values())
     finger_joints = _resolve_finger_joints(urdf, robot, cfg, arms)
     return RobotRuntime(
         name=name,
@@ -662,9 +676,13 @@ def _parse_arms(data: dict[str, Any]) -> dict[str, RobotArmConfig]:
         arms_data = {side: {"ee_link": legacy_ee_links[side]} for side in SIDES}
     if not isinstance(arms_data, dict):
         raise TypeError("arms must be a mapping.")
+    if not arms_data or set(arms_data) - set(SIDES):
+        raise ValueError("arms must declare left, right, or both.")
 
     arms: dict[str, RobotArmConfig] = {}
     for side in SIDES:
+        if side not in arms_data:
+            continue
         raw_arm = arms_data.get(side)
         if not isinstance(raw_arm, dict):
             raise TypeError(f"arms.{side} must be a mapping.")
@@ -727,8 +745,7 @@ def _resolve_arms(
     actuated_names = list(robot.joints.actuated_names)
     link_names = list(robot.links.names)
     arms: dict[str, ArmRuntime] = {}
-    for side in SIDES:
-        arm = cfg.arms[side]
+    for side, arm in cfg.arms.items():
         joint_names = arm.joint_names or tuple(
             joint_name
             for joint_name in actuated_names
@@ -768,6 +785,9 @@ def _resolve_finger_joints(
     actuated_names = list(robot.joints.actuated_names)
     fingers_by_side: dict[str, tuple[GripperJointRuntime, ...]] = {}
     for side in SIDES:
+        if side not in arms:
+            fingers_by_side[side] = ()
+            continue
         configured = cfg.arms[side].gripper_joints
         fingers: list[GripperJointRuntime] = []
         if configured:

@@ -8,6 +8,7 @@ import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -380,7 +381,7 @@ def _reject_joint_level_dataset(source_info: dict[str, object]) -> None:
         )
 
 
-def _column_float32(table: object, key: str) -> np.ndarray:
+def _column_float32(table: Any, key: str) -> np.ndarray:
     """Read one column as float32 without the per-row torch formatter."""
     arrow = getattr(table, "data", None)
     if arrow is not None and hasattr(arrow, "column"):
@@ -677,6 +678,7 @@ def _tcp_geometry_diagnostics(
     calibration: ControllerTcpCalibration,
     left_tcp_pose7: np.ndarray,
     right_tcp_pose7: np.ndarray,
+    active_sides: tuple[str, ...] = ("left", "right"),
 ) -> dict[str, np.ndarray]:
     """Summarize source geometry before IK or deployment transforms are applied."""
     left = np.asarray(left_tcp_pose7, dtype=np.float32)
@@ -686,7 +688,8 @@ def _tcp_geometry_diagnostics(
     if left.shape[1] < 3 or len(left) == 0:
         raise ValueError("calibrated TCP trajectories must contain at least one position")
     separation = np.linalg.norm(left[:, :3] - right[:, :3], axis=1)
-    combined_positions = np.concatenate([left[:, :3], right[:, :3]], axis=0)
+    poses = {"left": left, "right": right}
+    combined_positions = np.concatenate([poses[side][:, :3] for side in active_sides], axis=0)
     return {
         "offset_position_norm_m": np.asarray(
             [
@@ -721,6 +724,7 @@ def _print_tcp_geometry_diagnostics(
     diagnostics: dict[str, np.ndarray],
     *,
     workspace: str,
+    active_sides: tuple[str, ...] = ("left", "right"),
 ) -> None:
     offsets = diagnostics["offset_position_norm_m"]
     min_z = diagnostics["workspace_min_z_m"]
@@ -736,15 +740,18 @@ def _print_tcp_geometry_diagnostics(
     print(f"[replay] TCP calibration: {selection.source}")
     print(
         "[replay] Controller->TCP position distance: "
-        f"left={float(offsets[0]) * 100:.1f}cm "
-        f"right={float(offsets[1]) * 100:.1f}cm"
+        + " ".join(f"{side}={float(offsets[i]) * 100:.1f}cm"
+                   for i, side in enumerate(("left", "right")) if side in active_sides)
+    )
+    separation_text = (
+        f"; same-frame separation={min_separation * 100:.1f}..{max_separation * 100:.1f}cm"
+        if len(active_sides) == 2 else ""
     )
     print(
         f"[replay] calibrated TCP geometry in {workspace or 'tracking'} frame: "
-        f"z_min left={float(min_z[0]) * 100:.1f}cm "
-        f"right={float(min_z[1]) * 100:.1f}cm; "
-        f"same-frame separation={min_separation * 100:.1f}.."
-        f"{max_separation * 100:.1f}cm"
+        + "z_min " + " ".join(f"{side}={float(min_z[i]) * 100:.1f}cm"
+                              for i, side in enumerate(("left", "right")) if side in active_sides)
+        + separation_text
     )
     print(
         "[replay] source TCP workspace bounds: "
@@ -757,6 +764,11 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     runtime = load_embodiment(args.robot)
     states, fps, source_info, recorded_gripper_openings = load_episode_states(args)
     source_metadata = handumi_metadata(source_info)
+    from handumi.config import dataset_active_sides
+
+    missing = set(runtime.arms) - set(dataset_active_sides(source_metadata))
+    if missing:
+        raise ValueError(f"Dataset does not record the sides required by {args.robot}: {sorted(missing)}")
     controller_device = _resolved_controller_device(args, source_info)
     requested_retarget_mode = str(args.retarget_mode)
     retarget_mode = _resolved_retarget_mode(args, source_info)
@@ -840,11 +852,13 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             tcp_selection.calibration,
             left_tcp_arr,
             right_tcp_arr,
+            active_sides=runtime.active_sides,
         )
         _print_tcp_geometry_diagnostics(
             tcp_selection,
             tcp_diagnostics,
             workspace=str(source_metadata.get("tracking_workspace", "")),
+            active_sides=runtime.active_sides,
         )
 
     frame_indices = list(range(args.start_frame, len(states), args.stride))
@@ -853,7 +867,8 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     if not frame_indices:
         raise ValueError("No frames selected for replay.")
     if source_metadata.get("tracking_workspace") == "table" and tcp_diagnostics:
-        minimum_tcp_z = float(np.min(tcp_diagnostics["workspace_min_z_m"]))
+        minimum_tcp_z = min(float(tcp_diagnostics["workspace_min_z_m"][i])
+                           for i, side in enumerate(("left", "right")) if side in runtime.arms)
         if minimum_tcp_z > args.table_clearance_warning_m:
             print(
                 "[replay] warning: calibrated TCP never approaches table z=0 "
@@ -969,6 +984,10 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             left_tool_adapter_pose7=left_tool_adapter,
             right_tool_adapter_pose7=right_tool_adapter,
         )
+        if "left" not in runtime.arms:
+            first_left_target = home_left_pose7.copy()
+        if "right" not in runtime.arms:
+            first_right_target = home_right_pose7.copy()
         initial_solver = runtime.solver_cls(
             config=replace(cfg, max_joint_delta=None),
             locked_joint_indices=locked_joint_indices,
@@ -1084,6 +1103,12 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
                 right_pose=(right_pose7[:3], right_pose7[3:7]),
             )
             fk_left_pose7, fk_right_pose7 = solver.fk_pose7(q)
+        # Keep the legacy rollout pose pair neutral for a nonexistent arm;
+        # only declared arms participate in IK, errors, and dataset columns.
+        if "left" not in runtime.arms:
+            left_pose7 = fk_left_pose7.copy()
+        if "right" not in runtime.arms:
+            right_pose7 = fk_right_pose7.copy()
         if gripper_openings is not None:
             opening = gripper_openings[frame_index]
             runtime.set_finger_positions(
@@ -1109,10 +1134,10 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     achieved_right = np.asarray(right_achieved, dtype=np.float32)
     errors = pose_error_arrays(target_left, target_right, achieved_left, achieved_right)
     all_pos_err = np.concatenate(
-        [errors["left_pos_error_m"], errors["right_pos_error_m"]]
+        [errors[f"{side}_pos_error_m"] for side in runtime.arms]
     )
     all_rot_err = np.concatenate(
-        [errors["left_rot_error_deg"], errors["right_rot_error_deg"]]
+        [errors[f"{side}_rot_error_deg"] for side in runtime.arms]
     )
     score = optimization_score_from_errors(
         float(all_pos_err.mean() * 100.0),
@@ -1293,13 +1318,13 @@ def save_rollout(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Pa
     if output is None:
         output = DEFAULT_OUT_DIR / f"episode_{args.episode:06d}_{args.robot}.npz"
     output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        output,
+    payload: dict[str, Any] = dict(
         repo_id=np.asarray([args.repo_id]),
         robot=np.asarray([args.robot]),
         episode=np.asarray([args.episode], dtype=np.int64),
         **rollout,
     )
+    np.savez_compressed(output, **payload)
     print(f"[replay] saved: {output}")
     return output
 
@@ -1362,43 +1387,24 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
             axes_length=0.15,
             axes_radius=0.004,
         )
+    markers = {}
     if not args.hide_trajectories:
-        server.scene.add_spline_catmull_rom(
-            "/traj/target_left",
-            positions=rollout["target_left_pose7_robot_world"][:, :3],
-            color=(255, 190, 50),
-            line_width=2.0,
-        )
-        server.scene.add_spline_catmull_rom(
-            "/traj/target_right",
-            positions=rollout["target_right_pose7_robot_world"][:, :3],
-            color=(80, 220, 130),
-            line_width=2.0,
-        )
-        server.scene.add_spline_catmull_rom(
-            "/traj/achieved_left",
-            positions=rollout["achieved_left_pose7_robot_world"][:, :3],
-            color=(80, 160, 255),
-            line_width=2.0,
-        )
-        server.scene.add_spline_catmull_rom(
-            "/traj/achieved_right",
-            positions=rollout["achieved_right_pose7_robot_world"][:, :3],
-            color=(255, 90, 90),
-            line_width=2.0,
-        )
-        target_left = server.scene.add_icosphere(
-            "/target/left", radius=0.018, color=(255, 190, 50)
-        )
-        target_right = server.scene.add_icosphere(
-            "/target/right", radius=0.018, color=(80, 220, 130)
-        )
-        achieved_left = server.scene.add_icosphere(
-            "/achieved/left", radius=0.014, color=(80, 160, 255)
-        )
-        achieved_right = server.scene.add_icosphere(
-            "/achieved/right", radius=0.014, color=(255, 90, 90)
-        )
+        colors = {"left": ((255, 190, 50), (80, 160, 255)),
+                  "right": ((80, 220, 130), (255, 90, 90))}
+        for side in runtime.active_sides:
+            for kind, color in zip(("target", "achieved"), colors[side], strict=True):
+                server.scene.add_spline_catmull_rom(
+                    f"/traj/{kind}_{side}",
+                    positions=tuple(
+                        (float(row[0]), float(row[1]), float(row[2]))
+                        for row in rollout[f"{kind}_{side}_pose7_robot_world"]
+                    ),
+                    color=color, line_width=2.0,
+                )
+                markers[kind, side] = server.scene.add_icosphere(
+                    f"/{kind}/{side}", radius=0.018 if kind == "target" else 0.014,
+                    color=color,
+                )
     approach = rollout.get("approach_qpos")
     approach_frames = 0 if approach is None else len(approach)
     total_frames = approach_frames + len(rollout["qpos"])
@@ -1410,28 +1416,21 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
         # Frames before the episode replay the home -> start lead-in; markers
         # stay pinned on frame 0 so the approach visibly aims at it.
         if index < approach_frames:
+            assert approach is not None
             robot_view.update_cfg(approach[index])
             i = 0
         else:
             i = index - approach_frames
             robot_view.update_cfg(rollout["qpos"][i])
-        if not args.hide_trajectories:
-            target_left.position = tuple(rollout["target_left_pose7_robot_world"][i, :3])
-            target_right.position = tuple(rollout["target_right_pose7_robot_world"][i, :3])
-            achieved_left.position = tuple(
-                rollout["achieved_left_pose7_robot_world"][i, :3]
-            )
-            achieved_right.position = tuple(
-                rollout["achieved_right_pose7_robot_world"][i, :3]
-            )
+        for (kind, side), marker in markers.items():
+            marker.position = tuple(rollout[f"{kind}_{side}_pose7_robot_world"][i, :3])
         if index < approach_frames:
             err_text.value = "home -> start approach"
         else:
-            err_text.value = (
-                f"L={rollout['left_pos_error_m'][i] * 100:.1f}cm/"
-                f"{rollout['left_rot_error_deg'][i]:.1f}deg "
-                f"R={rollout['right_pos_error_m'][i] * 100:.1f}cm/"
-                f"{rollout['right_rot_error_deg'][i]:.1f}deg"
+            err_text.value = " ".join(
+                f"{side[0].upper()}={rollout[f'{side}_pos_error_m'][i] * 100:.1f}cm/"
+                f"{rollout[f'{side}_rot_error_deg'][i]:.1f}deg"
+                for side in runtime.active_sides
             )
 
     draw(0)
