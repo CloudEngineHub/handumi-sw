@@ -62,6 +62,7 @@ def build_camera_specs(
                         entry, "height", name, default_height
                     ),
                     "fps": _positive_camera_int(entry, "fps", name, default_fps),
+                    "fourcc": _camera_fourcc(entry, name),
                 }
             )
             spec["output_width"] = (
@@ -265,6 +266,7 @@ def make_camera_device(
         fps=int(spec.get("fps", default_fps)),
         width=int(spec.get("width", default_width)),
         height=int(spec.get("height", default_height)),
+        fourcc=spec.get("fourcc"),
     )
 
 
@@ -275,6 +277,7 @@ def _make_camera(
     fps: int,
     width: int,
     height: int,
+    fourcc: object = None,
 ) -> CameraDevice:
     normalized = backend.lower().replace("_", "-")
     if normalized in {"opencv", "cv2"}:
@@ -283,6 +286,7 @@ def _make_camera(
             fps=fps,
             width=width,
             height=height,
+            fourcc=None if fourcc is None else str(fourcc),
         )
     if normalized in {"zedmini", "zed-mini"}:
         if width != 1344 or height != 376:
@@ -338,6 +342,18 @@ def _positive_camera_int(
     if value <= 0:
         raise SystemExit(f"cameras.{name}.{key} must be > 0.")
     return value
+
+
+def _camera_fourcc(entry: dict[str, Any], name: str) -> str | None:
+    value = entry.get("fourcc")
+    if value is None:
+        return None
+    fourcc = str(value).strip().upper()
+    if len(fourcc) != 4:
+        raise SystemExit(
+            f"cameras.{name}.fourcc must be a four-character code such as MJPG."
+        )
+    return fourcc
 
 
 def _read_camera_value(data: dict[str, Any], key: str, default: int) -> int | str:

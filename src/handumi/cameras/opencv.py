@@ -7,6 +7,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from sys import platform
 
 import numpy as np
 
@@ -21,6 +22,7 @@ class OpenCVCameraDevice(CameraDevice):
     fps: int
     width: int
     height: int
+    fourcc: str | None = None
 
     def __post_init__(self) -> None:
         self._camera = None
@@ -43,7 +45,18 @@ class OpenCVCameraDevice(CameraDevice):
 
     def connect(self) -> None:
         from lerobot.cameras.opencv import OpenCVCamera
-        from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+        from lerobot.cameras.opencv.configuration_opencv import (
+            Cv2Backends,
+            OpenCVCameraConfig,
+        )
+
+        backend = (
+            Cv2Backends.V4L2
+            if platform.startswith("linux")
+            and isinstance(self.index_or_path, str)
+            and self.index_or_path.startswith("/dev/video")
+            else Cv2Backends.ANY
+        )
 
         cfg = OpenCVCameraConfig(
             index_or_path=(
@@ -54,6 +67,8 @@ class OpenCVCameraDevice(CameraDevice):
             fps=self.fps,
             width=self.width,
             height=self.height,
+            fourcc=self.fourcc,
+            backend=backend,
         )
         self._camera = OpenCVCamera(cfg)
         self._camera.connect()

@@ -70,6 +70,21 @@ HandUMI keeps `frame[:, :672]`, so previews and datasets contain one
 explicit Linux path such as `/dev/video4`. Per-camera values in `cameras:`
 take precedence over the global camera fallbacks used by older rig files.
 
+For USB cameras whose high-resolution/high-rate modes are available only as
+Motion-JPEG, add `fourcc: MJPG` to that camera entry. For example, a camera
+that exposes `1280x960 @ 30 FPS` as MJPG but only 5 FPS as YUYV should use:
+
+```yaml
+cameras:
+  left_wrist:
+    type: opencv
+    index_or_path: /dev/video0
+    width: 1280
+    height: 960
+    fps: 30
+    fourcc: MJPG
+```
+
 ## 2. Calibrate the Grippers
 
 First confirm that both encoders change smoothly while opening and closing:
