@@ -29,8 +29,8 @@ recording setup; configure them only for real-robot teleoperation.
 Set new Feetech IDs only when required:
 
 ```bash
-handumi servo set-id --port /dev/ttyUSB0 --new-id 0
-handumi servo set-id --port /dev/ttyUSB0 --new-id 1
+handumi servo set-id --port /dev/ttyACM0 --new-id 0
+handumi servo set-id --port /dev/ttyACM1 --new-id 1
 ```
 
 :::{dropdown} Hardware mapping details
