@@ -62,26 +62,26 @@ STABLE_TRANSLATION_M = 0.010
 STABLE_ROTATION_DEG = 5.0
 WORKSPACE_COLOR = (110, 180, 255)
 INTRINSIC_VIEW_PROMPTS = (
-    "centro frontal",
-    "esquina superior izquierda",
-    "esquina superior derecha",
-    "esquina inferior izquierda",
-    "esquina inferior derecha",
-    "cerca e inclinado",
-    "lejos e inclinado",
-    "roll izquierda",
-    "roll derecha",
-    "inclinacion opuesta",
+    "front center",
+    "top-left corner",
+    "top-right corner",
+    "bottom-left corner",
+    "bottom-right corner",
+    "close and tilted",
+    "far and tilted",
+    "roll left",
+    "roll right",
+    "opposite tilt",
 )
 MOUNT_VIEW_PROMPTS = (
-    "frontal",
-    "roll izquierda",
-    "roll derecha",
-    "pitch adelante",
-    "pitch atras",
-    "yaw izquierda",
-    "yaw derecha",
-    "diagonal combinada",
+    "front-facing",
+    "roll left",
+    "roll right",
+    "pitch forward",
+    "pitch backward",
+    "yaw left",
+    "yaw right",
+    "combined diagonal",
 )
 
 
@@ -314,17 +314,17 @@ def _capture(
             lines = [
                 *instructions,
                 *(
-                    (f"Siguiente vista: {view_prompts[len(detections) % len(view_prompts)]}",)
+                    (f"Next view: {view_prompts[len(detections) % len(view_prompts)]}",)
                     if view_prompts
                     else ()
                 ),
-                f"Vistas {len(detections)}/{requested_views}  esquinas {corners}",
-                f"Captura automatica en {remaining_s:.1f}s   Q salir",
+                f"Views {len(detections)}/{requested_views}  corners {corners}",
+                f"Automatic capture in {remaining_s:.1f}s   Q quit",
             ]
             if valid and not distinct:
-                lines.append("Cambia la posicion o rotacion")
+                lines.append("Change the position or rotation")
             elif valid and not stable:
-                lines.append("Sosten el HandUMI quieto")
+                lines.append("Hold the HandUMI still")
             if pair_at is not None:
                 sync_text = "n/a" if sync_ms is None else f"{sync_ms:.1f} ms"
                 lines.insert(
@@ -491,8 +491,8 @@ def cmd_inspect(args: argparse.Namespace) -> None:
             requested_views=1,
             require_distinct=False,
             instructions=(
-                "Ponte frente al borde inferior del ChArUco",
-                "IDs 15 y 16 deben quedar hacia ti",
+                "Stand facing the bottom edge of the ChArUco board",
+                "IDs 15 and 16 should face you",
             ),
         )
     finally:
@@ -510,8 +510,8 @@ def cmd_intrinsics(args: argparse.Namespace) -> None:
             title=f"HandUMI intrinsics: {args.camera}",
             requested_views=args.views,
             instructions=(
-                "Ponte frente al borde inferior del ChArUco",
-                "Mueve la camara: centro, bordes, distancia e inclinacion",
+                "Stand facing the bottom edge of the ChArUco board",
+                "Move the camera: center, edges, distance, and tilt",
             ),
             view_prompts=INTRINSIC_VIEW_PROMPTS,
         )
@@ -584,8 +584,8 @@ def cmd_mount(args: argparse.Namespace) -> None:
             ),
             detection_gate=_reprojection_gate(intrinsics),
             instructions=(
-                f"Tablero fijo: toma el HandUMI {args.side}",
-                "Muevelo en roll, pitch y yaw entre capturas",
+                f"Board fixed: pick up the {args.side} HandUMI",
+                "Move it through roll, pitch, and yaw between captures",
             ),
             view_prompts=MOUNT_VIEW_PROMPTS,
             sync_label=args.device,
@@ -643,8 +643,8 @@ def _calibrate_workspace(
             require_distinct=False,
             detection_gate=_reprojection_gate(intrinsics),
             instructions=(
-                "No muevas el tablero ni la camara workspace",
-                "Espera a que termine el contador",
+                "Keep the board and workspace camera still",
+                "Wait for the countdown to finish",
             ),
         )
     finally:
@@ -699,8 +699,8 @@ def cmd_session(args: argparse.Namespace) -> None:
             ),
             detection_gate=_reprojection_gate(intrinsics),
             instructions=(
-                f"{args.device} fijo; ponte frente al borde inferior",
-                f"Toma el HandUMI {args.side} y varia su orientacion",
+                f"Keep the {args.device} fixed; face the bottom edge",
+                f"Pick up the {args.side} HandUMI and vary its orientation",
             ),
             view_prompts=MOUNT_VIEW_PROMPTS,
             sync_label=args.device,
@@ -839,8 +839,8 @@ def cmd_verify(args: argparse.Namespace) -> None:
             ),
             detection_gate=_reprojection_gate(intrinsics),
             instructions=(
-                f"Verificacion: toma el HandUMI {args.side}",
-                "Tablero fijo; varia la orientacion entre capturas",
+                f"Verification: pick up the {args.side} HandUMI",
+                "Keep the board fixed; vary orientation between captures",
             ),
             sync_label=args.device,
             max_sync_ms=max_sync_ms,
