@@ -369,6 +369,10 @@ class StreamingEncodingError(RuntimeError):
     """The streaming encoder cannot produce a frame-aligned episode."""
 
 
+class CameraCaptureError(RuntimeError):
+    """A required recording camera stopped delivering usable frames."""
+
+
 @dataclass(frozen=True)
 class _VideoEncoderSelection:
     vcodec: str
@@ -1155,6 +1159,18 @@ def record_episode(
         for sensor in recovered:
             log.info("Sensor health recovered before timeout: %s.", sensor)
         if timed_out_sensors:
+            failed_cameras = sorted(
+                sensor.removeprefix("camera.")
+                for sensor in timed_out_sensors
+                if sensor.startswith("camera.")
+            )
+            if failed_cameras:
+                names = ", ".join(failed_cameras)
+                raise CameraCaptureError(
+                    f"camera capture failed for {names}: no fresh synchronized "
+                    f"frames for {sensor_loss_timeout_s:.2f}s; the camera may "
+                    "have disconnected or changed device ID"
+                )
             status = "sensor_unhealthy"
             log.error(
                 "Sensor health unavailable for %.2fs (%s); discarding episode.",
@@ -2033,6 +2049,7 @@ def main() -> None:
         if args.record_audio
         else None
     )
+    fatal_recording_error: Exception | None = None
     try:
         if audio_recorder is not None:
             audio_recorder.start()
@@ -2160,10 +2177,20 @@ def main() -> None:
                 # A hardware disconnect (cable pull, USB drop, ...) or any
                 # other unexpected failure must not lose already-saved
                 # episodes: discard only the one that was in flight and stop.
-                log.exception(
-                    "Unexpected failure during episode %d; discarding it and stopping.",
-                    ep_num,
-                )
+                fatal_recording_error = exc
+                if isinstance(exc, CameraCaptureError):
+                    log.error(
+                        "Camera failure during episode %d; discarding it and "
+                        "aborting recording: %s",
+                        ep_num,
+                        exc,
+                    )
+                else:
+                    log.exception(
+                        "Unexpected failure during episode %d; discarding it "
+                        "and stopping.",
+                        ep_num,
+                    )
                 if audio_recorder is not None:
                     audio_recorder.cancel_episode()
                 dataset.clear_episode_buffer()
@@ -2317,6 +2344,11 @@ def main() -> None:
             tracker.stop()
         if finalization_error is not None:
             raise finalization_error
+        if fatal_recording_error is not None:
+            raise SystemExit(
+                f"Recording aborted; active episode was discarded: "
+                f"{fatal_recording_error}"
+            ) from fatal_recording_error
         log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
         log_say("Exiting", play_sounds=play_sounds)
 
