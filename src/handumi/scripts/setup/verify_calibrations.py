@@ -36,6 +36,7 @@ from handumi.config import (
     DEFAULT_RIG_CONFIG,
     load_optional_rig_section,
     load_rig_section,
+    resolve_camera_role,
 )
 from handumi.feetech.calibration import load_config, user_calibration_path
 from handumi.robots.registry import (
@@ -153,16 +154,22 @@ def _verify_spatial_and_session(
         return
 
     cameras = spatial.get("cameras") or {}
-    missing_cameras = [
-        name
-        for name in ("left_wrist", "right_wrist", "workspace")
-        if name not in cameras
-    ]
+    rig_cameras = load_rig_section(args.rig_config, "cameras")
+    camera_names: dict[str, str] = {}
+    missing_cameras = []
+    for role in ("left", "right", "workspace"):
+        try:
+            rig_name = resolve_camera_role(rig_cameras, role)
+            camera_names[role] = (
+                rig_name if rig_name in cameras else resolve_camera_role(cameras, role)
+            )
+        except SystemExit:
+            missing_cameras.append(role)
     mounts = spatial.get("controller_camera") or {}
     missing_mounts = [side for side in ("left", "right") if side not in mounts]
     if missing_cameras or missing_mounts:
         missing = [
-            *(f"camera {name}" for name in missing_cameras),
+            *(f"camera role {name}" for name in missing_cameras),
             *(f"{side} mount" for side in missing_mounts),
         ]
         _add(
@@ -171,7 +178,7 @@ def _verify_spatial_and_session(
         return
 
     bad_intrinsics = []
-    for name in ("left_wrist", "right_wrist", "workspace"):
+    for name in camera_names.values():
         error = float((cameras[name] or {}).get("mean_error_px", float("inf")))
         if not np.isfinite(error) or error > args.max_intrinsics_error_px:
             bad_intrinsics.append(f"{name}={error:.3f}px")

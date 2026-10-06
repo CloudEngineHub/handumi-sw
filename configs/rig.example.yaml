@@ -4,6 +4,8 @@
 cameras:
   # index_or_path accepts either an OpenCV integer index (for example 0) or
   # an explicit Linux device path (for example /dev/video0).
+  # Keys are user-defined. For custom names, add role: left, right, or
+  # workspace so side-based calibration commands can resolve the camera.
   left_wrist:
     type: opencv
     index_or_path: 0

@@ -41,7 +41,12 @@ from handumi.cameras import (
     resolve_camera_ids,
 )
 from handumi.cameras.base import CameraDevice
-from handumi.config import DEFAULT_RIG_CONFIG, load_rig_section
+from handumi.config import (
+    DEFAULT_RIG_CONFIG,
+    camera_role,
+    load_rig_section,
+    resolve_camera_role,
+)
 from handumi.robots.utils import IDENTITY_POSE7, pose7_to_mat
 from handumi.tracking.base import TrackingProvider
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
@@ -95,6 +100,12 @@ def _board_from_rig(path: Path) -> CharucoBoardSpec:
 
 
 def _camera(path: Path, name: str, fps: int, width: int, height: int) -> CameraDevice:
+    rig_cameras = load_rig_section(path, "cameras")
+    if name not in rig_cameras:
+        raise SystemExit(
+            f"Unknown camera {name!r} in {path}. Choose from: "
+            f"{', '.join(rig_cameras)}."
+        )
     camera_ids = resolve_camera_ids(None, path, camera_names=[name])
     specs, _ = build_camera_specs(
         camera_ids,
@@ -123,12 +134,25 @@ def _camera_source(path: Path, name: str) -> int | str:
     return entry["index_or_path"]
 
 
+def _rig_camera_name(path: Path, role: str) -> str:
+    return resolve_camera_role(load_rig_section(path, "cameras"), role)
+
+
+def _spatial_camera_name(spatial: dict, role: str, preferred: str) -> str:
+    """Find calibration data for a rig camera, including legacy role names."""
+    cameras = spatial.get("cameras") or {}
+    if preferred in cameras:
+        return preferred
+    return resolve_camera_role(cameras, role)
+
+
 def _validate_spatial_rig(
     spatial: dict,
     *,
     spatial_path: Path,
     rig_path: Path,
     camera: str | None = None,
+    rig_camera: str | None = None,
 ) -> None:
     """Reject board-scale drift and report changed camera mappings early."""
     spatial_board = CharucoBoardSpec.from_dict(spatial.get("board"))
@@ -149,7 +173,7 @@ def _validate_spatial_rig(
     )
     if captured is None:
         return
-    current = _camera_source(rig_path, camera)
+    current = _camera_source(rig_path, rig_camera or camera)
     if str(captured) != str(current):
         log.warning(
             "%s was captured from %s but is currently mapped to %s in %s. "
@@ -519,7 +543,13 @@ def cmd_intrinsics(args: argparse.Namespace) -> None:
         camera.disconnect()
     if len(detections) < args.views:
         raise SystemExit(f"Only {len(detections)} views captured; requested {args.views}.")
-    calibrate = calibrate_pinhole if args.camera == "workspace" else calibrate_fisheye
+    camera_config = load_rig_section(args.rig_config, "cameras").get(args.camera)
+    role = camera_role(args.camera, camera_config)
+    calibrate = (
+        calibrate_pinhole
+        if role == "workspace"
+        else calibrate_fisheye
+    )
     intrinsics = calibrate(
         args.camera,
         detections,
@@ -549,6 +579,7 @@ def cmd_intrinsics(args: argparse.Namespace) -> None:
         )
     spatial.setdefault("cameras", {})[args.camera] = {
         **intrinsics.to_dict(),
+        **({"role": role} if role is not None else {}),
         "index_or_path": _camera_source(args.rig_config, args.camera),
         "captured_at": _now_iso(),
     }
@@ -558,16 +589,18 @@ def cmd_intrinsics(args: argparse.Namespace) -> None:
 
 def cmd_mount(args: argparse.Namespace) -> None:
     spatial = _load_spatial(args.spatial)
+    rig_camera_name = _rig_camera_name(args.rig_config, args.side)
+    camera_name = _spatial_camera_name(spatial, args.side, rig_camera_name)
     _validate_spatial_rig(
         spatial,
         spatial_path=args.spatial,
         rig_path=args.rig_config,
-        camera=f"{args.side}_wrist",
+        camera=camera_name,
+        rig_camera=rig_camera_name,
     )
     board = CharucoBoardSpec.from_dict(spatial.get("board"))
-    camera_name = f"{args.side}_wrist"
     intrinsics = _intrinsics(spatial, camera_name)
-    camera = _camera(args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height)
+    camera = _camera(args.rig_config, rig_camera_name, args.fps, intrinsics.width, intrinsics.height)
     tracker = _connect_tracker(args)
     max_sync_ms = _sync_limit_ms(args)
     camera.connect()
@@ -608,7 +641,7 @@ def cmd_mount(args: argparse.Namespace) -> None:
             f"{args.max_rms_mm:.2f} mm; calibration not saved."
         )
     spatial.setdefault("controller_camera", {})[args.side] = {
-        "camera": camera_name,
+        "camera": rig_camera_name,
         "controller_from_camera": pose7_to_dict(controller_camera),
         "metrics": metrics,
         "captured_at": _now_iso(),
@@ -625,10 +658,12 @@ def _calibrate_workspace(
     views: int,
     max_rms_mm: float,
 ) -> dict:
-    intrinsics = _intrinsics(spatial, "workspace")
+    rig_camera_name = _rig_camera_name(args.rig_config, "workspace")
+    camera_name = _spatial_camera_name(spatial, "workspace", rig_camera_name)
+    intrinsics = _intrinsics(spatial, camera_name)
     camera = _camera(
         args.rig_config,
-        "workspace",
+        rig_camera_name,
         args.fps,
         intrinsics.width,
         intrinsics.height,
@@ -669,20 +704,22 @@ def _calibrate_workspace(
 
 def cmd_session(args: argparse.Namespace) -> None:
     spatial = _load_spatial(args.spatial)
+    rig_camera_name = _rig_camera_name(args.rig_config, args.side)
+    camera_name = _spatial_camera_name(spatial, args.side, rig_camera_name)
     _validate_spatial_rig(
         spatial,
         spatial_path=args.spatial,
         rig_path=args.rig_config,
-        camera=f"{args.side}_wrist",
+        camera=camera_name,
+        rig_camera=rig_camera_name,
     )
     board = CharucoBoardSpec.from_dict(spatial.get("board"))
-    camera_name = f"{args.side}_wrist"
     intrinsics = _intrinsics(spatial, camera_name)
     mount = (spatial.get("controller_camera") or {}).get(args.side)
     if not isinstance(mount, dict):
         raise SystemExit(f"Missing {args.side} controller-camera mount in {args.spatial}.")
     controller_camera = pose7_from_dict(mount["controller_from_camera"])
-    camera = _camera(args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height)
+    camera = _camera(args.rig_config, rig_camera_name, args.fps, intrinsics.width, intrinsics.height)
     tracker = _connect_tracker(args)
     max_sync_ms = _sync_limit_ms(args)
     camera.connect()
@@ -760,11 +797,14 @@ def cmd_session(args: argparse.Namespace) -> None:
 
 def cmd_workspace(args: argparse.Namespace) -> None:
     spatial = _load_spatial(args.spatial)
+    rig_camera_name = _rig_camera_name(args.rig_config, "workspace")
+    camera_name = _spatial_camera_name(spatial, "workspace", rig_camera_name)
     _validate_spatial_rig(
         spatial,
         spatial_path=args.spatial,
         rig_path=args.rig_config,
-        camera="workspace",
+        camera=camera_name,
+        rig_camera=rig_camera_name,
     )
     session = _load_session(args.session)
     if session.get("spatial_calibration_sha256") != calibration_hash(spatial):
@@ -784,11 +824,14 @@ def cmd_workspace(args: argparse.Namespace) -> None:
 def cmd_verify(args: argparse.Namespace) -> None:
     session = _load_session(args.session)
     spatial = _load_spatial(args.spatial)
+    rig_camera_name = _rig_camera_name(args.rig_config, args.side)
+    camera_name = _spatial_camera_name(spatial, args.side, rig_camera_name)
     _validate_spatial_rig(
         spatial,
         spatial_path=args.spatial,
         rig_path=args.rig_config,
-        camera=f"{args.side}_wrist",
+        camera=camera_name,
+        rig_camera=rig_camera_name,
     )
     expected = session.get("spatial_calibration_sha256")
     actual = calibration_hash(spatial)
@@ -804,7 +847,6 @@ def cmd_verify(args: argparse.Namespace) -> None:
         return
 
     board = CharucoBoardSpec.from_dict(spatial.get("board"))
-    camera_name = f"{args.side}_wrist"
     intrinsics = _intrinsics(spatial, camera_name)
     mount = (spatial.get("controller_camera") or {}).get(args.side)
     if not isinstance(mount, dict):
@@ -822,7 +864,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
         )
     table_device = pose7_to_mat(pose7_from_dict(table_from_device)).astype(np.float64)
     board_table = pose7_to_mat(board_from_table_pose(board)).astype(np.float64)
-    camera = _camera(args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height)
+    camera = _camera(args.rig_config, rig_camera_name, args.fps, intrinsics.width, intrinsics.height)
     tracker = _connect_tracker(args)
     max_sync_ms = _sync_limit_ms(args)
     camera.connect()
@@ -1038,17 +1080,29 @@ def cmd_visualize(args: argparse.Namespace) -> None:
             f"but --device {args.device} was selected."
         )
     table_device = pose7_to_mat(pose7_from_dict(table_from_device)).astype(np.float64)
-    camera_names = [
-        name
-        for name in ("left_wrist", "right_wrist", "workspace")
-        if name in (spatial.get("cameras") or {})
-    ]
+    rig_cameras = load_rig_section(args.rig_config, "cameras")
+    spatial_cameras = spatial.get("cameras") or {}
+    camera_roles = {
+        name: camera_role(name, rig_cameras.get(name))
+        for name in spatial_cameras
+    }
+    camera_roles = {
+        name: role for name, role in camera_roles.items() if role is not None
+    }
+    camera_names = list(camera_roles)
+    capture_names = {
+        name: name if name in rig_cameras else resolve_camera_role(rig_cameras, role)
+        for name, role in camera_roles.items()
+    }
+    workspace_name = next(
+        (name for name, role in camera_roles.items() if role == "workspace"), None
+    )
     workspace_entry = (session.get("table_from_camera") or {}).get("workspace")
-    if "workspace" in camera_names and not isinstance(workspace_entry, dict):
+    if workspace_name is not None and not isinstance(workspace_entry, dict):
         log.warning(
             "Session has no fixed workspace-camera pose; showing wrist cameras only."
         )
-        camera_names.remove("workspace")
+        camera_names.remove(workspace_name)
     if not camera_names:
         raise SystemExit("Spatial calibration contains no calibrated cameras.")
 
@@ -1060,7 +1114,7 @@ def cmd_visualize(args: argparse.Namespace) -> None:
             camera_intrinsics = intrinsics[name]
             camera = _camera(
                 args.rig_config,
-                name,
+                capture_names[name],
                 args.fps,
                 camera_intrinsics.width,
                 camera_intrinsics.height,
@@ -1069,9 +1123,9 @@ def cmd_visualize(args: argparse.Namespace) -> None:
             cameras[name] = camera
 
         rr = _init_rerun_view(camera_names, board)
-        colors = {
-            "left_wrist": LEFT_COLOR,
-            "right_wrist": RIGHT_COLOR,
+        role_colors = {
+            "left": LEFT_COLOR,
+            "right": RIGHT_COLOR,
             "workspace": WORKSPACE_COLOR,
         }
         rectification = {
@@ -1083,18 +1137,20 @@ def cmd_visualize(args: argparse.Namespace) -> None:
                 rr,
                 name,
                 intrinsics[name],
-                colors[name],
+                role_colors[camera_roles[name]],
                 image_matrix=rectified_matrix,
             )
 
-        if "workspace" in cameras:
+        if workspace_name in cameras:
             assert isinstance(workspace_entry, dict)
             workspace_pose = pose7_to_mat(pose7_from_dict(workspace_entry["pose"]))
-            _log_camera_pose(rr, "workspace", workspace_pose, static=True)
+            _log_camera_pose(rr, workspace_name, workspace_pose, static=True)
 
         controller_camera: dict[str, np.ndarray] = {}
         for side in ("left", "right"):
-            name = f"{side}_wrist"
+            name = next(
+                (name for name, role in camera_roles.items() if role == side), None
+            )
             if name not in cameras:
                 continue
             mount = (spatial.get("controller_camera") or {}).get(side)
@@ -1142,7 +1198,10 @@ def cmd_visualize(args: argparse.Namespace) -> None:
                     )
                     table_controller = table_device @ device_controller
                     table_camera = table_controller @ controller_camera[side]
-                    _log_camera_pose(rr, f"{side}_wrist", table_camera)
+                    camera_name = next(
+                        name for name, role in camera_roles.items() if role == side
+                    )
+                    _log_camera_pose(rr, camera_name, table_camera)
                     trails[side].append(table_controller[:3, 3])
                     rr.log(
                         f"table/tracking/{side}/controller",
@@ -1200,13 +1259,19 @@ def parse_args() -> argparse.Namespace:
     sub = parser.add_subparsers(dest="command", required=True)
 
     inspect = sub.add_parser("inspect-board", help="Check board detection and orientation.")
-    inspect.add_argument("--camera", choices=("left_wrist", "right_wrist", "workspace"), default="left_wrist")
+    inspect.add_argument(
+        "--camera",
+        default=None,
+        help="Camera name from configs/rig.yaml (defaults to the camera with role left).",
+    )
     inspect.add_argument("--width", type=int, default=640)
     inspect.add_argument("--height", type=int, default=480)
     inspect.set_defaults(func=cmd_inspect)
 
     intrinsics = sub.add_parser("intrinsics", help="Calibrate one camera.")
-    intrinsics.add_argument("--camera", choices=("left_wrist", "right_wrist", "workspace"), required=True)
+    intrinsics.add_argument(
+        "--camera", required=True, help="Camera name declared in configs/rig.yaml."
+    )
     intrinsics.add_argument("--views", type=int, default=10)
     intrinsics.add_argument("--width", type=int, default=640)
     intrinsics.add_argument("--height", type=int, default=480)
@@ -1260,7 +1325,10 @@ def parse_args() -> argparse.Namespace:
     visualize.add_argument("--spatial", type=Path, default=DEFAULT_SPATIAL)
     visualize.add_argument("--session", type=Path, default=DEFAULT_SESSION)
     visualize.set_defaults(func=cmd_visualize)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.command == "inspect-board" and args.camera is None:
+        args.camera = _rig_camera_name(args.rig_config, "left")
+    return args
 
 
 def main() -> None:

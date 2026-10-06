@@ -9,6 +9,61 @@ import yaml
 
 DEFAULT_RIG_CONFIG = Path("configs/rig.yaml")
 SIDES = ("left", "right")
+CAMERA_ROLES = (*SIDES, "workspace")
+
+
+def camera_role(name: str, config: object = None) -> str | None:
+    """Return a camera's physical role without constraining its logical name.
+
+    New rigs may declare ``role`` explicitly.  The name-based aliases keep old
+    rigs working and make the common ``left``, ``right``, and ``top`` names do
+    the expected thing without extra configuration.
+    """
+    if isinstance(config, dict) and config.get("role") is not None:
+        role = str(config["role"]).strip().lower()
+        if role not in CAMERA_ROLES:
+            raise SystemExit(
+                f"Camera {name!r} has invalid role {role!r}; choose from: "
+                f"{', '.join(CAMERA_ROLES)}."
+            )
+        return role
+    normalized = name.strip().lower().replace("-", "_")
+    aliases = {
+        "left": "left",
+        "left_wrist": "left",
+        "right": "right",
+        "right_wrist": "right",
+        "workspace": "workspace",
+        "top": "workspace",
+    }
+    return aliases.get(normalized)
+
+
+def resolve_camera_role(cameras: dict[str, Any], role: str) -> str:
+    """Resolve a physical role to the user-defined camera key."""
+    if role not in CAMERA_ROLES:
+        raise ValueError(f"Unknown camera role: {role!r}")
+    explicit = [
+        name
+        for name, entry in cameras.items()
+        if isinstance(entry, dict)
+        and entry.get("role") is not None
+        and camera_role(name, entry) == role
+    ]
+    candidates = explicit or [
+        name for name, entry in cameras.items() if camera_role(name, entry) == role
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise SystemExit(
+            f"Multiple cameras have role {role!r}: {', '.join(candidates)}. "
+            "Set a unique 'role' on the intended camera in the rig configuration."
+        )
+    raise SystemExit(
+        f"No camera with role {role!r} is configured. Available cameras: "
+        f"{', '.join(cameras) or '(none)'}. Set role: {role} on the intended camera."
+    )
 
 
 def resolve_active_sides(

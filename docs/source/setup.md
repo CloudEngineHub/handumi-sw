@@ -39,8 +39,8 @@ Two grippers may share one serial `port` only when they use different
 port.
 
 A USB camera commonly exposes two `/dev/video*` nodes. Start with the first
-node reported for each physical camera and confirm the stream. Map
-`left_wrist`, `right_wrist`, and `workspace` explicitly in `configs/rig.yaml`.
+node reported for each physical camera and confirm the stream. Camera keys are
+logical dataset names; map each physical camera explicitly in `configs/rig.yaml`.
 
 Keep these machine-local paths in `configs/rig.yaml`; do not commit them as
 portable project configuration.
@@ -48,10 +48,12 @@ portable project configuration.
 
 ### Camera types and resolutions
 
-Declare capture settings for the three logical views: `left_wrist`,
-`right_wrist`, and `workspace`. Each view can use the normal `opencv` backend
-or `zedmini`, which expects the ZED Mini side-by-side UVC mode and exposes only
-its left image:
+Declare capture settings for the three logical roles: `left`, `right`, and
+`workspace`. Their keys may be any names. The aliases `left`/`left_wrist`,
+`right`/`right_wrist`, and `top`/`workspace` are recognized automatically;
+otherwise add `role: left`, `role: right`, or `role: workspace`. Each view can
+use the normal `opencv` backend or `zedmini`, which expects the ZED Mini
+side-by-side UVC mode and exposes only its left image:
 
 ```yaml
 cameras:
@@ -166,9 +168,9 @@ and +Z up.
 ### Camera Intrinsics
 
 ```bash
-handumi calibrate spatial intrinsics --camera left_wrist
-handumi calibrate spatial intrinsics --camera right_wrist
-handumi calibrate spatial intrinsics --camera workspace
+handumi calibrate spatial intrinsics --camera left
+handumi calibrate spatial intrinsics --camera right
+handumi calibrate spatial intrinsics --camera top
 ```
 
 Move the board throughout each image and vary distance and inclination. The
