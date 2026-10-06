@@ -54,7 +54,7 @@ class OpenCVCameraDevice(CameraDevice):
             Cv2Backends.V4L2
             if platform.startswith("linux")
             and isinstance(self.index_or_path, str)
-            and self.index_or_path.startswith("/dev/video")
+            and self.index_or_path.startswith(("/dev/video", "/dev/v4l/"))
             else Cv2Backends.ANY
         )
 
