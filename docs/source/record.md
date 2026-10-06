@@ -41,24 +41,27 @@ optional `recording:` section of `configs/rig.yaml`. CLI values override those
 defaults. Add `--dry-run` to resolve the complete plan, probe the encoder and
 exit before opening any hardware.
 
-Camera device settings are declared for `left_wrist`, `right_wrist`, and
-`workspace`. Each logical view chooses its own `opencv` or `zedmini` backend:
+Camera keys are user-defined and are preserved as dataset image names. Each
+logical view chooses its own `opencv` or `zedmini` backend. Use `role` when a
+name is not one of the recognized aliases (`left`/`left_wrist`,
+`right`/`right_wrist`, and `top`/`workspace`):
 
 ```yaml
 cameras:
-  workspace:
+  scene:
+    role: workspace
     type: zedmini
     index_or_path: 4
     width: 1344
     height: 376
     fps: 30
 recording:
-  cameras: [left_wrist, right_wrist, workspace]
+  cameras: [left, right, scene]
 ```
 
 The ZED Mini capture is stereo `1344×376`; only its left `672×376` half is
 stored. Feature shapes and camera metadata record that output resolution.
-Use `--cameras workspace` to select that logical view; the command does not
+Use `--cameras scene` to select that logical view; the command does not
 need to know which backend it uses.
 
 Use `--device pico` and a PICO-created `--session-calibration` for PICO. Add
@@ -86,6 +89,11 @@ robot profile from its `meta/info.json` snapshot. Explicit incompatible
 overrides are rejected before hardware starts, including FPS, cameras, image
 shapes, tracking schemas, calibrations, or target-robot metadata. The task text
 may change so the same dataset can contain multiple tasks.
+
+Image dimensions are stored in each image feature and in the per-camera
+snapshot. This supports rigs whose cameras have different output resolutions;
+the `recording.width` and `recording.height` values remain fallbacks only for
+camera entries that do not declare their own dimensions.
 
 Both `handumi record` and `handumi teleop-record` require `--output-dir`.
 For example, `--output-dir outputs/handumi-demo` stores the dataset in that

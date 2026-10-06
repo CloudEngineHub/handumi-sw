@@ -134,6 +134,41 @@ def test_recording_defaults_and_resume_preserve_side(tmp_path, monkeypatch):
     assert record._recording_values_from_dataset({}, {})["side"] == "both"
 
 
+def test_recording_accepts_rig_camera_names_and_filters_by_role(tmp_path, monkeypatch):
+    import sys
+
+    import yaml
+
+    from handumi.scripts import record
+
+    rig = tmp_path / "rig.yaml"
+    rig.write_text(
+        yaml.safe_dump(
+            {
+                "cameras": {
+                    "hand_a": {"role": "left", "index_or_path": 0},
+                    "hand_b": {"role": "right", "index_or_path": 2},
+                    "scene": {"role": "workspace", "index_or_path": 4},
+                },
+                "recording": {
+                    "robot": "franka_emika_panda",
+                    "cameras": ["hand_a", "hand_b", "scene"],
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["record", "--rig-config", str(rig), "--output-dir", str(tmp_path / "data")],
+    )
+
+    args = record._resolve_recording_args(record.parse_args())
+
+    assert args.active_sides == ("right",)
+    assert args.cameras == ["hand_b", "scene"]
+
+
 def test_merge_rejects_different_capture_sides(tmp_path):
     from handumi.dataset.merging import _require_compatible
 

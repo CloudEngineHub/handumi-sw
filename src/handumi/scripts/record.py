@@ -66,6 +66,7 @@ from handumi.cameras import (
 )
 from handumi.config import (
     DEFAULT_RIG_CONFIG,
+    camera_role,
     dataset_active_sides,
     load_optional_rig_section,
     resolve_active_sides,
@@ -153,7 +154,6 @@ _VALID_VIDEO_CODECS = {
     "libsvtav1",
     *_HARDWARE_VIDEO_CODECS,
 }
-_CAMERA_NAMES = ("left_wrist", "right_wrist", "workspace")
 _RECORDING_DEFAULTS: dict[str, object] = {
     "device": "meta",
     "cameras": ["left_wrist", "right_wrist"],
@@ -1256,7 +1256,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--cameras",
         type=_camera_list_arg,
         default=None,
-        help="Comma-separated logical cameras (left_wrist,right_wrist,workspace).",
+        help="Comma-separated camera names declared under cameras in the rig config.",
     )
     p.add_argument(
         "--rig-config",
@@ -1504,6 +1504,7 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
             args.cam_ids = list(resume_cam_ids)
 
     rig = load_optional_rig_section(args.rig_config, "recording")
+    rig_cameras = load_optional_rig_section(args.rig_config, "cameras")
     aliases = {
         "width": "cam_width",
         "height": "cam_height",
@@ -1511,6 +1512,13 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
         "sample_fps": "fps",
     }
     rig_values = {aliases.get(key, key): value for key, value in rig.items()}
+    if "cameras" not in rig_values and rig_cameras:
+        wrist_names = [
+            name
+            for name, entry in rig_cameras.items()
+            if camera_role(name, entry) in ("left", "right")
+        ]
+        rig_values["cameras"] = wrist_names or list(rig_cameras)
 
     for name, fallback in _RECORDING_DEFAULTS.items():
         if getattr(args, name, None) is not None:
@@ -1551,9 +1559,19 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     args.side = "both" if len(args.active_sides) == 2 else args.active_sides[0]
+    unknown_cameras = [name for name in args.cameras if rig_cameras and name not in rig_cameras]
+    if unknown_cameras and not args.resume:
+        raise SystemExit(
+            f"Unknown camera(s) in {args.rig_config}: {', '.join(unknown_cameras)}. "
+            f"Choose from: {', '.join(rig_cameras)}."
+        )
     if not explicit["cameras"] and not args.resume:
-        args.cameras = [name for name in args.cameras
-                        if not name.endswith("_wrist") or name.removesuffix("_wrist") in args.active_sides]
+        args.cameras = [
+            name
+            for name in args.cameras
+            if camera_role(name, rig_cameras.get(name)) not in ("left", "right")
+            or camera_role(name, rig_cameras.get(name)) in args.active_sides
+        ]
     if not args.cameras:
         raise SystemExit("No cameras selected for the active side. Set --cameras to an available wrist or workspace view.")
 
@@ -2605,10 +2623,6 @@ def _resume_handumi_metadata(
             "audio", audio_metadata(bool(getattr(args, "record_audio", False)))
         ),
         "camera_fps": stable_value("camera_fps", getattr(args, "cam_fps", None)),
-        "camera_resolution": stable_value(
-            "camera_resolution",
-            [getattr(args, "cam_height", None), getattr(args, "cam_width", None)],
-        ),
         "tracking_loss_timeout_s": stable_value(
             "tracking_loss_timeout_s", getattr(args, "tracking_loss_timeout_s", None)
         ),
@@ -2761,7 +2775,6 @@ def _validate_resume_target(
     simple_keys = (
         "recording_device",
         "camera_fps",
-        "camera_resolution",
         "tracking_loss_timeout_s",
         "tracking_schema",
         "tracking_workspace",
@@ -2824,6 +2837,10 @@ def _update_info_json(
         return None
     info = json.loads(path.read_text())
     info["handumi"] = {**info.get("handumi", {}), **handumi}
+    # Image dimensions are authoritative in each feature and in the per-camera
+    # snapshot.  The former global field could only describe one resolution and
+    # was incorrect whenever a camera-specific rig entry overrode the fallback.
+    info["handumi"].pop("camera_resolution", None)
     path.write_text(json.dumps(info, indent=4) + "\n")
     return info
 
@@ -2943,11 +2960,6 @@ def _normalize_camera_list(value: object) -> list[str]:
         names = [str(item).strip() for item in value if str(item).strip()]
     else:
         raise SystemExit("Recording cameras must be a list or comma-separated string.")
-    invalid = sorted(set(names) - set(_CAMERA_NAMES))
-    if invalid:
-        raise SystemExit(
-            f"Unknown camera(s): {', '.join(invalid)}. Choose from: {', '.join(_CAMERA_NAMES)}."
-        )
     if not names:
         raise SystemExit("At least one recording camera is required.")
     if len(names) != len(set(names)):
