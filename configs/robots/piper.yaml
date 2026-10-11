@@ -37,7 +37,7 @@ arms:
 # use this exact vector and never request the SDK go-zero routine.
 # home_q layout: [left_joint1..7, right_joint1..7] (left first, matching
 # `arms.left`/`arms.right` above and mjcf_joint_prefix_map izq_/der_).
-home_q: [0.0, 0.0, 0.0, 0.0, 0.2617994, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0]
+home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0]
 # Nominal working posture for the IK posture cost (replay.ik_weights.posture)
 # and the seed of the start-pose solve. Median joints of XHUMAN's real Piper
 # teleoperation while the arm works (fruits dataset): shoulder 100 deg, elbow
@@ -71,11 +71,6 @@ ik_weights:
   pos: 125.0
   ori: 20.0
   rest: 20.0
-  # Tabletop height in the robot world frame. The bases sit on a 3 cm T-slot
-  # rail, so the table is 3 cm below the base plane; matches robot_from_table
-  # in configs/calibration/table/sim/piper.yaml. Screening's table-clearance
-  # metric reads this; the arm-table collision cost stays off (weight 0).
-  world_collision_plane_z: -0.035
   # Legacy LM/offline cap: 2 deg per IK frame at the historical 30 Hz.
   max_joint_delta: 0.03490659
   # Cartesian radius in meters around each home TCP; unrelated to FPS.
