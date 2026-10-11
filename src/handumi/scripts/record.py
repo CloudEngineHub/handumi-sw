@@ -54,7 +54,6 @@ from handumi.calibration.control_tcp import (
 from handumi.calibration.spatial import (
     pose7_from_dict,
     session_calibration_metadata,
-    session_table_from_device,
 )
 from handumi.cameras import (
     build_camera_specs,
@@ -103,6 +102,7 @@ from handumi.tracking.base import ControllerPairSample, TrackingProvider
 from handumi.tracking.gestures import BilateralClapArbiter, DoubleClapDetector
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
 from handumi.tracking.pico import (
+    PicoTrackingFrozenError,
     START_BUTTON_CHOICES,
     PicoTrackingProvider,
     read_start_button_value,
@@ -1047,6 +1047,14 @@ def record_episode(
             status = "interrupted"
             dataset.clear_episode_buffer()
             break
+        target_time_ns = max(episode_start_ns, tracking_now_ns - sync_lag_ns)
+        # Check freshness before accepting a timer/button save as well as rows.
+        # Fatal provider errors use main's discard-and-finalize path.
+        try:
+            sample = tracking_sample_at(tracker, target_time_ns)
+        except PicoTrackingFrozenError:
+            dataset.clear_episode_buffer()
+            raise
         if episode_deadline_s is not None and elapsed >= episode_deadline_s:
             if (
                 tracking_lost_since_ns is not None
@@ -1114,7 +1122,6 @@ def record_episode(
             dashboard.update_grippers(
                 control_widths.left_mm, control_widths.right_mm
             )
-        sample = tracking_sample_at(tracker, target_time_ns)
         sample_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
         tracking_sync_ok = bool(
             sample_time_ns > 0
@@ -1591,10 +1598,18 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
     if not args.cameras:
         raise SystemExit("No cameras selected for the active side. Set --cameras to an available wrist or workspace view.")
 
-    if args.session_calibration is None and not args.resume:
+    if args.session_calibration is None:
         configured_session = rig_values.get("session_calibration")
         if configured_session:
             args.session_calibration = Path(str(configured_session))
+        elif args.resume:
+            sessions = args._resume_handumi.get("recording_sessions") or []
+            saved = (
+                sessions[-1].get("spatial_session_calibration")
+                if sessions else args._resume_handumi.get("spatial_session_calibration")
+            )
+            if isinstance(saved, dict) and saved.get("path"):
+                args.session_calibration = Path(str(saved["path"]))
 
     if args.clap_control is None:
         # The shells are already connected for width capture, so hands-free
@@ -1703,17 +1718,18 @@ def _validate_args(args: argparse.Namespace) -> None:
 def _resolve_spatial_session_metadata(
     args: argparse.Namespace,
 ) -> dict[str, object] | None:
-    explicit = getattr(args, "_explicit_recording", {})
     resume_handumi = getattr(args, "_resume_handumi", None)
     embedded = (
         resume_handumi.get("spatial_session_calibration")
         if isinstance(resume_handumi, dict)
         else None
     )
-    if args.resume and not explicit.get("session_calibration"):
-        if embedded is None or isinstance(embedded, dict):
-            return embedded
-        raise SystemExit("Resumed dataset has invalid spatial calibration metadata.")
+    if args.resume and embedded is not None and args.session_calibration is None:
+        raise SystemExit(
+            "Resuming a table-calibrated dataset requires a current session file. "
+            "Pass --session-calibration PATH (the same calibration may be reused "
+            "while the VR origin is unchanged)."
+        )
     try:
         return session_calibration_metadata(args.session_calibration)
     except (OSError, KeyError, TypeError, ValueError) as exc:
@@ -1756,6 +1772,12 @@ def _print_recording_plan(
     print(f"  Encoder:  {encoder_label}")
     print(f"  Audio:    {'PICO PCM WAV' if args.record_audio else 'disabled'}")
     print(f"  Workspace: {workspace}; Controller->TCP: {calibration_source}")
+    if spatial_session_metadata:
+        print(
+            f"  Session: {spatial_session_metadata.get('path')} "
+            f"created={spatial_session_metadata.get('created_at')} "
+            f"sha256={spatial_session_metadata.get('sha256')}"
+        )
     if args.dry_run:
         print("  Result:   plan resolved; hardware was not opened")
 
@@ -1906,15 +1928,7 @@ def main() -> None:
         set_workspace = getattr(tracker, "set_workspace_from_device_pose", None)
         if set_workspace is None:
             raise SystemExit("Selected tracking backend cannot apply a table calibration.")
-        if args.session_calibration is not None:
-            table_from_device = session_table_from_device(args.session_calibration)
-        else:
-            embedded_pose = spatial_session_metadata.get("table_from_device")
-            if not isinstance(embedded_pose, dict):
-                raise SystemExit(
-                    "Resumed spatial calibration has no embedded table_from_device pose."
-                )
-            table_from_device = pose7_from_dict(embedded_pose)
+        table_from_device = pose7_from_dict(spatial_session_metadata["table_from_device"])
         set_workspace(table_from_device, locked=True)
     tracker.start()
 
@@ -2178,9 +2192,9 @@ def main() -> None:
                 # other unexpected failure must not lose already-saved
                 # episodes: discard only the one that was in flight and stop.
                 fatal_recording_error = exc
-                if isinstance(exc, CameraCaptureError):
+                if isinstance(exc, (CameraCaptureError, PicoTrackingFrozenError)):
                     log.error(
-                        "Camera failure during episode %d; discarding it and "
+                        "Capture failure during episode %d; discarding it and "
                         "aborting recording: %s",
                         ep_num,
                         exc,
@@ -2309,6 +2323,12 @@ def main() -> None:
                 cameras,
                 grippers,
                 audio_enabled=bool(args.record_audio),
+            )
+            _record_session_history(
+                handumi_metadata,
+                previous=resume_handumi,
+                first_episode=existing_episodes,
+                end_episode=existing_episodes + recorded,
             )
             updated_info = _update_info_json(
                 root,
@@ -2840,10 +2860,10 @@ def _validate_resume_target(
             "controller_mount",
         ),
         "spatial_session_calibration": (
-            "sha256",
             "spatial_calibration_sha256",
             "tracking_device",
             "workspace_frame",
+            "board_id",
         ),
         "target_robot": ("name", "sha256"),
     }
@@ -2858,6 +2878,36 @@ def _validate_resume_target(
         raise SystemExit(
             f"Cannot resume {root}: recording configuration is incompatible:\n  - {details}"
         )
+
+
+def _record_session_history(
+    metadata: dict[str, object],
+    *,
+    previous: dict[str, object] | None,
+    first_episode: int,
+    end_episode: int,
+) -> None:
+    """Keep immutable calibration snapshots for half-open episode ranges."""
+    previous = previous or {}
+    sessions = list(previous.get("recording_sessions") or [])
+    original = previous.get("spatial_session_calibration")
+    if not sessions and first_episode:
+        sessions.append({
+            "episode_from": 0,
+            "episode_to": first_episode,
+            "spatial_session_calibration": original,
+        })
+    if end_episode > first_episode:
+        sessions.append({
+            "episode_from": first_episode,
+            "episode_to": end_episode,
+            "spatial_session_calibration": metadata.get("spatial_session_calibration"),
+        })
+    metadata["recording_sessions"] = sessions
+    # Retain the original snapshot for legacy consumers; per-run snapshots are
+    # authoritative for session transforms. Raw rows already store table poses.
+    if first_episode:
+        metadata["spatial_session_calibration"] = original
 
 
 def _update_info_json(

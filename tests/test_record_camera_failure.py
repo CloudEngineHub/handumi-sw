@@ -8,6 +8,7 @@ import pytest
 
 from handumi.scripts.record import CameraCaptureError, record_episode
 from handumi.tracking.base import ControllerPairSample
+from handumi.tracking.pico import PicoTrackingFrozenError
 
 
 class _Dataset:
@@ -65,4 +66,33 @@ def test_record_episode_treats_camera_loss_as_fatal() -> None:
             sensor_loss_timeout_s=0.0,
         )
 
+    assert dataset.frames == []
+
+
+def test_frozen_tracking_discards_active_buffer_even_when_timer_would_save():
+    class FrozenTracker:
+        def latest(self):
+            raise PicoTrackingFrozenError("PICO tracking frozen")
+
+    dataset = _Dataset()
+    dataset.frames.append({"previous_frame_of_active_episode": True})
+    with pytest.raises(PicoTrackingFrozenError, match="frozen"):
+        record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=FrozenTracker(),
+            grippers=None,
+            episode_time_s=1e-12,
+            fps=30,
+            task="test",
+            cam_width=640,
+            cam_height=480,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="a",
+            finish_button="b",
+            start_threshold=0.5,
+        )
     assert dataset.frames == []

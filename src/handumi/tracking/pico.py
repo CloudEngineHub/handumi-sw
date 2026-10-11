@@ -532,6 +532,10 @@ def read_pico_frame(xrt, *, mode: str) -> dict:
     return frame
 
 
+class PicoTrackingFrozenError(RuntimeError):
+    """The SDK is returning a cached sample instead of new device data."""
+
+
 class PicoTrackingProvider:
     """PICO/XRoboToolkit provider normalized to the common controller schema."""
 
@@ -553,6 +557,9 @@ class PicoTrackingProvider:
         self.workspace_from_device_pose = IDENTITY_POSE7.astype(np.float32).copy()
         self.workspace_set = False
         self.workspace_locked = False
+        self._last_device_time_ns: int | None = None
+        self._last_device_progress_ns: int | None = None
+        self._last_sample_received_ns = 0
 
     def start(self) -> None:
         if self.transport == "adb":
@@ -617,6 +624,9 @@ class PicoTrackingProvider:
         return False
 
     def stop(self) -> None:
+        self._last_device_time_ns = None
+        self._last_device_progress_ns = None
+        self._last_sample_received_ns = 0
         if self.xrt is not None:
             try:
                 self.xrt.close()
@@ -652,8 +662,24 @@ class PicoTrackingProvider:
         device_time_ns = int(
             np.asarray(frame["observation.pico.timestamp_ns"]).reshape(-1)[0]
         )
-        tracked = bool(np.any(left_device[:3]) or np.any(right_device[:3]))
         pc_time_ns = time.monotonic_ns()
+        if self._last_device_progress_ns is None:
+            self._last_device_progress_ns = pc_time_ns
+        if device_time_ns > 0 and (
+            self._last_device_time_ns is None or device_time_ns > self._last_device_time_ns
+        ):
+            self._last_device_time_ns = device_time_ns
+            self._last_device_progress_ns = pc_time_ns
+            self._last_sample_received_ns = pc_time_ns
+        elif pc_time_ns - self._last_device_progress_ns >= 1_000_000_000:
+            raise PicoTrackingFrozenError(
+                "PICO tracking frozen: device timestamp has not advanced for 1 s "
+                f"(timestamp={device_time_ns}). Recording must stop; restart tracking "
+                "and verify the table/session calibration before recording again."
+            )
+        # Re-reading the SDK cache must not manufacture a fresh receive time.
+        pc_time_ns = self._last_sample_received_ns
+        tracked = bool(pc_time_ns and (np.any(left_device[:3]) or np.any(right_device[:3])))
         return ControllerPairSample(
             device=self.device,
             left_controller_pose=left,

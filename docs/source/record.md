@@ -84,11 +84,34 @@ handumi record --output-dir outputs/handumi-demo --resume \
 
 `--episodes` is the number of additional episodes, not the new total.
 Resume requires an intact dataset from a previous graceful finalization and
-loads the device, cameras, FPS, image format, calibrations, Feetech state and
+loads the device, cameras, FPS, image format, tool calibration, Feetech state and
 robot profile from its `meta/info.json` snapshot. Explicit incompatible
 overrides are rejected before hardware starts, including FPS, cameras, image
 shapes, tracking schemas, calibrations, or target-robot metadata. The task text
 may change so the same dataset can contain multiple tasks.
+
+The table/session calibration is read from the **current file** on every run,
+including resume. Selection order is `--session-calibration`,
+`recording.session_calibration` in the rig, then the last session's saved path.
+A missing file is an error; resume never silently reuses an embedded transform.
+Reusing the same file is valid while the VR origin is unchanged. After a new
+tracking session, reset, or relocalization, run `calibrate spatial ... session`
+and `verify` before resuming. A new session transform is accepted when its
+spatial calibration, device, and board remain compatible.
+
+`handumi.recording_sessions` in `meta/info.json` preserves calibration snapshots
+with `episode_from` (inclusive) and `episode_to` (exclusive). The top-level
+`spatial_session_calibration` remains the original snapshot for compatibility.
+Each raw row also stores `workspace_from_device_pose` and original device poses;
+`observation.state` already contains controller poses in the common table frame,
+which replay/conversion uses without applying the session transform again.
+Legacy datasets receive an initial history entry for their existing episodes;
+this records their original calibration, not a correction of old measurements.
+
+If the PICO device timestamp stops advancing for one second, recording aborts,
+discards the active episode and finalizes previously saved episodes. A stationary
+controller with advancing sample timestamps is valid. Restart tracking and
+verify/recalibrate the session before recording again.
 
 Image dimensions are stored in each image feature and in the per-camera
 snapshot. This supports rigs whose cameras have different output resolutions;
