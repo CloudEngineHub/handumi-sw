@@ -234,11 +234,13 @@ the simulation replay. The hardware run measures only what simulation cannot:
   tolerance. OpenArm's stream is a plain rate limiter and ignores that flag.
 - **Table placement.** The dataset was retargeted for the table pose in its
   `handumi.deployment_calibration`, and that pose is baked into the stored
-  joints: replay cannot move it, so the plan prints it (the sim profile is
-  centered between the bases at base height, 0.45 m forward for Piper) and
+  joints: replay cannot move it, so the plan prints it (the Piper sim profile
+  puts the ChArUco center 0.325 m in front of the bases, centered between
+  them, with the tabletop 3 cm below the bases on their T-slot rail) and
   flags an unverified or simulation-only profile. The physical bases must
-  match the URDF separation (0.60 m for the bi-Piper) and the table surface
-  must sit at base height, or the fingertip will land at the wrong height.
+  match the URDF separation (0.68 m for the bi-Piper) and the table surface
+  must sit at the profile's height, or the fingertip will land at the wrong
+  height.
   Check the lowest TCP height of an episode in the screening report
   (`meta/handumi_screening_<robot>.md`, `table` column) before replaying it,
   and clear the table for the first run. Objects go where the demonstration

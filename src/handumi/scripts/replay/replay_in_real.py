@@ -807,8 +807,8 @@ def describe_table_placement(info: dict[str, object]) -> list[str]:
             if position is not None:
                 x, y, z = (float(v) for v in position)
                 lines.append(
-                    f"    table origin at x={x:.2f} m forward, y={y:.2f} m left, "
-                    f"z={z:.2f} m from the robot world origin (between the arm bases)"
+                    f"    table origin at x={x:.3f} m forward, y={y:.3f} m left, "
+                    f"z={z:.3f} m from the robot world origin (between the arm bases)"
                 )
         except Exception:  # noqa: BLE001 - informational only
             pass

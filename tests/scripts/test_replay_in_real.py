@@ -122,7 +122,7 @@ def test_plan_decodes_exported_and_canonical_identically(canonical_dataset, expo
         "profile": "sim", "scope": "simulation", "verified": False,
         "path": "configs/calibration/table/sim/piper.yaml"}}}
     placement = "\n".join(rr.describe_table_placement(sim_info))
-    assert "profile sim (unverified" in placement and "x=0.45 m forward" in placement
+    assert "profile sim (unverified" in placement and "x=0.325 m forward" in placement
     assert "not a measured installation" in placement
 
 
