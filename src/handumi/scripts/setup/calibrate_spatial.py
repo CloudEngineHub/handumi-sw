@@ -50,7 +50,11 @@ from handumi.config import (
 from handumi.robots.utils import IDENTITY_POSE7, pose7_to_mat
 from handumi.tracking.base import TrackingProvider
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
-from handumi.tracking.pico import PicoTrackingProvider
+from handumi.tracking.pico import (
+    PICO_MODE_CHOICES,
+    PicoTrackingProvider,
+    normalize_pico_mode,
+)
 from handumi.utils.trajectory import TrajectoryTrail
 from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
 
@@ -771,7 +775,6 @@ def cmd_session(args: argparse.Namespace) -> None:
         "tracking_device": args.device,
         "source_side": args.side,
         "table_from_device": pose7_to_dict(table_from_device),
-        "table_from_camera": {},
         "metrics": metrics,
     }
     if args.device == "meta":
@@ -783,16 +786,6 @@ def cmd_session(args: argparse.Namespace) -> None:
         args.output,
         metrics["translation_rms_mm"],
     )
-    if not args.skip_workspace:
-        session["table_from_camera"]["workspace"] = _calibrate_workspace(
-            args,
-            spatial,
-            board,
-            views=args.workspace_views,
-            max_rms_mm=args.max_rms_mm,
-        )
-        write_yaml(args.output, session)
-        log.info("Saved workspace-camera calibration to %s.", args.output)
 
 
 def cmd_workspace(args: argparse.Namespace) -> None:
@@ -1239,8 +1232,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sync-port", type=int)
     parser.add_argument(
         "--pico-mode",
-        choices=("mandos", "object", "whole-body"),
-        default="mandos",
+        type=normalize_pico_mode,
+        choices=PICO_MODE_CHOICES,
+        default="controllers",
     )
     pico_transport = parser.add_mutually_exclusive_group()
     pico_transport.add_argument("--pico-adb", action="store_true")
@@ -1289,11 +1283,13 @@ def parse_args() -> argparse.Namespace:
     session = sub.add_parser("session", help="Set the table frame for this tracking session.")
     session.add_argument("--side", choices=("left", "right"), required=True)
     session.add_argument("--views", type=int, default=5)
-    session.add_argument("--workspace-views", type=int, default=3)
+    # Kept as hidden no-ops so existing setup scripts continue to work. Workspace
+    # calibration is now always an explicit, independent subcommand.
+    session.add_argument("--workspace-views", type=int, default=3, help=argparse.SUPPRESS)
     session.add_argument(
         "--skip-workspace",
         action="store_true",
-        help="Do not calibrate the fixed workspace camera for this session.",
+        help=argparse.SUPPRESS,
     )
     session.add_argument("--max-rms-mm", type=float, default=8.0)
     session.add_argument("--spatial", type=Path, default=DEFAULT_SPATIAL)
@@ -1320,7 +1316,7 @@ def parse_args() -> argparse.Namespace:
     verify.set_defaults(func=cmd_verify)
 
     visualize = sub.add_parser(
-        "visualize", help="Open the calibrated three-camera Rerun view."
+        "visualize", help="Open the available calibrated cameras in Rerun."
     )
     visualize.add_argument("--spatial", type=Path, default=DEFAULT_SPATIAL)
     visualize.add_argument("--session", type=Path, default=DEFAULT_SESSION)

@@ -44,6 +44,7 @@ from handumi.robots.registry import (
     load_robot_config,
 )
 from handumi.tracking.base import TrackingProvider
+from handumi.tracking.pico import PICO_MODE_CHOICES, normalize_pico_mode
 
 DEFAULT_SPATIAL = Path("outputs/calibration/spatial.yaml")
 DEFAULT_SESSION = Path("outputs/calibration/session.yaml")
@@ -157,7 +158,10 @@ def _verify_spatial_and_session(
     rig_cameras = load_rig_section(args.rig_config, "cameras")
     camera_names: dict[str, str] = {}
     missing_cameras = []
-    for role in ("left", "right", "workspace"):
+    # Only wrist cameras participate in the controller -> camera -> board chain.
+    # The fixed workspace camera is an optional observation stream and has its
+    # own explicit calibration command.
+    for role in ("left", "right"):
         try:
             rig_name = resolve_camera_role(rig_cameras, role)
             camera_names[role] = (
@@ -209,7 +213,7 @@ def _verify_spatial_and_session(
             checks,
             "PASS",
             "spatial",
-            f"3 camera intrinsics and 2 controller mounts in {args.spatial}",
+            f"2 wrist-camera intrinsics and 2 controller mounts in {args.spatial}",
         )
 
     try:
@@ -270,15 +274,6 @@ def _verify_spatial_and_session(
             "PASS",
             "session",
             f"{device}, translation RMS={rms:.2f} mm, spatial hash matches",
-        )
-
-    table_cameras = session.get("table_from_camera") or {}
-    if "workspace" not in table_cameras:
-        _add(
-            checks,
-            "WARN",
-            "workspace camera",
-            "not present in the session; run `handumi calibrate spatial workspace` if it is in use",
         )
 
 
@@ -626,7 +621,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tcp-port", type=int)
     parser.add_argument("--sync-port", type=int)
     parser.add_argument(
-        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
+        "--pico-mode",
+        type=normalize_pico_mode,
+        choices=PICO_MODE_CHOICES,
+        default="controllers",
     )
     transport = parser.add_mutually_exclusive_group()
     transport.add_argument("--pico-adb", action="store_true")

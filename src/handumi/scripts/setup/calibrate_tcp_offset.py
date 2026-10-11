@@ -53,6 +53,7 @@ from handumi.calibration.control_tcp import (
     write_controller_tcp_calibration,
 )
 from handumi.robots.utils import IDENTITY_POSE7, pose_inv, quat_normalize
+from handumi.tracking.pico import PICO_MODE_CHOICES, normalize_pico_mode
 
 COMMANDS = {"pivot", "orient", "inspect", "promote"}
 
@@ -686,7 +687,10 @@ def add_live_capture_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tcp-port", type=int, default=None)
     parser.add_argument("--sync-port", type=int, default=None)
     parser.add_argument(
-        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
+        "--pico-mode",
+        type=normalize_pico_mode,
+        choices=PICO_MODE_CHOICES,
+        default="controllers",
     )
     transport = parser.add_mutually_exclusive_group()
     transport.add_argument("--pico-adb", action="store_true")

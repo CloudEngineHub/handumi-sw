@@ -22,7 +22,7 @@ Usage
 
     handumi tracking pose --device meta
     handumi tracking pose --device meta --quest-ip 192.168.1.42
-    handumi tracking pose --device pico --pico-mode mandos
+    handumi tracking pose --device pico --pico-mode controllers
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from handumi.calibration.control_tcp import ControllerTcpCalibration
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.scripts.record import build_tracker
+from handumi.tracking.pico import PICO_MODE_CHOICES, normalize_pico_mode
 
 
 def _identity_tcp_calibration() -> ControllerTcpCalibration:
@@ -59,8 +60,9 @@ def main() -> None:
     parser.add_argument("--sync-port", type=int, default=None)
     parser.add_argument(
         "--pico-mode",
-        choices=("mandos", "object", "whole-body"),
-        default="mandos",
+        type=normalize_pico_mode,
+        choices=PICO_MODE_CHOICES,
+        default="controllers",
     )
     pico_transport = parser.add_mutually_exclusive_group()
     pico_transport.add_argument("--pico-adb", action="store_true")

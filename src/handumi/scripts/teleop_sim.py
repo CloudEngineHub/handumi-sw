@@ -41,7 +41,7 @@ Usage
 
     handumi teleop --device meta
     handumi teleop --device meta --quest-ip 127.0.0.1 --no-browser
-    handumi teleop --device pico --pico-mode mandos
+    handumi teleop --device pico --pico-mode controllers
 """
 
 from __future__ import annotations
@@ -93,6 +93,7 @@ from handumi.teleop.motion import (
 )
 from handumi.teleop.session import TeleopSession
 from handumi.tracking.gestures import DoubleClapDetector
+from handumi.tracking.pico import PICO_MODE_CHOICES, normalize_pico_mode
 from handumi.utils.speech import log_say
 from handumi.utils.trajectory import TrajectoryTrail
 from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
@@ -221,8 +222,9 @@ def _parse_sim_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--sync-port", type=int, default=None, help=advanced("Quest sync port."))
     p.add_argument(
         "--pico-mode",
-        choices=("mandos", "object", "whole-body"),
-        default="mandos",
+        type=normalize_pico_mode,
+        choices=PICO_MODE_CHOICES,
+        default="controllers",
         help=advanced("PICO tracking mode.")
     )
     pico_transport = p.add_mutually_exclusive_group()

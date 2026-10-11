@@ -30,8 +30,14 @@ SERVICE_WAIT_S = 3.0
 PICO_SERVICE_PORT = 63901
 PICO_AUDIO_SERVICE_PORT = 63903
 PICO_SERVICE_PORTS = (PICO_SERVICE_PORT, PICO_AUDIO_SERVICE_PORT)
+PICO_MODE_CHOICES = ("controllers", "object", "whole-body")
 
 MAX_MOTION_TRACKERS = 2
+
+
+def normalize_pico_mode(mode: str) -> str:
+    """Return the public English PICO mode name, accepting the legacy alias."""
+    return "controllers" if mode == "mandos" else mode
 
 START_BUTTON_CHOICES = [
     "enter",
@@ -233,6 +239,7 @@ def init_xrt():
 
 def wait_for_pico_data(xrt, *, mode: str, timeout_s: float = 15.0) -> bool:
     """Block until the requested PICO data stream is available or timeout expires."""
+    mode = normalize_pico_mode(mode)
     if mode == "whole-body":
         log.info("Waiting for PICO body-tracking data ...")
     elif mode == "object":
@@ -253,7 +260,7 @@ def wait_for_pico_data(xrt, *, mode: str, timeout_s: float = 15.0) -> bool:
             except AttributeError:
                 log.warning("xrobotoolkit_sdk does not expose motion tracker APIs.")
                 return False
-        if mode == "mandos":
+        if mode == "controllers":
             try:
                 np.asarray(xrt.get_left_controller_pose(), dtype=np.float32)
                 np.asarray(xrt.get_right_controller_pose(), dtype=np.float32)
@@ -545,12 +552,17 @@ class PicoTrackingProvider:
         self,
         *,
         calibration: ControllerTcpCalibration,
-        mode: str = "mandos",
+        mode: str = "controllers",
         transport: str = "adb",
         skip_adb_check: bool = False,
     ) -> None:
         self.calibration = calibration
-        self.mode = mode
+        self.mode = normalize_pico_mode(mode)
+        if self.mode not in PICO_MODE_CHOICES:
+            raise ValueError(
+                f"Unsupported PICO tracking mode {mode!r}; choose from "
+                f"{', '.join(PICO_MODE_CHOICES)}."
+            )
         self.transport = transport
         self.skip_adb_check = skip_adb_check
         self.xrt = None

@@ -102,9 +102,11 @@ from handumi.tracking.base import ControllerPairSample, TrackingProvider
 from handumi.tracking.gestures import BilateralClapArbiter, DoubleClapDetector
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
 from handumi.tracking.pico import (
+    PICO_MODE_CHOICES,
     PicoTrackingFrozenError,
     START_BUTTON_CHOICES,
     PicoTrackingProvider,
+    normalize_pico_mode,
     read_start_button_value,
     wait_for_manual_start,
     wait_for_start_button,
@@ -1434,7 +1436,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--tcp-port", type=int, default=None, help=advanced("Quest TCP port override."))
     p.add_argument("--sync-port", type=int, default=None, help=advanced("Quest sync port override."))
 
-    p.add_argument("--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos", help=advanced("PICO tracking mode."))
+    p.add_argument(
+        "--pico-mode",
+        type=normalize_pico_mode,
+        choices=PICO_MODE_CHOICES,
+        default="controllers",
+        help=advanced("PICO tracking mode."),
+    )
     pico_transport = p.add_mutually_exclusive_group()
     pico_transport.add_argument("--pico-adb", action="store_true", help=advanced("Use PICO over ADB."))
     pico_transport.add_argument("--pico-wifi", action="store_true", help=advanced("Use PICO over Wi-Fi."))

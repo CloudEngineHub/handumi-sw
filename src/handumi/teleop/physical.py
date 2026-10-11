@@ -10,6 +10,7 @@ from handumi.real.registry import REAL_BACKEND_NAMES
 from handumi.teleop.common import SIDE_CHOICES
 from handumi.teleop.motion import add_teleop_motion_arguments
 from handumi.teleop.standby import GRIPPER_PARK_HOLD_S
+from handumi.tracking.pico import PICO_MODE_CHOICES, normalize_pico_mode
 
 DEFAULT_TRANSLATION_SCALE = 1.7
 DEFAULT_TRACKING_STALE_MS = 150.0
@@ -111,7 +112,10 @@ def add_physical_teleop_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tcp-port", type=int, default=None)
     parser.add_argument("--sync-port", type=int, default=None)
     parser.add_argument(
-        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
+        "--pico-mode",
+        type=normalize_pico_mode,
+        choices=PICO_MODE_CHOICES,
+        default="controllers",
     )
     pico_transport = parser.add_mutually_exclusive_group()
     pico_transport.add_argument("--pico-adb", action="store_true")

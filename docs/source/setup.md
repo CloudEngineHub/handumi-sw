@@ -196,8 +196,8 @@ handumi calibrate spatial --device meta mount --side right
 PICO:
 
 ```bash
-handumi calibrate spatial --device pico --pico-mode mandos mount --side left
-handumi calibrate spatial --device pico --pico-mode mandos mount --side right
+handumi calibrate spatial --device pico --pico-mode controllers mount --side left
+handumi calibrate spatial --device pico --pico-mode controllers mount --side right
 ```
 
 PICO calibration relies on live XRoboToolkit snapshots, so hold the HandUMI
@@ -219,9 +219,9 @@ handumi calibrate spatial --device meta visualize
 For PICO:
 
 ```bash
-handumi calibrate spatial --device pico --pico-mode mandos session --side left
-handumi calibrate spatial --device pico --pico-mode mandos verify --side left
-handumi calibrate spatial --device pico --pico-mode mandos visualize
+handumi calibrate spatial --device pico --pico-mode controllers session --side left
+handumi calibrate spatial --device pico --pico-mode controllers verify --side left
+handumi calibrate spatial --device pico --pico-mode controllers visualize
 ```
 
 `session` reads wrist-camera intrinsics and the controller-to-camera mount from
@@ -235,12 +235,19 @@ different ChArUco dimensions, and warns when their camera mappings differ.
 a table-frame error above its acceptance limits. Run it while the board is
 still fixed; recapture the session if it fails.
 
-Inspect all cameras and both TCP trails in Rerun. The table surface must align
-with `z=0`. If only the workspace-camera stage fails, retry it with:
+Inspect the wrist cameras and both TCP trails in Rerun. The table surface must
+align with `z=0`.
+
+The fixed workspace camera is not part of the controller-to-table calibration
+chain. Recording its video does not require a spatial pose. Only calibrate its
+pose if a downstream workflow needs geometric projection or inpainting:
 
 ```bash
 handumi calibrate spatial workspace
 ```
+
+This optional command requires workspace-camera intrinsics. Its absence does
+not make `session`, `verify`, recording, or replay invalid.
 
 Remove the board without moving the table, cameras, or headset. Repeat the
 session calibration after relocalization or a tracking reset. The saved

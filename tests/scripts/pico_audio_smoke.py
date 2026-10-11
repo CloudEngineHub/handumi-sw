@@ -83,7 +83,7 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     tracker = PicoTrackingProvider(
         calibration=_identity_calibration(),
-        mode="mandos",
+        mode="controllers",
         transport="wifi" if args.pico_wifi else "adb",
         skip_adb_check=args.skip_adb_check,
     )

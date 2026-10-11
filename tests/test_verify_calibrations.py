@@ -5,6 +5,7 @@ from typing import cast
 
 import numpy as np
 
+from handumi.calibration.spatial import calibration_hash, write_yaml
 from handumi.scripts import cli
 from handumi.scripts.setup import verify_calibrations
 from handumi.tracking.base import TrackingProvider
@@ -72,6 +73,79 @@ calibration:
     mirror = next(check for check in checks if check.name == "TCP mirror")
     assert mirror.status == "WARN"
     assert "200.00 mm" in mirror.detail
+
+
+def test_spatial_verifier_does_not_require_workspace_camera(tmp_path: Path) -> None:
+    rig = tmp_path / "rig.yaml"
+    spatial_path = tmp_path / "spatial.yaml"
+    session_path = tmp_path / "session.yaml"
+    board = {
+        "id": "test-board",
+        "squares_x": 5,
+        "squares_y": 7,
+        "dictionary": "DICT_5X5_100",
+        "square_length_m": 0.03,
+        "marker_length_m": 0.015,
+        "legacy_pattern": False,
+    }
+    rig.write_text(
+        """\
+cameras:
+  left: {index_or_path: 0}
+  right: {index_or_path: 1}
+  top: {index_or_path: 2}
+spatial_calibration:
+  board:
+    id: test-board
+    squares_x: 5
+    squares_y: 7
+    dictionary: DICT_5X5_100
+    square_length_m: 0.03
+    marker_length_m: 0.015
+    legacy_pattern: false
+""",
+        encoding="utf-8",
+    )
+    spatial = {
+        "kind": "handumi_spatial_calibration",
+        "board": board,
+        "cameras": {
+            "left": {"mean_error_px": 0.2},
+            "right": {"mean_error_px": 0.3},
+        },
+        "controller_camera": {
+            "left": {"metrics": {"translation_rms_mm": 1.0}},
+            "right": {"metrics": {"translation_rms_mm": 1.5}},
+        },
+    }
+    write_yaml(spatial_path, spatial)
+    write_yaml(
+        session_path,
+        {
+            "kind": "handumi_session_calibration",
+            "tracking_device": "pico",
+            "spatial_calibration_sha256": calibration_hash(spatial),
+            "table_from_device": {
+                "translation_m": [0.0, 0.0, 0.0],
+                "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+            },
+            "metrics": {"translation_rms_mm": 2.0},
+        },
+    )
+    args = Namespace(
+        spatial=spatial_path,
+        session=session_path,
+        rig_config=rig,
+        max_intrinsics_error_px=0.8,
+        max_mount_rms_mm=8.0,
+        max_session_rms_mm=8.0,
+    )
+    checks: list[verify_calibrations.Check] = []
+
+    verify_calibrations._verify_spatial_and_session(args, "pico", checks)
+
+    assert [check.status for check in checks] == ["PASS", "PASS"]
+    assert all("workspace" not in check.name.lower() for check in checks)
 
 
 def test_capture_position_uses_tcp_pose_median() -> None:
