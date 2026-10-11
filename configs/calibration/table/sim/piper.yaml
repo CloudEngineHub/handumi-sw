@@ -41,8 +41,8 @@ calibration:
   # 2026-09-05 after the real fingertips still stopped short of the table;
   # its physical origin is not established (the recorded table frames carry
   # 3-10 mm of fit error and the first tblock session sits ~1.2 cm higher
-  # than the others). Keep this in step with ik_weights.world_collision_plane_z
-  # in configs/robots/piper.yaml.
+  # than the others). This transform is the source of truth for the simulated
+  # table placement; robot embodiment configs do not duplicate its height.
   robot_from_table:
     position: [0.45, 0.0, -0.035]
     quaternion: [0.0, 0.0, -0.70710678, 0.70710678]

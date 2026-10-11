@@ -416,11 +416,6 @@ def load_robot_config(name: str) -> RobotConfig:
             ),
             self_collision_weight=float(weights.get("self_collision", 0.0)),
             self_collision_margin=float(weights.get("self_collision_margin", 0.01)),
-            world_collision_weight=float(weights.get("world_collision", 0.0)),
-            world_collision_margin=float(weights.get("world_collision_margin", 0.005)),
-            world_collision_plane_z=float(
-                weights.get("world_collision_plane_z", 0.0)
-            ),
             self_collision_pairs=str(weights.get("self_collision_pairs", "all")),
             collision_activation_distance=float(
                 weights.get("collision_activation_distance", 0.10)

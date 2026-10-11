@@ -223,26 +223,6 @@ def test_self_collision_cost_prevents_interpenetration(runtime) -> None:
     assert separation > -0.005  # capsules may touch but must not interpenetrate
 
 
-def test_world_collision_cost_keeps_tcp_above_table(runtime) -> None:
-    """Commanding TCPs below z=0 must stop at the tabletop halfspace."""
-    solver = runtime.solver_cls(config=runtime.config.ik_weights)
-    if solver.robot_collision is None:
-        pytest.skip("collision not enabled for this embodiment")
-    home = runtime.home_q()
-    left, right = solver.fk_pose7(home)
-    below_left = (np.array([left[0], left[1], -0.05], dtype=np.float32), left[3:7])
-    below_right = (np.array([right[0], right[1], -0.05], dtype=np.float32), right[3:7])
-    q = home
-    for _ in range(20):
-        q = np.asarray(
-            solver.ik(q, left_pose=below_left, right_pose=below_right),
-            dtype=np.float32,
-        )
-    l_sol, r_sol = solver.fk_pose7(q)
-    assert l_sol[2] > -0.005
-    assert r_sol[2] > -0.005
-
-
 @pytest.mark.parametrize("name", ("piper", "metal"))
 def test_replay_ik_weights_never_leak_into_the_teleop_profile(name) -> None:
     """Real backends must keep exactly the weights their own YAML declares."""

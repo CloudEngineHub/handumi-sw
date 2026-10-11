@@ -13,6 +13,7 @@ from handumi.dataset.screening import (
     RetargetScreeningConfig,
     _grade,
     _rotation_fences,
+    _table_plane_geometry,
     evaluate_screening_gate,
     robot_fingerprint,
     screening_report_path,
@@ -20,6 +21,21 @@ from handumi.dataset.screening import (
 )
 
 CFG = RetargetScreeningConfig()
+
+
+def test_table_plane_geometry_comes_from_deployment_transform() -> None:
+    point, normal = _table_plane_geometry(
+        np.array([0.325, 0.0, -0.03, 0.0, 0.0, -0.70710678, 0.70710678])
+    )
+    np.testing.assert_allclose(point, [0.325, 0.0, -0.03], atol=1e-7)
+    np.testing.assert_allclose(normal, [0.0, 0.0, 1.0], atol=1e-6)
+
+    # A tilted installation rotates the table normal too; height alone would
+    # silently measure clearance against the wrong plane.
+    _, tilted = _table_plane_geometry(
+        np.array([0.0, 0.0, 0.0, 0.0, np.sin(np.pi / 4), 0.0, np.cos(np.pi / 4)])
+    )
+    np.testing.assert_allclose(tilted, [1.0, 0.0, 0.0], atol=1e-6)
 
 # A dataset whose episodes come from two recording sessions: four of the ten
 # were captured with a different tool orientation, the rest share one.

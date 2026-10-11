@@ -207,6 +207,24 @@ def _pedestal_columns(coll, robot, home_q: np.ndarray, plane) -> set[int]:
     return set(np.flatnonzero(distances < 0.0).tolist())
 
 
+def _table_plane_geometry(
+    robot_from_table: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return a point and upward normal for the calibrated tabletop plane."""
+    pose = np.asarray(robot_from_table, dtype=np.float32).reshape(7)
+    qx, qy, qz, qw = pose[3:]
+    # Third column of the quaternion rotation matrix: table +Z in robot world.
+    normal = np.array(
+        [
+            2.0 * (qx * qz + qw * qy),
+            2.0 * (qy * qz - qw * qx),
+            1.0 - 2.0 * (qx * qx + qy * qy),
+        ],
+        dtype=np.float32,
+    )
+    return pose[:3], normal
+
+
 def collision_meshes(runtime) -> dict[str, Any]:
     """Load each link's collision geometry as a convex hull in its link frame.
 
@@ -405,10 +423,16 @@ def _build_screen_state(
     One call per process. In a worker this is the JIT compilation the pool pays
     for once and then amortises over that worker's share of the episodes.
     """
+    from handumi.calibration.deployment import resolve_deployment_calibration
     from handumi.robots.registry import build_pruned_collision_model, load_embodiment
 
     runtime = load_embodiment(robot)
-    weights = runtime.config.ik_weights
+    deployment = resolve_deployment_calibration(
+        robot,
+        explicit_path=None,
+        profile=deployment_profile,
+        rig_config=rig_config,
+    )
     coll = build_pruned_collision_model(
         urdf=runtime.load_urdf(load_meshes=True),
         robot=runtime.robot,
@@ -420,9 +444,9 @@ def _build_screen_state(
         },
         margin=self_collision_margin_m,
     )
+    table_point, table_normal = _table_plane_geometry(deployment.pose7)
     plane = pk.collision.HalfSpace.from_point_and_normal(
-        jnp.array([0.0, 0.0, 1.0]) * weights.world_collision_plane_z,
-        jnp.array([0.0, 0.0, 1.0]),
+        jnp.asarray(table_point), jnp.asarray(table_normal)
     )
     # vmap over configurations: pyroki's world distance does not accept a
     # batch axis directly, and calling it per frame paid JAX dispatch 300+
