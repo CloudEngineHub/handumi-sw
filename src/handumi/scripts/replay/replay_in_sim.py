@@ -1367,26 +1367,172 @@ def _render_task_scene(server, args: argparse.Namespace, rollout: dict[str, np.n
             )
 
 
+#: Square cross-section of each T-slot rail (robot X width; height comes
+#: from the table offset).
+MOUNT_RAIL_PROFILE_M = 0.03
+#: Rail overhang past the outer side of each base (robot Y).
+MOUNT_RAIL_MARGIN_Y_M = 0.08
+#: Footprint half-size assumed when a base link has no loaded mesh.
+FALLBACK_BASE_HALF_SIZE_M = 0.05
+
+
+def _base_footprints(runtime, urdf) -> list[np.ndarray]:
+    """Return ``[[x_min, y_min, z_min], [x_max, y_max, z_max]]`` per arm base.
+
+    Uses the base link's visual meshes (world-frame bounds) and falls back to a
+    square around the link origin when the URDF was loaded without meshes.
+    """
+    import trimesh
+
+    graph = urdf.scene.graph if urdf.scene is not None else None
+    footprints = []
+    for side in runtime.active_sides:
+        names = runtime.arm_joint_names(side)
+        if not names:
+            continue
+        link = urdf.joint_map[names[0]].parent
+        bounds = []
+        if graph is not None:
+            for node in graph.nodes_geometry:
+                if graph.transforms.parents.get(node) != link:
+                    continue
+                transform, geometry = graph.get(node)
+                bounds.append(trimesh.transform_points(
+                    urdf.scene.geometry[geometry].bounds, transform
+                ))
+        if bounds:
+            points = np.concatenate(bounds, axis=0)
+            footprints.append(np.stack([points.min(axis=0), points.max(axis=0)]))
+        else:
+            origin = urdf.get_transform(link)[:3, 3]
+            half = np.array([FALLBACK_BASE_HALF_SIZE_M] * 2 + [0.0])
+            footprints.append(np.stack([origin - half, origin + half]))
+    return footprints
+
+
+def _render_table(server, runtime, urdf, rollout: dict[str, np.ndarray]) -> None:
+    """Draw the grid on the calibrated tabletop and the rail under the bases.
+
+    The grid lies in the table plane rather than at robot-world z=0, so a
+    table placed below the base plane (the Piper's 3 cm T-slot rail) is
+    visible. When the table is below the bases, two rails fill the gap.
+    """
+    table_transforms = rollout.get("robot_from_table_pose7")
+    if table_transforms is None or len(table_transforms) != 1:
+        server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
+        return
+    table_pose7 = np.asarray(table_transforms[0], dtype=np.float64)
+    server.scene.add_grid(
+        "/grid",
+        width=3.0,
+        height=3.0,
+        cell_size=0.1,
+        position=tuple(table_pose7[:3]),
+        wxyz=tuple(table_pose7[[6, 3, 4, 5]]),
+    )
+    server.scene.add_frame(
+        "/table_origin",
+        position=tuple(table_pose7[:3]),
+        wxyz=tuple(table_pose7[[6, 3, 4, 5]]),
+        axes_length=0.15,
+        axes_radius=0.004,
+    )
+    _render_placement_measurements(server, runtime, urdf, table_pose7)
+    table_z = float(table_pose7[2])
+    footprints = _base_footprints(runtime, urdf)
+    if not footprints or table_z > -1e-3:
+        return
+    lower = np.min([f[0] for f in footprints], axis=0)
+    upper = np.max([f[1] for f in footprints], axis=0)
+    # Two T-slot rails run under the front and back edges of the bases,
+    # each centered on its edge, leaving the middle open so the reference
+    # point on the tabletop stays visible.
+    y_min = float(lower[1]) - MOUNT_RAIL_MARGIN_Y_M
+    y_max = float(upper[1]) + MOUNT_RAIL_MARGIN_Y_M
+    base_z = float(lower[2])
+    for name, edge_x in (("front", float(upper[0])), ("back", float(lower[0]))):
+        server.scene.add_box(
+            f"/mount_rail_{name}",
+            dimensions=(MOUNT_RAIL_PROFILE_M, y_max - y_min, base_z - table_z),
+            position=(edge_x, (y_min + y_max) / 2.0, (base_z + table_z) / 2.0),
+            color=(150, 155, 160),
+        )
+
+
+def _render_placement_measurements(server, runtime, urdf, table_pose7: np.ndarray) -> None:
+    """Dimension the table placement on the tabletop (table z=0).
+
+    The reference point is the robot-world origin (for bimanual layouts,
+    midway between the arm bases) dropped onto the tabletop, so the line to
+    the ChArUco center is the horizontal distance measured on the table. The
+    base-to-base line joins the centers of the arm bases (their joint-1
+    axes) on the base plane.
+    """
+    magenta = (220, 40, 200)
+    table_center = np.asarray(table_pose7[:3], dtype=np.float64)
+    reference = np.array([0.0, 0.0, table_center[2]])
+    server.scene.add_icosphere(
+        "/measure/reference", radius=0.012, color=magenta, position=tuple(reference)
+    )
+    server.scene.add_label(
+        "/measure/reference/label",
+        "reference: robot origin on table z=0",
+        position=(0.0, 0.0, 0.03),
+        anchor="bottom-center",
+    )
+    server.scene.add_label(
+        "/measure/charuco/label",
+        "ChArUco center",
+        position=tuple(table_center + [0.0, 0.0, 0.03]),
+        anchor="bottom-center",
+    )
+    offset = table_center - reference
+    segments = [[reference, table_center]]
+    server.scene.add_label(
+        "/measure/reference_to_charuco",
+        f"{np.linalg.norm(offset[:2]):.3f} m (x={offset[0]:.3f}, y={offset[1]:.3f})",
+        position=tuple((reference + table_center) / 2.0 + [0.0, 0.0, 0.02]),
+        anchor="bottom-center",
+    )
+    bases = [
+        urdf.get_transform(urdf.joint_map[names[0]].parent)[:3, 3]
+        for side in runtime.active_sides
+        if (names := runtime.arm_joint_names(side))
+    ]
+    if len(bases) == 2:
+        left, right = (np.asarray(base, dtype=np.float64) for base in bases)
+        segments.append([left, right])
+        for side, center in (("left", left), ("right", right)):
+            server.scene.add_icosphere(
+                f"/measure/base_center_{side}",
+                radius=0.01,
+                color=magenta,
+                position=tuple(center),
+            )
+        server.scene.add_label(
+            "/measure/base_to_base",
+            f"base center to base center {np.linalg.norm(left - right):.3f} m",
+            position=tuple((left + right) / 2.0 + [-0.15, 0.0, 0.02]),
+            anchor="bottom-center",
+        )
+    server.scene.add_line_segments(
+        "/measure/lines",
+        points=np.asarray(segments, dtype=np.float32),
+        colors=magenta,
+        line_width=3.0,
+    )
+
+
 def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> None:
     import viser
     from viser.extras import ViserUrdf
 
     runtime = load_embodiment(args.robot)
     server = viser.ViserServer(port=args.port)
-    server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
     urdf = runtime.load_urdf(load_meshes=True)
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     _render_task_scene(server, args, rollout)
-    table_transforms = rollout.get("robot_from_table_pose7")
-    if table_transforms is not None and len(table_transforms) == 1:
-        table_pose7 = table_transforms[0]
-        server.scene.add_frame(
-            "/table_origin",
-            position=tuple(table_pose7[:3]),
-            wxyz=tuple(table_pose7[[6, 3, 4, 5]]),
-            axes_length=0.15,
-            axes_radius=0.004,
-        )
+    _render_table(server, runtime, urdf, rollout)
     markers = {}
     if not args.hide_trajectories:
         colors = {"left": ((255, 190, 50), (80, 160, 255)),

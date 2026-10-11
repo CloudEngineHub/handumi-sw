@@ -49,6 +49,7 @@ from handumi.robots.kinematics import pose_error_arrays
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
 from handumi.scripts.replay.replay_in_sim import (
     _column_float32,
+    _render_table,
     _render_task_scene,
     joint_approach_ramp,
 )
@@ -724,21 +725,10 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
 
     runtime = load_embodiment(args.robot)
     server = viser.ViserServer(port=args.port)
-    server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
     urdf = runtime.load_urdf(load_meshes=True)
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     _render_task_scene(server, args, rollout)
-
-    table_transforms = rollout["robot_from_table_pose7"]
-    if len(table_transforms) == 1:
-        table_pose7 = table_transforms[0]
-        server.scene.add_frame(
-            "/table_origin",
-            position=tuple(table_pose7[:3]),
-            wxyz=tuple(table_pose7[[6, 3, 4, 5]]),
-            axes_length=0.15,
-            axes_radius=0.004,
-        )
+    _render_table(server, runtime, urdf, rollout)
 
     reference = getattr(args, "verify_reference", None)
     marker_left = marker_right = None
