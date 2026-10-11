@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 import yaml
 from scipy.spatial.transform import Rotation
 
@@ -98,6 +99,41 @@ def test_capture_rows_stores_only_selected_controller(monkeypatch) -> None:
     assert "right" not in " ".join(rows[0])
 
 
+@pytest.mark.parametrize("fault", ["residual", "condition", "nan", "missing_position", "device"])
+def test_force_cannot_promote_invalid_individual_measurements(tmp_path, monkeypatch, fault):
+    fit = {"tracking_device": "pico", "rms_error_m": 0.002,
+           "max_error_m": 0.004, "condition": 15}
+    data = {"calibration": {
+        "controller_to_gripper_tcp": {
+            side: {"position": [sign * 0.11, -0.18, -0.05], "quaternion": [0, 0, 0, 1]}
+            for side, sign in (("left", 1), ("right", -1))
+        },
+        "pivot_fits": {side: dict(fit) for side in ("left", "right")},
+    }}
+    root = data["calibration"]
+    if fault == "residual":
+        root["pivot_fits"]["right"]["rms_error_m"] = 0.02
+    elif fault == "condition":
+        root["pivot_fits"]["right"]["condition"] = 600
+    elif fault == "nan":
+        root["controller_to_gripper_tcp"]["right"]["position"][0] = float("nan")
+    elif fault == "missing_position":
+        del root["controller_to_gripper_tcp"]["right"]["position"]
+    else:
+        del root["pivot_fits"]["right"]["tracking_device"]
+    candidate = tmp_path / "candidate.yaml"
+    candidate.write_text(yaml.safe_dump(data))
+    target_dir = tmp_path / "targets"
+    monkeypatch.setattr(calibrate_tcp_offset, "DEFAULT_CALIBRATION_DIR", target_dir)
+    args = calibrate_tcp_offset.build_parser().parse_args([
+        "promote", "--target", "pico_test.yaml", "--candidate", str(candidate),
+        "--force", "--yes",
+    ])
+    with pytest.raises(SystemExit):
+        args.func(args)
+    assert not target_dir.exists()
+
+
 def test_symmetry_report_recommends_weaker_fit_first(capsys) -> None:
     calibration = SimpleNamespace(
         left=np.array([0.11383, -0.17316, -0.06112, 0, 0, 0, 1]),
@@ -120,8 +156,8 @@ def test_symmetry_report_recommends_weaker_fit_first(capsys) -> None:
 
     assert calibrate_tcp_offset._print_symmetry_report(calibration, fits) is False
     output = capsys.readouterr().out
-    assert "y: FAIL mismatch=13.89mm" in output
-    assert "z: FAIL mismatch=17.75mm" in output
+    assert "y: WARN mismatch=13.89mm" in output
+    assert "z: WARN mismatch=17.75mm" in output
     assert "Recommended first recapture: left" in output
 
 
@@ -202,9 +238,19 @@ calibration:
     assert transforms["left"]["quaternion"] == [0.1, 0.2, 0.3, 0.4]
     assert transforms["right"]["quaternion"] == [0.5, 0.6, 0.7, 0.8]
 
+    provenance = yaml.safe_load(target.read_text())["tcp_promotion"]
+    assert provenance["position_policy"] == "independent_per_side"
+    assert provenance["pivot_fits"]["left"]["tracking_device"] == "meta"
+    assert len(provenance["candidate_sha256"]) == 64
+    # Re-promotion replaces provenance instead of accumulating duplicate keys.
+    args.yes = True
+    args.func(args)
+    assert target.read_text().count("\ntcp_promotion:") == 1
 
-def test_promote_force_allows_failed_symmetry_and_symmetrizes(
-    tmp_path, monkeypatch, capsys
+
+@pytest.mark.parametrize("force", [False, True])
+def test_promote_preserves_asymmetric_measurements(
+    tmp_path, monkeypatch, capsys, force
 ) -> None:
     candidate = tmp_path / "candidate.yaml"
     candidate.write_text(
@@ -259,23 +305,22 @@ def test_promote_force_allows_failed_symmetry_and_symmetrizes(
             "pico_test.yaml",
             "--candidate",
             str(candidate),
-            "--force",
             "--yes",
-        ]
+        ] + (["--force"] if force else [])
     )
 
     args.func(args)
 
     output = capsys.readouterr().out
-    assert "WARNING: forcing promotion despite failed bilateral symmetry" in output
+    assert "not a promotion gate" in output
     transforms = yaml.safe_load(target.read_text(encoding="utf-8"))["calibration"][
         "controller_to_gripper_tcp"
     ]
     np.testing.assert_allclose(
-        transforms["left"]["position"], [0.1115, -0.181, -0.0555]
+        transforms["left"]["position"], [0.113, -0.175, -0.068]
     )
     np.testing.assert_allclose(
-        transforms["right"]["position"], [-0.1115, -0.181, -0.0555]
+        transforms["right"]["position"], [-0.110, -0.187, -0.043]
     )
     assert transforms["left"]["quaternion"] == [0.1, 0.2, 0.3, 0.4]
     assert transforms["right"]["quaternion"] == [0.5, 0.6, 0.7, 0.8]

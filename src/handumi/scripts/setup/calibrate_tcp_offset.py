@@ -24,10 +24,12 @@ calibration -- inspect and promote them deliberately.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -99,7 +101,7 @@ def _output_path(args: argparse.Namespace) -> Path:
     """Where a fit is written.
 
     Defaults to a candidate file rather than the project calibration: a fit
-    has to clear the acceptance limits and be symmetrized before it is
+    has to clear the individual acceptance limits before it is
     promoted, and pivot alone never determines orientation.
     """
     if args.output is not None:
@@ -363,9 +365,9 @@ def orient_main(args: argparse.Namespace) -> None:
 def _fit_passes_mapping(fit: dict[str, Any]) -> bool:
     try:
         return (
-            float(fit["rms_error_m"]) < PIVOT_RMS_LIMIT_M
-            and float(fit["max_error_m"]) < PIVOT_MAX_LIMIT_M
-            and float(fit["condition"]) < PIVOT_CONDITION_LIMIT
+            0 <= float(fit["rms_error_m"]) < PIVOT_RMS_LIMIT_M
+            and 0 <= float(fit["max_error_m"]) < PIVOT_MAX_LIMIT_M
+            and 1 <= float(fit["condition"]) < PIVOT_CONDITION_LIMIT
         )
     except (KeyError, TypeError, ValueError):
         return False
@@ -384,7 +386,7 @@ def _fit_device(fits: dict[str, Any]) -> str:
     devices = {
         str(fit.get("tracking_device"))
         for side in SIDES
-        if isinstance((fit := fits.get(side)), dict) and fit.get("tracking_device")
+        if isinstance((fit := fits.get(side)), dict)
     }
     if len(devices) != 1:
         raise SystemExit(
@@ -408,31 +410,20 @@ def _symmetry_errors(
     return errors
 
 
-def _symmetrized_positions(calibration, *, device: str) -> tuple[np.ndarray, np.ndarray]:
-    left = np.asarray(calibration.left[:3], dtype=np.float64)
-    right = np.asarray(calibration.right[:3], dtype=np.float64)
-    result_left = (left + right) / 2.0
-    result_right = result_left.copy()
-    flip_axis = DEVICE_FLIP_AXIS[device]
-    result_left[flip_axis] = (left[flip_axis] - right[flip_axis]) / 2.0
-    result_right[flip_axis] = -result_left[flip_axis]
-    return result_left, result_right
-
-
 def _print_symmetry_report(calibration, fits: dict[str, Any]) -> bool:
     device = _fit_device(fits)
     errors = _symmetry_errors(calibration, device=device)
     passed = bool(np.all(errors < SYMMETRY_LIMIT_M))
     flip_name = AXIS_NAMES[DEVICE_FLIP_AXIS[device]]
     print(
-        f"  bilateral symmetry ({device}, sign-flip axis={flip_name}, "
-        f"limit <{SYMMETRY_LIMIT_M * 1000:.1f}mm):"
+        f"  nominal bilateral symmetry diagnostic ({device}, sign-flip axis={flip_name}, "
+        f"warning threshold {SYMMETRY_LIMIT_M * 1000:.1f}mm; not a promotion gate):"
     )
     for axis, error in zip(AXIS_NAMES, errors, strict=True):
         relation = "opposite signs" if axis == flip_name else "same value"
-        status = "PASS" if error < SYMMETRY_LIMIT_M else "FAIL"
+        status = "PASS" if error < SYMMETRY_LIMIT_M else "WARN"
         print(f"    {axis}: {status} mismatch={error * 1000:.2f}mm ({relation})")
-    print(f"    overall: {'PASS' if passed else 'FAIL'}")
+    print(f"    overall: {'PASS' if passed else 'WARN'}; measured offsets stay independent")
     if not passed:
         left_fit = fits["left"]
         right_fit = fits["right"]
@@ -444,8 +435,8 @@ def _print_symmetry_report(calibration, fits: dict[str, Any]) -> bool:
             "(weaker individual fit metrics)."
         )
         print(
-            "    Symmetry alone cannot prove which side drifted; recapture the "
-            "other side too if the mismatch remains."
+            "    Symmetry is a nominal assembly assumption. Check seating and "
+            "repeatability on each side; persistent asymmetry can be physical."
         )
     return passed
 
@@ -573,15 +564,13 @@ def promote_main(args: argparse.Namespace) -> None:
             f"Cannot promote: individual pivot fit failed for {', '.join(failed)}."
         )
     device = _fit_device(fits)
-    errors = _symmetry_errors(candidate, device=device)
-    if np.any(errors >= SYMMETRY_LIMIT_M):
-        _print_symmetry_report(candidate, fits)
-        if not args.force:
-            raise SystemExit("Cannot promote: bilateral symmetry check failed.")
-        print(
-            "WARNING: forcing promotion despite failed bilateral symmetry; "
-            "positions will be symmetrized."
-        )
+    for side in SIDES:
+        raw_position = (root.get("controller_to_gripper_tcp", {}).get(side) or {}).get("position")
+        if np.asarray(raw_position).shape != (3,) or not np.all(np.isfinite(np.asarray(raw_position, dtype=float))):
+            raise SystemExit(f"Cannot promote: {side} needs a finite measured position.")
+    _print_symmetry_report(candidate, fits)
+    if args.force:
+        print("--force is deprecated: asymmetry is advisory; individual fit checks always apply.")
 
     target = DEFAULT_CALIBRATION_DIR / args.target
     if not (args.target.name == f"{device}.yaml" or args.target.name.startswith(f"{device}_")):
@@ -593,7 +582,8 @@ def promote_main(args: argparse.Namespace) -> None:
         if args.quaternion_source is not None
         else None
     )
-    left, right = _symmetrized_positions(candidate, device=device)
+    left = candidate.left[:3].copy()
+    right = candidate.right[:3].copy()
     if target.exists():
         if not args.yes:
             answer = input(f"{target} already exists. Override it? [Y/n] ").strip().lower()
@@ -621,6 +611,20 @@ def promote_main(args: argparse.Namespace) -> None:
             )
         updated = _new_target_yaml(source, left=left, right=right)
 
+    # Keep comments and historical metadata, but give current translations their
+    # own authoritative provenance rather than inheriting old fit statistics.
+    promotion = {
+        "promoted_at": datetime.now(UTC).isoformat(),
+        "candidate_path": str(candidate_path),
+        "candidate_sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+        "tracking_device": device,
+        "position_policy": "independent_per_side",
+        "pivot_fits": fits,
+        "positions": {"left": left.tolist(), "right": right.tolist()},
+        "orientation_source": str(source if source is not None and not target.exists() else target),
+    }
+    updated = re.sub(r"(?ms)^tcp_promotion:\n.*?(?=^[^\s#]|\Z)", "", updated)
+    updated = updated.rstrip() + "\n" + yaml.safe_dump({"tcp_promotion": promotion}, sort_keys=False)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(updated, encoding="utf-8")
     print(f"Promoted {device} controller TCP positions to: {target}")
@@ -736,7 +740,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     promote = sub.add_parser(
         "promote",
-        help="Validate, symmetrize, and promote candidate positions.",
+        help="Validate and promote independent measured positions for each side.",
     )
     promote.add_argument(
         "--target",
@@ -763,7 +767,7 @@ def build_parser() -> argparse.ArgumentParser:
     promote.add_argument(
         "--force",
         action="store_true",
-        help="Promote and symmetrize even when bilateral symmetry fails.",
+        help="Deprecated compatibility flag; asymmetry no longer blocks promotion.",
     )
     promote.set_defaults(func=promote_main)
     return parser

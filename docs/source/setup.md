@@ -247,6 +247,13 @@ session calibration after relocalization or a tracking reset. The saved
 `outputs/calibration/session.yaml` records `tracking_device` and
 `table_from_device`; use it only with the same `--device`.
 
+When continuing a dataset with `handumi record --resume`, the recorder reads
+the current session file again and archives its calibration for the new episode
+range. You may reuse the same session while the VR origin is unchanged; after
+relocalization or a new day's tracking setup, regenerate and verify it first.
+Use `--session-calibration PATH` if its location changed. See
+[Resume a Recording](record.md#resume-a-recording) for selection and history details.
+
 ## 5. Calibrate the HandUMI Tool Tip
 
 Controller-to-TCP reconstructs the physical tool-tip pose from each tracked
@@ -302,27 +309,19 @@ handumi calibrate tcp inspect
 
 Recapture that side until it passes. Do not promote a fit that does not.
 
-`inspect` also checks bilateral symmetry using the tracking device recorded in
-the two fits. Its per-axis report catches a pair of individually good captures
-that disagree with each other. If that check fails, it recommends recapturing
-the side with the weaker individual metrics first; symmetry cannot identify the
-bad side with certainty, so recapture the other side too if the mismatch
-remains.
+`inspect` reports bilateral symmetry as an advisory diagnostic. The nominal
+mirror axis is `x` for PICO and `y` for Meta. This is an assembly assumption,
+not a measured constraint: seating and mounting rotation can affect every
+component, including the mirror axis. Differences produce warnings, never
+automatic averaging or rejection solely for asymmetry. `handumi calibrate
+verify` uses the same advisory policy.
 
-Then compare the two sides. The shells are mirror twins, so one position
-component flips sign between them and the other two carry the same sign.
-Which component flips depends on the tracking device's controller frame, not
-on the mount: `x` for `pico` (`y`/`z` keep their sign), `y` for `meta`
-(`x`/`z` keep theirs). A sign error or a mismatch of more than a few
-millimeters **on the flipping component** means a broken capture: recapture.
-
-The other two components need not match. Each controller seats in its shell
-a little differently, and a few millimeters of tilt at the mount become a
-centimeter or more at the tip 22 cm away. On the PICO pair three captures
-taken weeks apart agree on a 17 mm left/right difference in `z`; that is the
-measurement, and averaging it away would put 8 mm of error on each side. Keep
-the values per side. `handumi calibrate verify` reports such a difference as
-a warning and only fails the flipping axis or a gross mismatch.
+Validate each side independently. Repeat a pivot capture with varied rotations
+and compare its offset with the previous capture of that same side. A low fit
+residual alone does not prove the correct physical point was held fixed.
+Use the intended grasp TCP consistently; after promotion, keep that point in
+a fixed indentation and check that it stays fixed while rotating the tool.
+Check known-height contacts in the verified table frame as a separate test.
 
 ### Step 4. Promote it into the project
 
@@ -342,14 +341,14 @@ handumi calibrate tcp promote --target pico_piper_beta.yaml
 
 Only the filename is accepted; it is always resolved below
 `configs/calibration/controller_tcp/`. Promotion repeats the individual-fit and
-bilateral-symmetry checks, symmetrizes using the device's correct mirror axis,
-and changes only the two positions. If the target exists, confirm the
-`Override it? [Y/n]` prompt. Its existing quaternions and metadata are kept.
-
-To deliberately accept a failed bilateral-symmetry check, pass `--force`.
-Both individual pivot fits must still pass, and their measured positions are
-symmetrized before promotion. Use this only when that averaging is acceptable
-as a temporary calibration.
+bilateral-symmetry diagnostics, and copies each side's measured position without
+averaging. Both individual fits must pass; positions must be finite and both
+fits must identify the same tracking device. If the target exists, confirm the
+`Override it? [Y/n]` prompt. Existing quaternions and historical metadata are
+preserved. The top-level `tcp_promotion` record is authoritative for the current
+translations: it records promotion time, candidate fingerprint, per-side metrics
+and positions, and the orientation source. Older metadata may describe older
+measurements. `--force` is deprecated and cannot bypass individual fit checks.
 
 For a genuinely new tool file there are no official quaternions to preserve.
 Name an existing calibration made with the same tracking device and controller

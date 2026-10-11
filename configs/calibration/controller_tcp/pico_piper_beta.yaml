@@ -18,9 +18,9 @@ calibration:
   controller_to_gripper_tcp:
     left:
       position:
-        - 0.111647971
-        - -0.181948379
-        - -0.0550521854
+        - 0.113839723
+        - -0.181678519
+        - -0.0539508238
       quaternion:
       - 0.5149461627006531
       - -0.039195578545331955
@@ -28,9 +28,9 @@ calibration:
       - -0.8563258647918701
     right:
       position:
-        - -0.111647971
-        - -0.181948379
-        - -0.0550521854
+        - -0.109254889
+        - -0.186601758
+        - -0.0520934723
       quaternion:
       - 0.40989723801612854
       - -0.476044625043869
@@ -93,3 +93,34 @@ calibration:
         - 1.0
         rms_error_deg: 0.6910250099793301
         max_error_deg: 1.4934163878178293
+tcp_promotion:
+  promoted_at: '2026-10-11T02:26:30.176222+00:00'
+  candidate_path: outputs/calibration/controller_tcp_candidate.yaml
+  candidate_sha256: ac9b8a35f99196f5ad96b2b453d1dc64d1ea59697ffffd3e99b495254dc74cbb
+  tracking_device: pico
+  position_policy: independent_per_side
+  pivot_fits:
+    left:
+      tracking_device: pico
+      samples: 750
+      rms_error_m: 0.001756632118485868
+      max_error_m: 0.004298742860555649
+      condition: 13.97017972029777
+      accepted: true
+    right:
+      tracking_device: pico
+      samples: 750
+      rms_error_m: 0.0019181050593033433
+      max_error_m: 0.0034982317592948675
+      condition: 12.121449816166121
+      accepted: true
+  positions:
+    left:
+    - 0.11383972316980362
+    - -0.18167851865291595
+    - -0.053950823843479156
+    right:
+    - -0.10925488919019699
+    - -0.18660175800323486
+    - -0.052093472331762314
+  orientation_source: configs/calibration/controller_tcp/pico_piper_beta.yaml
