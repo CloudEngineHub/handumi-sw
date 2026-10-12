@@ -34,11 +34,13 @@ def _create_dataset(
     reversed_episodes: set[int],
     count: int = 6,
     length: int = 9,
+    camera: str = "workspace",
 ) -> None:
+    video_key = f"observation.images.{camera}"
     features = {
         "observation.state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
         "action": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
-        "observation.images.workspace": {
+        video_key: {
             "dtype": "video",
             "shape": (_SIZE, _SIZE, 3),
             "names": ["height", "width", "channel"],
@@ -66,7 +68,7 @@ def _create_dataset(
                 {
                     "observation.state": value,
                     "action": value,
-                    "observation.images.workspace": _scene(block, distractor),
+                    video_key: _scene(block, distractor),
                     "task": "move the object",
                 }
             )
@@ -94,6 +96,24 @@ def test_flags_only_the_episodes_running_backwards(tmp_path: Path) -> None:
         else:
             assert similarity > 0
             assert report.findings == ()
+
+
+def test_a_top_camera_is_the_workspace_camera(tmp_path: Path) -> None:
+    root = tmp_path / "top"
+    _create_dataset(root, reversed_episodes={2}, camera="top")
+
+    reports, summary = analyze_dataset_direction(root)
+
+    assert summary["reversed_episode_indices"] == [2]
+    assert len(reports) == 6
+
+
+def test_a_dataset_without_a_workspace_camera_is_refused(tmp_path: Path) -> None:
+    root = tmp_path / "wrist"
+    _create_dataset(root, reversed_episodes=set(), camera="left")
+
+    with pytest.raises(ValueError, match="no workspace camera"):
+        analyze_dataset_direction(root)
 
 
 def test_a_dataset_that_runs_one_way_flags_nothing(tmp_path: Path) -> None:

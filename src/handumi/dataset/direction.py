@@ -42,8 +42,9 @@ EDGE_FRAMES = 15
 
 # The workspace camera is the only stream that sees the task. Wrist cameras
 # move with the tool, so their first and last frames describe where the hand
-# went, not what changed on the table.
-DEFAULT_VIDEO_KEY = "observation.images.workspace"
+# went, not what changed on the table. Rigs name it freely ("workspace", "top",
+# ...), so it is found by camera role rather than by a fixed key.
+VIDEO_KEY_PREFIX = "observation.images."
 
 # Downsampled frame size for the comparison. Large enough that a hand-sized
 # object survives, small enough that lighting and sensor noise average out.
@@ -221,10 +222,47 @@ def direction_reports(
     return reports
 
 
+def resolve_workspace_video_key(info: dict[str, Any]) -> str:
+    """Return the video key of the camera whose role is the workspace.
+
+    The capture metadata may declare a camera's role explicitly; otherwise the
+    rig's name aliases apply, so ``top`` and ``workspace`` are synonyms.
+    """
+    from handumi.config import camera_role
+
+    declared = {
+        str(entry["name"]): entry
+        for entry in (info.get("handumi") or {}).get("cameras") or []
+        if isinstance(entry, dict) and entry.get("name") is not None
+    }
+    candidates = [
+        key
+        for key, feature in info.get("features", {}).items()
+        if key.startswith(VIDEO_KEY_PREFIX)
+        and isinstance(feature, dict)
+        and feature.get("dtype") == "video"
+        and camera_role(
+            key[len(VIDEO_KEY_PREFIX) :], declared.get(key[len(VIDEO_KEY_PREFIX) :])
+        )
+        == "workspace"
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        raise ValueError(
+            f"Several cameras see the workspace ({', '.join(candidates)}); "
+            "pick one with --video-key."
+        )
+    raise ValueError(
+        "Dataset has no workspace camera (observation.images.workspace or .top); "
+        "nothing sees the workspace."
+    )
+
+
 def analyze_dataset_direction(
     root: str | Path,
     *,
-    video_key: str = DEFAULT_VIDEO_KEY,
+    video_key: str | None = None,
 ) -> tuple[list[EpisodeQualityReport], dict[str, Any]]:
     """Grade every episode of a local dataset, and report what it measured."""
     import pyarrow.parquet as pq
@@ -234,6 +272,8 @@ def analyze_dataset_direction(
     if not info_path.is_file():
         raise ValueError(f"Not a dataset root: {dataset_root}")
     info = json.loads(info_path.read_text(encoding="utf-8"))
+    if video_key is None:
+        video_key = resolve_workspace_video_key(info)
     if video_key not in info.get("features", {}):
         raise ValueError(f"Dataset has no {video_key}; nothing sees the workspace.")
     fps = float(info.get("fps", 30) or 30)
@@ -241,20 +281,39 @@ def analyze_dataset_direction(
     episode_files = sorted((dataset_root / "meta" / "episodes").glob("chunk-*/*.parquet"))
     if not episode_files:
         raise ValueError("Dataset is missing episode metadata")
-    table = pq.read_table(episode_files, columns=["episode_index", "length"])
+    video_columns = [
+        f"videos/{video_key}/chunk_index",
+        f"videos/{video_key}/file_index",
+        f"videos/{video_key}/from_timestamp",
+    ]
+    table = pq.read_table(episode_files, columns=["episode_index", "length", *video_columns])
     lengths = [int(value) for value in table["length"].to_pylist()]
     indices = [int(value) for value in table["episode_index"].to_pylist()]
+    chunks, files, offsets = (table[column].to_pylist() for column in video_columns)
 
-    video_files = sorted((dataset_root / "videos" / video_key).glob("chunk-*/*.mp4"))
-    if len(video_files) != 1:
-        raise ValueError(
-            f"Direction expects one video file for {video_key}, found "
-            f"{len(video_files)}"
+    # LeRobot v3 packs episodes back to back into size-capped video files, so
+    # each file is walked once for the episodes it holds.
+    by_file: dict[Path, list[int]] = {}
+    for position, (chunk, file, _) in enumerate(zip(chunks, files, offsets)):
+        path = (
+            dataset_root
+            / "videos"
+            / video_key
+            / f"chunk-{int(chunk):03d}"
+            / f"file-{int(file):03d}.mp4"
         )
-
-    starts = np.concatenate(([0], np.cumsum(lengths)[:-1])).astype(int)
-    bounds = [(int(start), length) for start, length in zip(starts, lengths)]
-    edges = episode_edge_frames(video_files[0], bounds)
+        by_file.setdefault(path, []).append(position)
+    edges: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for path, positions in by_file.items():
+        if not path.is_file():
+            raise ValueError(f"Missing video file for {video_key}: {path}")
+        bounds = [
+            (int(round(float(offsets[position]) * fps)), lengths[position])
+            for position in positions
+        ]
+        file_edges = episode_edge_frames(path, bounds)
+        for local, position in enumerate(positions):
+            edges[position] = file_edges[local]
     frame_counts = {position: lengths[position] for position in range(len(lengths))}
     directions = score_directions(edges, frame_counts)
     # score_directions works in episode order; restore the recorded indices.

@@ -6,10 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from handumi.dataset.direction import (
-    DEFAULT_VIDEO_KEY,
-    analyze_dataset_direction,
-)
+from handumi.dataset.direction import analyze_dataset_direction
 from handumi.dataset.quality import EpisodeQualityConfig, write_quality_report
 from handumi.dataset.reader import ensure_metadata
 from handumi.dataset.selection import resolve_dataset_selection
@@ -29,9 +26,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--revision", default="main", help="Hub dataset revision.")
     parser.add_argument(
         "--video-key",
-        default=DEFAULT_VIDEO_KEY,
-        help="Camera that sees the workspace. Wrist cameras move with the tool "
-        "and cannot report what changed on the table.",
+        default=None,
+        help="Camera that sees the workspace. Defaults to the camera whose role "
+        "is the workspace (named 'workspace' or 'top'). Wrist cameras move with "
+        "the tool and cannot report what changed on the table.",
     )
     parser.add_argument(
         "--output",
