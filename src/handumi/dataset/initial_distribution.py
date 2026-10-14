@@ -8,7 +8,6 @@ gripper openings in meters.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -117,7 +116,6 @@ def initial_distribution(
             "sampling": "first_observation_per_episode",
             "episode_count": int(len(values)),
             "source_layout": source_layout,
-            "joint_data_sha256": _joint_data_sha256(dataset_root),
         },
         "layout": {
             "representation": "handumi_canonical",
@@ -206,22 +204,6 @@ def _first_states(root: Path) -> tuple[np.ndarray, np.ndarray]:
     if states.ndim != 2:
         raise ValueError(f"Initial states must form a 2-D array, got {states.shape}")
     return indices, states
-
-
-def _joint_data_sha256(root: Path) -> str:
-    """Fingerprint the joint payload without hashing unrelated video files."""
-    paths = sorted((root / "data").glob("chunk-*/*.parquet"))
-    info_path = root / "meta" / "info.json"
-    if info_path.is_file():
-        paths.append(info_path)
-    digest = hashlib.sha256()
-    for path in sorted(paths):
-        relative = path.relative_to(root).as_posix()
-        digest.update(relative.encode("utf-8") + b"\0")
-        with path.open("rb") as handle:
-            for block in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(block)
-    return digest.hexdigest()
 
 
 def _float_list(values: np.ndarray) -> list[float]:
