@@ -28,6 +28,10 @@ COMMANDS = {
         "handumi.scripts.analyze_dataset",
         "Analyze statistics and episode outliers",
     ),
+    ("dataset", "initial-distribution"): Command(
+        "handumi.scripts.initial_distribution",
+        "Extract initial joint statistics from a robot dataset",
+    ),
     ("dataset", "qa"): Command(
         "handumi.scripts.qa_dataset",
         "Run every episode review a conversion depends on",

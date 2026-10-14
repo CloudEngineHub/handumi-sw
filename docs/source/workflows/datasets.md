@@ -76,6 +76,31 @@ and achieved TCP paths.
 
 Table-calibrated datasets preserve recorded bimanual geometry automatically.
 
+## Extract the initial joint distribution
+
+After converting a recording to a robot joint dataset, extract one initial
+``observation.state`` per episode into an external YAML profile. Every episode
+has the same weight regardless of its duration, and the input dataset is never
+modified:
+
+```bash
+handumi dataset initial-distribution \
+  outputs/datasets/handumi-demo-piper-joints
+```
+
+By default this writes
+``outputs/initial-distributions/handumi-demo-piper-joints-initial-distribution.yaml``.
+Pass ``--output`` only when a different location or filename is useful.
+
+The profile stores the mean, population standard deviation, min/max,
+percentiles, median, and the recorded initial state nearest to the mean. Values
+are always written in HandUMI's physical joint layout (arm radians and gripper
+opening meters), including when the input uses an external LeRobot follower
+layout. Use ``--dry-run`` to inspect the dataset and recommendation without
+writing, and ``--replace`` to explicitly replace an existing profile. For a
+Hub dataset the command downloads only ``meta/`` and ``data/`` under
+``outputs/datasets``; videos are not needed to calculate joint statistics.
+
 :::{dropdown} Absolute-table replay and calibration precedence
 For an explicit geometry-preserving replay:
 
