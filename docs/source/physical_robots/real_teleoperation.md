@@ -157,7 +157,8 @@ bounded queue fills.
 Holding a physical **HandUMI** gripper completely closed for the configured
 hold period (two seconds by default) parks only that arm at home. Keeping it
 open cancels the timer. Opening that same HandUMI gripper wakes and re-anchors
-the parked arm.
+the parked arm. Pass `--no-park-on-hold` to disable close-to-park while
+keeping reopen-to-wake.
 Double-squeeze episode gestures continue to use the HandUMI grippers.
 
 Unlike a robot-free HandUMI capture, this dataset is bound to the robot that

@@ -1,3 +1,6 @@
+import argparse
+
+from handumi.teleop.physical import add_physical_teleop_arguments
 from handumi.teleop.standby import GRIPPER_PARK_HOLD_S, GripperHomeStandby
 
 
@@ -10,6 +13,14 @@ def test_default_requires_two_seconds_of_continuous_physical_closure() -> None:
     assert standby.update({"right": 0.0}, 12.0, ("right",)) == ((), ())
     assert standby.update({"right": 0.0}, 13.99, ("right",)) == ((), ())
     assert standby.update({"right": 0.0}, 14.0, ("right",)) == (("right",), ())
+
+
+def test_closed_gripper_does_not_park_when_disabled() -> None:
+    standby = GripperHomeStandby(park_on_hold=False)
+
+    assert standby.update({"right": 0.0}, 10.0, ("right",)) == ((), ())
+    assert standby.update({"right": 0.0}, 20.0, ("right",)) == ((), ())
+    assert not standby.is_standby("right")
 
 
 def test_missing_physical_feedback_cancels_close_timer() -> None:
@@ -30,3 +41,13 @@ def test_handumi_can_wake_arm_without_robot_feedback() -> None:
         ("left",),
         wake_openings={"left": 1.0},
     ) == ((), ("left",))
+
+
+def test_no_park_on_hold_cli_flag_is_off_by_default() -> None:
+    parser = argparse.ArgumentParser()
+    add_physical_teleop_arguments(parser)
+    assert parser.parse_args(["--device", "pico"]).no_park_on_hold is False
+    assert (
+        parser.parse_args(["--device", "pico", "--no-park-on-hold"]).no_park_on_hold
+        is True
+    )

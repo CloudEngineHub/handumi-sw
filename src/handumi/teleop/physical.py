@@ -50,6 +50,15 @@ def add_physical_teleop_arguments(parser: argparse.ArgumentParser) -> None:
         help="Cancel and require re-anchoring if tracking stops advancing.",
     )
     parser.add_argument(
+        "--no-park-on-hold",
+        action="store_true",
+        help=(
+            "Do not park an arm at home when its HandUMI gripper stays fully "
+            f"closed for --gripper-park-hold-s ({GRIPPER_PARK_HOLD_S:.1f}s by "
+            "default)."
+        ),
+    )
+    parser.add_argument(
         "--gripper-park-hold-s",
         type=float,
         default=GRIPPER_PARK_HOLD_S,

@@ -11,7 +11,8 @@ Safety behavior:
 * controller->TCP calibration is required;
 * the robot homes before teleop starts;
 * opening a HandUMI gripper activates and anchors that arm;
-* a HandUMI gripper held fully closed for two seconds parks that arm at home;
+* a HandUMI gripper held fully closed for two seconds parks that arm at home
+  (disable with ``--no-park-on-hold``);
 * reopening the corresponding HandUMI gripper re-anchors that arm for use.
 
 Examples:
@@ -316,6 +317,7 @@ def _run_real() -> None:
     home_standby = GripperHomeStandby(
         hold_s=args.gripper_park_hold_s,
         initial_standby=not args.skip_feetech,
+        park_on_hold=not args.no_park_on_hold,
     )
     play_sounds = not args.no_sounds
     motion_config = TeleopMotionConfig.from_args(args)

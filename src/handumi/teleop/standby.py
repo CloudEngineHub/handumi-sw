@@ -17,6 +17,7 @@ class GripperHomeStandby:
         closed_threshold: float = GRIPPER_FULLY_CLOSED,
         reopened_threshold: float = GRIPPER_REOPENED,
         initial_standby: bool = False,
+        park_on_hold: bool = True,
     ) -> None:
         if hold_s < 0.0:
             raise ValueError("hold_s must be >= 0")
@@ -25,6 +26,7 @@ class GripperHomeStandby:
                 "gripper thresholds must satisfy 0 <= closed < reopened <= 1"
             )
         self._hold_s = float(hold_s)
+        self._park_on_hold = bool(park_on_hold)
         self._closed_threshold = float(closed_threshold)
         self._reopened_threshold = float(reopened_threshold)
         self._closed_since: dict[str, float | None] = {
@@ -67,6 +69,9 @@ class GripperHomeStandby:
                     wake.append(side)
                 continue
 
+            if not self._park_on_hold:
+                self._closed_since[side] = None
+                continue
             if side not in openings:
                 self._closed_since[side] = None
                 continue

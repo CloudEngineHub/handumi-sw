@@ -20,7 +20,8 @@ Gripper commands may remain synchronized while recording is waiting to start,
 but arm teleoperation and capture are disabled in READY. Once recording starts,
 opening a HandUMI gripper activates and anchors that arm;
 holding the corresponding HandUMI gripper fully closed for two seconds parks it
-at home. Episode gestures control recording only and never activate an arm.
+at home (disable with ``--no-park-on-hold``). Episode gestures control
+recording only and never activate an arm.
 
 PICO tracking uses ADB.
 
@@ -723,11 +724,17 @@ def _log_episode_interface(
     waiting: bool,
     space_start: bool,
     park_hold_s: float,
+    park_on_hold: bool,
 ) -> None:
     state = "READY AT HOME" if waiting else "RECORDING"
     start = "double-squeeze RIGHT"
     if space_start:
         start += " or press SPACE"
+    park_line = (
+        f"│ During REC: HandUMI gripper closed {park_hold_s:.1f} s parks that arm\n"
+        if park_on_hold
+        else ""
+    )
     record_log.info(
         "\n"
         "┌─ HandUMI teleop recording "
@@ -738,14 +745,14 @@ def _log_episode_interface(
         "│ Reset same episode + home: double-squeeze LEFT\n"
         "│ Finish session: double-squeeze BOTH  •  Stop: Esc / Ctrl+C\n"
         "│ After save/reset: wait for HOME, then start with RIGHT\n"
-        "│ During REC: HandUMI gripper closed %.1f s parks that arm\n"
+        "%s"
         "└────────────────────────────"
         "─────────────────────────────",
         episode,
         total,
         state,
         start,
-        park_hold_s,
+        park_line,
     )
 
 
@@ -1032,6 +1039,7 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
             "robot",
             "side",
             "space_start",
+            "no_park_on_hold",
             "no_sounds",
             "num_episodes",
             "episode_time_s",
@@ -2131,11 +2139,14 @@ def _run_record() -> None:
                 "Discard active attempt and end the session",
             ),
             ("Esc / Ctrl+C", "Discard current episode and stop"),
-            (
-                f"HandUMI gripper closed {args.gripper_park_hold_s:.1f}s",
-                "Park that arm at home",
-            ),
         ]
+        if not args.no_park_on_hold:
+            episode_controls.append(
+                (
+                    f"HandUMI gripper closed {args.gripper_park_hold_s:.1f}s",
+                    "Park that arm at home",
+                )
+            )
         if args.episode_time_s > 0.0:
             episode_controls.insert(
                 2,
@@ -2160,6 +2171,7 @@ def _run_record() -> None:
         home_standby = GripperHomeStandby(
             hold_s=args.gripper_park_hold_s,
             initial_standby=True,
+            park_on_hold=not args.no_park_on_hold,
         )
 
         def home_for_next_episode(
@@ -2209,6 +2221,7 @@ def _run_record() -> None:
                 waiting=True,
                 space_start=args.space_start,
                 park_hold_s=args.gripper_park_hold_s,
+                park_on_hold=not args.no_park_on_hold,
             )
             dashboard.set_episode(
                 ep_num,
@@ -2431,6 +2444,7 @@ def _run_record() -> None:
                 "joint_filter_derivative_cutoff_hz": (
                     args.joint_filter_derivative_cutoff_hz
                 ),
+                "gripper_park_on_hold": not bool(args.no_park_on_hold),
                 "gripper_park_hold_s": args.gripper_park_hold_s,
                 "park_max_joint_speed_deg_s": args.park_max_joint_speed_deg_s,
                 "translation_scale": args.translation_scale,
