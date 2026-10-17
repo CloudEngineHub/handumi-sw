@@ -7,7 +7,7 @@ pkg_root: assets/r1lite
 
 arms:
   left:
-    ee_link: left_gripper_link
+    ee_link: left_tcp
     joint_names:
       - left_arm_joint1
       - left_arm_joint2
@@ -21,9 +21,9 @@ arms:
         open: 0.05
       - name: left_gripper_finger_joint2
         closed: 0.0
-        open: 0.05
+        open: -0.05  # mirrored finger: URDF range is [-0.05, 0]
   right:
-    ee_link: right_gripper_link
+    ee_link: right_tcp
     joint_names:
       - right_arm_joint1
       - right_arm_joint2
@@ -37,12 +37,12 @@ arms:
         open: 0.05
       - name: right_gripper_finger_joint2
         closed: 0.0
-        open: 0.05
+        open: -0.05  # mirrored finger: URDF range is [-0.05, 0]
 
 # URDF actuated joint order: steer/wheel pairs (6), torso (3), left arm (6), left
 # gripper (2), right arm (6), right gripper (2). Torso joint3 is bent forward for
 # table-height reach; arms start at zero with grippers fully open.
-home_q: [0,0,0,0,0,0, 0,0,0, 0,1.8,-1.7,0,0,0, 0.05,0.05, 0,1.8,-1.7,0,0,0, 0.05,0.05]
+home_q: [0,0,0,0,0,0, 0,0,0, 0,1.8,-1.7,0,0,0, 0.05,-0.05, 0,1.8,-1.7,0,0,0, 0.05,-0.05]
 gripper_max_width_m: 0.10
 
 ik_weights:

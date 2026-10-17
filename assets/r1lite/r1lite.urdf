@@ -31,7 +31,7 @@
       <material
         name="">
         <color
-          rgba="0.294117647058824 0.294117647058824 0.294117647058824 1" />
+          rgba="0.66 0.67 0.69 1" />
       </material>
     </visual>
     <collision>
@@ -71,7 +71,7 @@
       <material
         name="">
         <color
-          rgba="1 0.6 0 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -129,7 +129,7 @@
       <material
         name="">
         <color
-          rgba="0.4 0.4 0.4 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -183,7 +183,7 @@
       <material
         name="">
         <color
-          rgba="1 0.6 0 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -241,7 +241,7 @@
       <material
         name="">
         <color
-          rgba="0.4 0.4 0.4 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -295,7 +295,7 @@
       <material
         name="">
         <color
-          rgba="1 0.6 0 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -353,7 +353,7 @@
       <material
         name="">
         <color
-          rgba="0.4 0.4 0.4 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -407,7 +407,7 @@
       <material
         name="">
         <color
-          rgba="0.4 0.4 0.4 1" />
+          rgba="0.18 0.18 0.19 1" />
       </material>
     </visual>
     <collision>
@@ -465,7 +465,7 @@
       <material
         name="">
         <color
-          rgba="0.4 0.4 0.4 1" />
+          rgba="0.18 0.18 0.19 1" />
       </material>
     </visual>
     <collision>
@@ -523,7 +523,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.66 0.67 0.69 1" />
       </material>
     </visual>
     <collision>
@@ -622,7 +622,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -675,7 +675,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -733,7 +733,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -791,7 +791,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -849,7 +849,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -907,7 +907,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -965,7 +965,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1023,7 +1023,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1076,7 +1076,7 @@
       <material
         name="">
         <color
-          rgba="0.4 0.4 0.4 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1129,7 +1129,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1187,7 +1187,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1245,7 +1245,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1298,7 +1298,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1356,7 +1356,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1414,7 +1414,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1472,7 +1472,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1530,7 +1530,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1588,7 +1588,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1646,7 +1646,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1699,7 +1699,7 @@
       <material
         name="">
         <color
-          rgba="0.4 0.4 0.4 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1752,7 +1752,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1810,7 +1810,7 @@
       <material
         name="">
         <color
-          rgba="0.807843137254902 0.843137254901961 0.905882352941176 1" />
+          rgba="0.09 0.09 0.10 1" />
       </material>
     </visual>
     <collision>
@@ -1840,5 +1840,21 @@
       upper="0"
       effort="100"
       velocity="0.25" />
+  </joint>
+  <link name="left_tcp" />
+  <joint name="left_gripper_to_tcp" type="fixed">
+    <!-- Fingertip plane: finger joints sit 0.03689 m ahead of the gripper link
+         and the finger meshes reach 0.0415 m further (0.0784 m in total). -->
+    <origin xyz="0.0784 0 0" rpy="0 0 0" />
+    <parent link="left_gripper_link" />
+    <child link="left_tcp" />
+  </joint>
+  <link name="right_tcp" />
+  <joint name="right_gripper_to_tcp" type="fixed">
+    <!-- Fingertip plane: finger joints sit 0.03689 m ahead of the gripper link
+         and the finger meshes reach 0.0415 m further (0.0784 m in total). -->
+    <origin xyz="0.0784 0 0" rpy="0 0 0" />
+    <parent link="right_gripper_link" />
+    <child link="right_tcp" />
   </joint>
 </robot>
