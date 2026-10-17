@@ -97,6 +97,7 @@ flowchart LR
     D --> G[TRLC-DK1]
     D --> H[I2RT YAM]
     D --> J[MakerMods Metal]
+    D --> L[ARX X5]
     D --> I[Other bimanual arms with parallel grippers]
 ```
 
@@ -146,7 +147,7 @@ Physical Franka control is not implemented.
 - Tracking: PICO through XRoboToolkit and Meta Quest through
   [HandUMI Quest App](https://github.com/murobotics-ai/handumi-quest-app).
 - Robot models and simulation: AgileX PiPER, OpenArm, TRLC-DK1, Axol, I2RT
-  YAM, MakerMods Metal, and single-arm Franka Panda.
+  YAM, MakerMods Metal, ARX X5, and single-arm Franka Panda.
 - Real-robot teleoperation: AgileX PiPER and OpenArm through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
 - Episode control: hands-free by voice ("start recording", "stop recording",

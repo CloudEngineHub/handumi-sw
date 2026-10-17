@@ -80,6 +80,7 @@ allow-direct-references = true
 packages = ["src/handumi"]
 
 [tool.hatch.build.targets.wheel.force-include]
+"assets/arx5" = "handumi/assets/arx5"
 "assets/axol" = "handumi/assets/axol"
 "assets/metal" = "handumi/assets/metal"
 "assets/openarm" = "handumi/assets/openarm"

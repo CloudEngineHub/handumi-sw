@@ -1,6 +1,6 @@
 """Registry-level embodiment checks (docs/source/development/new_embodiment.md §3).
 
-Currently exercises the ``metal`` embodiment; extend the module-level list as
+Currently exercises the ``metal`` and ``arx5`` embodiments; extend the module-level list as
 new simulation-only robots are added.
 """
 
@@ -17,7 +17,7 @@ from handumi.robots.registry import (
     robot_config_metadata,
 )
 
-EMBODIMENTS = ("metal",)
+EMBODIMENTS = ("metal", "arx5")
 
 
 @pytest.fixture(scope="module", params=EMBODIMENTS)

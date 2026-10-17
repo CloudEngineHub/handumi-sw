@@ -1,0 +1,281 @@
+<?xml version="1.0"?>
+<!--
+  Bimanual ARX X5 model derived from real-stanford/arx5-sdk
+  commit c160db7834530a3d80fec524547c74e1d4fa8035 (MIT), models/X5.urdf.
+
+  The kinematic origins and axes match the vendor SDK (ARXroboticsX/X5
+  x5.urdf). Joint limits are the ones the SDK controller enforces
+  (include/app/config.h, "X5"), not the URDF's +/-10 rad placeholders.
+  link6.STL is split into a static gripper body and two finger meshes so the
+  0.088 m stroke can be shown. The world convention is +X right,
+  +Y forward/away from the operator, and +Z up.
+-->
+<robot name="arx5_bimanual">
+  <!-- The SolidWorks export is uniformly grey. Use the production X5 finish
+       instead: matte black links, motors and gripper, with the brushed
+       aluminium forearm shell (link3_arm) and ARX's white base station. -->
+  <material name="arx5_black"><color rgba="0.045 0.048 0.052 1"/></material>
+  <material name="arx5_aluminium"><color rgba="0.720 0.730 0.745 1"/></material>
+  <material name="arx5_mount"><color rgba="0.930 0.930 0.925 1"/></material>
+
+  <link name="arx5_bimanual_base">
+    <visual>
+      <origin xyz="0 0 -0.03" rpy="0 0 0"/>
+      <geometry><box size="0.80 0.12 0.06"/></geometry>
+      <material name="arx5_mount"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.03" rpy="0 0 0"/>
+      <geometry><box size="0.80 0.12 0.06"/></geometry>
+    </collision>
+  </link>
+
+  <!-- Left arm. The vendor zero pose faces +X; the mount yaws it to world +Y.
+       Both arms are identical (not mirrored) and the vendor wrist sits 1 mm to
+       the arm's right (joint5 y=-0.001), so the mounts shift 1 mm along world
+       +X to keep the TCP pair centred at X=0 while staying 0.60 m apart. -->
+  <joint name="left_mount" type="fixed">
+    <origin xyz="-0.299 0 0" rpy="0 0 1.5707963267948966"/>
+    <parent link="arx5_bimanual_base"/><child link="left_base_link"/>
+  </joint>
+  <link name="left_base_link">
+    <visual>
+      <geometry><mesh filename="meshes/base_link.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <link name="left_link1">
+    <visual>
+      <geometry><mesh filename="meshes/link1.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="left_joint1" type="revolute">
+    <origin xyz="0 0 0.0603" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <parent link="left_base_link"/><child link="left_link1"/>
+    <limit effort="100" velocity="5.0" lower="-3.14" upper="2.618"/>
+  </joint>
+  <link name="left_link2">
+    <visual>
+      <geometry><mesh filename="meshes/link2.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="left_joint2" type="revolute">
+    <origin xyz="0.02 0 0.0402" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="left_link1"/><child link="left_link2"/>
+    <limit effort="100" velocity="5.0" lower="-0.05" upper="3.50"/>
+  </joint>
+  <link name="left_link3">
+    <visual>
+      <geometry><mesh filename="meshes/link3_arm.stl"/></geometry>
+      <material name="arx5_aluminium"/>
+    </visual>
+    <visual>
+      <geometry><mesh filename="meshes/link3_motor.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="left_joint3" type="revolute">
+    <origin xyz="-0.264 0 0" rpy="-3.1416 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="left_link2"/><child link="left_link3"/>
+    <limit effort="30" velocity="5.5" lower="-0.10" upper="3.20"/>
+  </joint>
+  <link name="left_link4">
+    <visual>
+      <geometry><mesh filename="meshes/link4.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="left_joint4" type="revolute">
+    <origin xyz="0.245 0 -0.056" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="left_link3"/><child link="left_link4"/>
+    <limit effort="30" velocity="5.5" lower="-1.60" upper="1.55"/>
+  </joint>
+  <link name="left_link5">
+    <visual>
+      <geometry><mesh filename="meshes/link5.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="left_joint5" type="revolute">
+    <origin xyz="0.06575 -0.001 -0.0825" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <parent link="left_link4"/><child link="left_link5"/>
+    <limit effort="100" velocity="5.0" lower="-1.57" upper="1.57"/>
+  </joint>
+  <link name="left_link6">
+    <visual>
+      <geometry><mesh filename="meshes/link6_body.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="left_joint6" type="revolute">
+    <origin xyz="0.02845 0 0.0825" rpy="-3.1416 0 0"/>
+    <axis xyz="1 0 0"/>
+    <parent link="left_link5"/><child link="left_link6"/>
+    <limit effort="100" velocity="5.0" lower="-2.0" upper="2.0"/>
+  </joint>
+  <!-- The CAD finger pads sit 0.0301 m off the jaw centreline (60.2 mm gap).
+       Shift each mesh back by that much so q=0 is closed and q=0.044 gives
+       the SDK's 0.088 m full opening. joint7 drives the +Y finger and joint8
+       mirrors it (same driven/mimic structure as assets/piper/piper.urdf). -->
+  <link name="left_finger_pos_y">
+    <visual>
+      <origin xyz="0 -0.0301 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/finger_pos_y.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="left_joint7" type="prismatic">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="left_link6"/><child link="left_finger_pos_y"/>
+    <limit effort="10" velocity="0.15" lower="0" upper="0.044"/>
+  </joint>
+  <link name="left_finger_neg_y">
+    <visual>
+      <origin xyz="0 0.0301 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/finger_neg_y.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="left_joint8" type="prismatic">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <parent link="left_link6"/><child link="left_finger_neg_y"/>
+    <limit effort="10" velocity="0.15" lower="0" upper="0.044"/>
+    <mimic joint="left_joint7" multiplier="1" offset="0"/>
+  </joint>
+  <!-- Fingertip plane: the finger meshes end 0.1466 m along link6 +X. The TCP
+       follows the HandUMI convention (+Z approach, Y across the jaw). -->
+  <link name="left_tcp"/>
+  <joint name="left_tcp_fixed" type="fixed">
+    <origin xyz="0.1466 0 0" rpy="0 1.5707963267948966 0"/>
+    <parent link="left_link6"/><child link="left_tcp"/>
+  </joint>
+
+  <!-- Right arm: identical chain under the right mount. -->
+  <joint name="right_mount" type="fixed">
+    <origin xyz="0.301 0 0" rpy="0 0 1.5707963267948966"/>
+    <parent link="arx5_bimanual_base"/><child link="right_base_link"/>
+  </joint>
+  <link name="right_base_link">
+    <visual>
+      <geometry><mesh filename="meshes/base_link.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <link name="right_link1">
+    <visual>
+      <geometry><mesh filename="meshes/link1.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="right_joint1" type="revolute">
+    <origin xyz="0 0 0.0603" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <parent link="right_base_link"/><child link="right_link1"/>
+    <limit effort="100" velocity="5.0" lower="-3.14" upper="2.618"/>
+  </joint>
+  <link name="right_link2">
+    <visual>
+      <geometry><mesh filename="meshes/link2.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="right_joint2" type="revolute">
+    <origin xyz="0.02 0 0.0402" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="right_link1"/><child link="right_link2"/>
+    <limit effort="100" velocity="5.0" lower="-0.05" upper="3.50"/>
+  </joint>
+  <link name="right_link3">
+    <visual>
+      <geometry><mesh filename="meshes/link3_arm.stl"/></geometry>
+      <material name="arx5_aluminium"/>
+    </visual>
+    <visual>
+      <geometry><mesh filename="meshes/link3_motor.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="right_joint3" type="revolute">
+    <origin xyz="-0.264 0 0" rpy="-3.1416 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="right_link2"/><child link="right_link3"/>
+    <limit effort="30" velocity="5.5" lower="-0.10" upper="3.20"/>
+  </joint>
+  <link name="right_link4">
+    <visual>
+      <geometry><mesh filename="meshes/link4.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="right_joint4" type="revolute">
+    <origin xyz="0.245 0 -0.056" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="right_link3"/><child link="right_link4"/>
+    <limit effort="30" velocity="5.5" lower="-1.60" upper="1.55"/>
+  </joint>
+  <link name="right_link5">
+    <visual>
+      <geometry><mesh filename="meshes/link5.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="right_joint5" type="revolute">
+    <origin xyz="0.06575 -0.001 -0.0825" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <parent link="right_link4"/><child link="right_link5"/>
+    <limit effort="100" velocity="5.0" lower="-1.57" upper="1.57"/>
+  </joint>
+  <link name="right_link6">
+    <visual>
+      <geometry><mesh filename="meshes/link6_body.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="right_joint6" type="revolute">
+    <origin xyz="0.02845 0 0.0825" rpy="-3.1416 0 0"/>
+    <axis xyz="1 0 0"/>
+    <parent link="right_link5"/><child link="right_link6"/>
+    <limit effort="100" velocity="5.0" lower="-2.0" upper="2.0"/>
+  </joint>
+  <link name="right_finger_pos_y">
+    <visual>
+      <origin xyz="0 -0.0301 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/finger_pos_y.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="right_joint7" type="prismatic">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="right_link6"/><child link="right_finger_pos_y"/>
+    <limit effort="10" velocity="0.15" lower="0" upper="0.044"/>
+  </joint>
+  <link name="right_finger_neg_y">
+    <visual>
+      <origin xyz="0 0.0301 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/finger_neg_y.stl"/></geometry>
+      <material name="arx5_black"/>
+    </visual>
+  </link>
+  <joint name="right_joint8" type="prismatic">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <parent link="right_link6"/><child link="right_finger_neg_y"/>
+    <limit effort="10" velocity="0.15" lower="0" upper="0.044"/>
+    <mimic joint="right_joint7" multiplier="1" offset="0"/>
+  </joint>
+  <link name="right_tcp"/>
+  <joint name="right_tcp_fixed" type="fixed">
+    <origin xyz="0.1466 0 0" rpy="0 1.5707963267948966 0"/>
+    <parent link="right_link6"/><child link="right_tcp"/>
+  </joint>
+</robot>

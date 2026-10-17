@@ -1,0 +1,17 @@
+schema_version: 1
+kind: handumi_robot_table_calibration
+robot: arx5
+scope: simulation
+source: simulation_initial_pose_alignment
+verified: false
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  # Both frames use +X right, +Y away from the operator, and +Z up, so no
+  # rotation is required. The X5 bases and tabletop share world Z=0. The
+  # forward translation is the best of a 0.20-0.55 m sweep on
+  # yellow-towel-562 episodes 200-290 (step 10): lowest median position p99
+  # (0.71 mm), 10/10 accepted, 28 deg median base rotation. Hardware uses a
+  # separately measured scope: physical lab-local file.
+  robot_from_table:
+    position: [0.0, 0.35, 0.0]
+    quaternion: [0.0, 0.0, 0.0, 1.0]

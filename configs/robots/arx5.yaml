@@ -1,0 +1,72 @@
+kind: arx5
+urdf: assets/arx5/arx5_bimanual.urdf
+pkg_root: assets/arx5
+
+# Each arm exposes the six revolute joints plus the driven finger slide.
+# joint8 mirrors joint7 through the URDF mimic tag (same structure as piper),
+# so it is not an actuated joint and is not listed here.
+arms:
+  left:
+    ee_link: left_tcp
+    joint_names:
+      - left_joint1
+      - left_joint2
+      - left_joint3
+      - left_joint4
+      - left_joint5
+      - left_joint6
+      - left_joint7
+    gripper_joints:
+      - name: left_joint7
+        closed: 0.0
+        open: 0.044
+  right:
+    ee_link: right_tcp
+    joint_names:
+      - right_joint1
+      - right_joint2
+      - right_joint3
+      - right_joint4
+      - right_joint5
+      - right_joint6
+      - right_joint7
+    gripper_joints:
+      - name: right_joint7
+        closed: 0.0
+        open: 0.044
+
+# Conservative, symmetric simulation pose selected by FK scan: TCPs at
+# (+/-0.30, 0.30, 0.23) with the approach axis pointing forward and ~17 deg
+# down, away from the one-sided joint2/joint3 limits (the vendor zero pose is
+# folded onto them). Grippers start fully open. Validate a separate physical
+# home before adding a real-hardware backend.
+# home_q layout: [left_joint1..7, right_joint1..7].
+home_q: [0.0, 0.7, 0.6, -0.2, 0.0, 0.0, 0.044, 0.0, 0.7, 0.6, -0.2, 0.0, 0.0, 0.044]
+# arx5-sdk "X5" gripper_width: two 0.044 m finger strokes.
+gripper_max_width_m: 0.088
+
+# Physical tool assembly used while demonstrating; datasets recorded with the
+# HandUMI tips replay on the X5 without a new pivot calibration. The PICO rig
+# carries the Piper tip (piper_beta), the Meta rig the ARX5 tip.
+handumi_tool:
+  gripper: piper_beta
+  controller_mount: handumi_v1
+controller_tcp_calibrations:
+  meta: configs/calibration/controller_tcp/meta_ARX5_beta.yaml
+  pico: configs/calibration/controller_tcp/pico_piper_beta.yaml
+
+# Initial kinematic profile carried over from yam.yaml; max_reach follows the
+# X5's ~0.6 m reach to the fingertips. Tune against replay IK errors on real
+# datasets.
+ik_weights:
+  pos: 100.0
+  ori: 4.5
+  rest: 4.0
+  max_joint_delta: 0.12
+  max_reach: 0.60
+replay:
+  max_joint_delta: 0.35
+  # Preserve the demonstrated jaw aperture in meters. The X5 opens to 88 mm,
+  # whereas the source HandUMI/Piper gripper opens to 66 mm; normalized
+  # retargeting would make every grasp ~33% wider than demonstrated.
+  gripper_retarget: physical-width
