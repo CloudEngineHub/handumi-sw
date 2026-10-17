@@ -148,6 +148,14 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
         help="Hide the TCP paths and markers, showing only the robot and scene.",
     )
     parser.add_argument(
+        "--clean-view",
+        action="store_true",
+        help=(
+            "Hide the table grid, axes and placement labels in the Viser viewer "
+            "for clean screenshots on a white background."
+        ),
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help=(
@@ -728,7 +736,7 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
     urdf = runtime.load_urdf(load_meshes=True)
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     _render_task_scene(server, args, rollout)
-    _render_table(server, runtime, urdf, rollout)
+    _render_table(server, runtime, urdf, rollout, clean=args.clean_view)
 
     reference = getattr(args, "verify_reference", None)
     marker_left = marker_right = None

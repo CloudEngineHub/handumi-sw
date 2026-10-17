@@ -235,6 +235,14 @@ def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
     )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument(
+        "--clean-view",
+        action="store_true",
+        help=(
+            "Hide the table grid, axes and placement labels in the Viser viewer "
+            "for clean screenshots on a white background."
+        ),
+    )
+    parser.add_argument(
         "--hide-trajectories",
         action="store_true",
         help=(
@@ -1410,34 +1418,39 @@ def _base_footprints(runtime, urdf) -> list[np.ndarray]:
     return footprints
 
 
-def _render_table(server, runtime, urdf, rollout: dict[str, np.ndarray]) -> None:
+def _render_table(
+    server, runtime, urdf, rollout: dict[str, np.ndarray], *, clean: bool = False
+) -> None:
     """Draw the grid on the calibrated tabletop and the rail under the bases.
 
     The grid lies in the table plane rather than at robot-world z=0, so a
     table placed below the base plane (the Piper's 3 cm T-slot rail) is
     visible. When the table is below the bases, two rails fill the gap.
+    ``clean`` keeps only the rails, leaving out grid, axes and labels.
     """
     table_transforms = rollout.get("robot_from_table_pose7")
     if table_transforms is None or len(table_transforms) != 1:
-        server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
+        if not clean:
+            server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
         return
     table_pose7 = np.asarray(table_transforms[0], dtype=np.float64)
-    server.scene.add_grid(
-        "/grid",
-        width=3.0,
-        height=3.0,
-        cell_size=0.1,
-        position=tuple(table_pose7[:3]),
-        wxyz=tuple(table_pose7[[6, 3, 4, 5]]),
-    )
-    server.scene.add_frame(
-        "/table_origin",
-        position=tuple(table_pose7[:3]),
-        wxyz=tuple(table_pose7[[6, 3, 4, 5]]),
-        axes_length=0.15,
-        axes_radius=0.004,
-    )
-    _render_placement_measurements(server, runtime, urdf, table_pose7)
+    if not clean:
+        server.scene.add_grid(
+            "/grid",
+            width=3.0,
+            height=3.0,
+            cell_size=0.1,
+            position=tuple(table_pose7[:3]),
+            wxyz=tuple(table_pose7[[6, 3, 4, 5]]),
+        )
+        server.scene.add_frame(
+            "/table_origin",
+            position=tuple(table_pose7[:3]),
+            wxyz=tuple(table_pose7[[6, 3, 4, 5]]),
+            axes_length=0.15,
+            axes_radius=0.004,
+        )
+        _render_placement_measurements(server, runtime, urdf, table_pose7)
     table_z = float(table_pose7[2])
     footprints = _base_footprints(runtime, urdf)
     if not footprints or table_z > -1e-3:
@@ -1532,7 +1545,7 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
     urdf = runtime.load_urdf(load_meshes=True)
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     _render_task_scene(server, args, rollout)
-    _render_table(server, runtime, urdf, rollout)
+    _render_table(server, runtime, urdf, rollout, clean=args.clean_view)
     markers = {}
     if not args.hide_trajectories:
         colors = {"left": ((255, 190, 50), (80, 160, 255)),
