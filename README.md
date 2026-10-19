@@ -4,6 +4,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://github.com/murobotics-ai/handumi-hw"><img src="https://img.shields.io/badge/Hardware-HandUMI-4c8bf5.svg" alt="HandUMI hardware"></a>
   <a href="https://murobotics-ai.github.io/handumi-sw/"><img src="https://img.shields.io/badge/Docs-GitHub_Pages-AF0000.svg" alt="HandUMI documentation on GitHub Pages"></a>
+  <a href="https://murobotics.ai/research/handumi"><img src="https://img.shields.io/badge/Project-Website-222222.svg" alt="HandUMI project website"></a>
+  <a href="https://huggingface.co/NONHUMAN-RESEARCH"><img src="https://img.shields.io/badge/%F0%9F%A4%97-Data_%26_Checkpoints-FFD21E.svg" alt="HandUMI data and checkpoints on Hugging Face"></a>
 </p>
 
 [HandUMI](https://github.com/murobotics-ai/handumi-hw) is a hand-worn interface for collecting robot-free bimanual demonstrations. This repository contains its synchronized data collection, calibration, validation, replay, teleoperation, and robot-retargeting software.
@@ -15,6 +17,21 @@
 > **Collect once, retarget to many robots.** Record demonstrations with HandUMI
 > once, then retarget and reuse the same data across different bimanual arms
 > with parallel grippers, without recollecting demonstrations for each robot.
+
+## Paper
+
+**HandUMI: A Modular Hand-Worn Parallel-Jaw Interface for Robot-Free Bimanual
+Data Capture**  
+Brik Meza, Leonardo Perez, Alvaro Mendoza, Aniela Ubillus, Mitshell Ramos,
+Raul Bastidas, Mauricio Olivera, Bryan Bastidas
+
+[Project website](https://murobotics.ai/research/handumi) ·
+[Results and figures](https://github.com/murobotics-ai/handumi-hw#paper) ·
+[Data and checkpoints](https://huggingface.co/NONHUMAN-RESEARCH)
+
+This repository is the capture, calibration and retargeting software used in
+the paper. Its results, figures and the hardware it runs on are in
+[handumi-hw](https://github.com/murobotics-ai/handumi-hw).
 
 ## Quick Start
 
@@ -62,28 +79,6 @@ dependencies = [
 ]
 ```
 
-## Install from GitHub
-
-HandUMI can also be installed directly from this repository:
-
-```bash
-pip install "handumi @ git+https://github.com/murobotics-ai/handumi-sw.git"
-```
-
-Optional robot and simulation backends can be selected with extras:
-
-```bash
-pip install "handumi[sim,piper,openarm] @ git+https://github.com/murobotics-ai/handumi-sw.git"
-```
-
-For reproducible environments, pin a branch, tag, or commit:
-
-```toml
-dependencies = [
-    "handumi @ git+https://github.com/murobotics-ai/handumi-sw.git@main",
-]
-```
-
 ## Core Workflow
 
 ```mermaid
@@ -98,6 +93,7 @@ flowchart LR
     D --> H[I2RT YAM]
     D --> J[MakerMods Metal]
     D --> L[ARX X5]
+    D --> M[Galaxea R1 Lite]
     D --> I[Other bimanual arms with parallel grippers]
 ```
 
@@ -131,6 +127,9 @@ embodiments can be added without changing the capture format.
 | OpenArm | [Repository](https://github.com/enactic/openarm) | ![Bimanual OpenArm](docs/images/openarm-preview.png) |
 | TRLC-DK1 | [Repository](https://github.com/robot-learning-co/trlc-dk1) | ![Bimanual TRLC-DK1](docs/images/biTRLC-preview.png) |
 | I2RT YAM | [Repository](https://github.com/i2rt-robotics/i2rt) | ![Bimanual I2RT YAM](docs/images/biYAM-preview.png) |
+| MakerMods Metal | [Repository](https://github.com/makermods-robotics/metal-python-ros) | — |
+| ARX X5 | [Repository](https://github.com/ARXroboticsX/ARX_X5) | — |
+| Galaxea R1 Lite | [Product page](https://galaxea-dynamics.com/products/galaxea-r1-lite-6-drof-general-mobile-manipulation-platform) | — |
 
 **More embodiments coming soon.** See
 [Add a new robot embodiment](https://murobotics-ai.github.io/handumi-sw/development/new_embodiment.html)
@@ -144,10 +143,10 @@ HandUMI, then review, convert and replay on the Franka Emika Panda model from
 Google DeepMind MuJoCo Menagerie. See the [Panda workflow](docs/source/workflows/franka_emika_panda.md).
 Physical Franka control is not implemented.
 
-- Tracking: PICO through XRoboToolkit and Meta Quest through
+- Tracking: PICO 4 Ultra through XRoboToolkit and Meta Quest 3/3S through
   [HandUMI Quest App](https://github.com/murobotics-ai/handumi-quest-app).
 - Robot models and simulation: AgileX PiPER, OpenArm, TRLC-DK1, Axol, I2RT
-  YAM, MakerMods Metal, ARX X5, and single-arm Franka Panda.
+  YAM, MakerMods Metal, ARX X5, Galaxea R1 Lite, and single-arm Franka Panda.
 - Real-robot teleoperation: AgileX PiPER and OpenArm through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
 - Episode control: hands-free by voice ("start recording", "stop recording",
@@ -165,6 +164,25 @@ Viser, Rerun, and MuJoCo. See the [documentation](https://murobotics-ai.github.i
 and [LICENSE](LICENSE) for attribution and third-party licensing details.
 
 Project lead and original hardware design: [BrikHMP18](https://github.com/BrikHMP18). Core software contributors include [Leonardo Pérez](https://github.com/leoperezz), [Raul Bastidas](https://github.com/raulbastidas1203), [Mitshell Ramos](https://github.com/mbrq13), and [Alvaro Mendoza-Li](https://github.com/alvax64).
+
+We thank the NONHUMAN community for their collaboration on data collection
+and device testing.
+
+## Citation
+
+If you use HandUMI, please cite:
+
+```bibtex
+@misc{meza2026handumi,
+  title  = {{HandUMI}: A Modular Hand-Worn Parallel-Jaw Interface for
+            Robot-Free Bimanual Data Capture},
+  author = {Meza, Brik and Perez, Leonardo and Mendoza, Alvaro and
+            Ubillus, Aniela and Ramos, Mitshell and Bastidas, Raul and
+            Olivera, Mauricio and Bastidas, Bryan},
+  year   = {2026},
+  url    = {https://murobotics.ai/research/handumi}
+}
+```
 
 ## License
 
