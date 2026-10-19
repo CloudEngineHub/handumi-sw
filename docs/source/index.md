@@ -24,7 +24,7 @@ Raul Bastidas, Mauricio Olivera, Bryan Bastidas
 [Hardware](https://github.com/murobotics-ai/handumi-hw) ·
 [Software](https://github.com/murobotics-ai/handumi-sw) ·
 [Quest app](https://github.com/murobotics-ai/handumi-quest-app) ·
-[Data and checkpoints](https://huggingface.co/NONHUMAN-RESEARCH)
+[Data and checkpoints](https://huggingface.co/collections/murobotics/handumi-towel-folding-6ad6a18887ac469cd9e20bc7)
 
 HandUMI's swappable fingertips match the robot's installed parallel-jaw
 gripper, so the robot keeps its gripper. Each demonstration is stored once in
