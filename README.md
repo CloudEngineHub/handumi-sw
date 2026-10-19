@@ -5,7 +5,7 @@
   <a href="https://github.com/murobotics-ai/handumi-hw"><img src="https://img.shields.io/badge/Hardware-HandUMI-4c8bf5.svg" alt="HandUMI hardware"></a>
   <a href="https://murobotics-ai.github.io/handumi-sw/"><img src="https://img.shields.io/badge/Docs-GitHub_Pages-AF0000.svg" alt="HandUMI documentation on GitHub Pages"></a>
   <a href="https://murobotics.ai/research/handumi"><img src="https://img.shields.io/badge/Project-Website-222222.svg" alt="HandUMI project website"></a>
-  <a href="https://huggingface.co/collections/murobotics/handumi-towel-folding-6ad6a18887ac469cd9e20bc7"><img src="https://img.shields.io/badge/%F0%9F%A4%97-Data_%26_Checkpoints-FFD21E.svg" alt="HandUMI data and checkpoints on Hugging Face"></a>
+  <a href="https://huggingface.co/collections/murobotics/handumi-towel-folding"><img src="https://img.shields.io/badge/%F0%9F%A4%97-Data_%26_Checkpoints-FFD21E.svg" alt="HandUMI data and checkpoints on Hugging Face"></a>
 </p>
 
 [HandUMI](https://github.com/murobotics-ai/handumi-hw) is a hand-worn interface for collecting robot-free bimanual demonstrations. This repository contains its synchronized data collection, calibration, validation, replay, teleoperation, and robot-retargeting software.
@@ -27,7 +27,7 @@ Raul Bastidas, Mauricio Olivera, Bryan Bastidas
 
 [Project website](https://murobotics.ai/research/handumi) ·
 [Hardware](https://github.com/murobotics-ai/handumi-hw) ·
-[Data and checkpoints](https://huggingface.co/collections/murobotics/handumi-towel-folding-6ad6a18887ac469cd9e20bc7)
+[Data and checkpoints](https://huggingface.co/collections/murobotics/handumi-towel-folding)
 
 This repository is the capture, calibration and retargeting software used in
 the paper. On bimanual towel folding, 562 robot-free HandUMI demonstrations
