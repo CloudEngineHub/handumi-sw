@@ -26,12 +26,24 @@ Brik Meza, Leonardo Perez, Alvaro Mendoza, Aniela Ubillus, Mitshell Ramos,
 Raul Bastidas, Mauricio Olivera, Bryan Bastidas
 
 [Project website](https://murobotics.ai/research/handumi) ·
-[Results and figures](https://github.com/murobotics-ai/handumi-hw#paper) ·
+[Hardware](https://github.com/murobotics-ai/handumi-hw) ·
 [Data and checkpoints](https://huggingface.co/NONHUMAN-RESEARCH)
 
 This repository is the capture, calibration and retargeting software used in
-the paper. Its results, figures and the hardware it runs on are in
-[handumi-hw](https://github.com/murobotics-ai/handumi-hw).
+the paper. On bimanual towel folding, 562 robot-free HandUMI demonstrations
+(111.9 min, no robot-collected data) were retargeted to AgileX PiPER arms and
+used to train policies that fold the towel on the real robot: ACT succeeds in
+12/20 attempts and fine-tuned π0.5 in 7/20, while ACT trained on the first 101
+demonstrations and π0.5 without fine-tuning succeed in none.
+
+<p align="center">
+  <img src="docs/images/paper-towel-folding-results.png" alt="Towel-folding task: left and right fisheye wrist views, ZED Mini top view, a PiPER rollout from initial state to grasping edges to folding the towel, and real-robot success rates (ACT 101 episodes 0/20, ACT 562 episodes 12/20, pi0.5 base 0/20, pi0.5 562 episodes 7/20)" width="800">
+</p>
+
+The same recordings retarget in simulation to the seven bimanual arms listed
+under [Supported Bimanual Embodiments](#supported-bimanual-embodiments) with
+sub-millimeter median IK position error. See the paper for the
+capture-alignment, calibration and retargeting results.
 
 ## Quick Start
 
