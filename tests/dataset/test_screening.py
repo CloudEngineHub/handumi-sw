@@ -174,6 +174,22 @@ def test_base_rotation_metric_measures_the_swing_from_home() -> None:
     assert base_rotation_max_deg(qpos, runtime) == pytest.approx(45.0, abs=1e-3)
 
 
+def test_collision_meshes_resolve_package_dirs_and_scale() -> None:
+    """OpenArm keeps its package dir under pkg_root and ships millimeter meshes.
+
+    Missing hulls left self-collision to the capsules alone, which flagged
+    elbow overlaps that the real geometry does not have.
+    """
+    from handumi.dataset.screening import collision_meshes
+    from handumi.robots.registry import load_embodiment
+
+    meshes = collision_meshes(load_embodiment("openarmv1"))
+    for side in ("left", "right"):
+        for link in ("link3", "link5"):
+            extents = meshes[f"openarm_{side}_{link}"].extents
+            assert 0.05 < extents.max() < 0.3
+
+
 def test_table_contact_is_recorded_but_never_flagged() -> None:
     """Fingers touching the table during a grasp is the demonstration, not a fault."""
     report = _grade(

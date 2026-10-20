@@ -243,8 +243,12 @@ def collision_meshes(runtime) -> dict[str, Any]:
     """
     import trimesh
 
+    from handumi.robots.registry import yourdfpy_handler
+
     urdf = runtime.load_urdf(load_meshes=True)
-    pkg_root = Path(runtime.config.pkg_root)
+    # The same resolver the URDF loader uses: some asset trees keep the
+    # package directory under pkg_root (OpenArm), others drop it (Piper).
+    resolve = yourdfpy_handler(runtime.config.pkg_root)
     meshes: dict[str, Any] = {}
     for link in urdf.robot.links:
         candidates = [
@@ -255,20 +259,18 @@ def collision_meshes(runtime) -> dict[str, Any]:
         if not candidates:
             continue
         collision = candidates[0]
-        raw = collision.geometry.mesh.filename
-        relative = (
-            raw.split("://", 1)[1].split("/", 1)[1]
-            if raw.startswith("package://")
-            else raw
-        )
         try:
-            mesh = trimesh.load(pkg_root / relative, force="mesh")
+            mesh = trimesh.load(resolve(collision.geometry.mesh.filename), force="mesh")
         except (OSError, ValueError):
             continue
         if not isinstance(mesh, trimesh.Trimesh):
             continue
+        mesh = mesh.copy()
+        scale = collision.geometry.mesh.scale
+        if scale is not None:
+            # Millimeter meshes (OpenArm) and mirrored arms (negative axis).
+            mesh.apply_transform(np.diag([*np.broadcast_to(scale, 3), 1.0]))
         if collision.origin is not None:
-            mesh = mesh.copy()
             mesh.apply_transform(np.asarray(collision.origin))
         meshes[link.name] = mesh.convex_hull
     return meshes
