@@ -110,6 +110,18 @@ result is stored in `~/.cache/handumi/calibration.yaml`. Open and close each
 gripper again with `monitor` and confirm that width increases toward fully open
 without flipping or saturating.
 
+To inspect both camera streams and calibrated gripper openings together in
+Rerun, without a headset, tracking, or simulation, run:
+
+```bash
+handumi visualize
+```
+
+This uses `left_wrist` and `right_wrist` from `configs/rig.yaml`. Select other
+configured views with `--cameras name1,name2`. Close other camera previews first
+so the devices are available. Rerun opens in a separate window while the terminal
+continues streaming. No dataset is recorded. Stop with Ctrl+C.
+
 ## 3. Connect Tracking
 
 ### Meta Quest

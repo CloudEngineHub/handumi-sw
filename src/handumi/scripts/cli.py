@@ -23,6 +23,9 @@ COMMANDS = {
         "handumi.scripts.setup.setup_ports", "Identify cameras and serial ports"
     ),
     ("record",): Command("handumi.scripts.record", "Record demonstrations"),
+    ("visualize",): Command(
+        "handumi.scripts.visualize", "View cameras and gripper openings in Rerun"
+    ),
     ("validate",): Command("handumi.scripts.validate", "Validate recorded episodes"),
     ("dataset", "analyze"): Command(
         "handumi.scripts.analyze_dataset",
